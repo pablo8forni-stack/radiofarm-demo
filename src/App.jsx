@@ -1,4 +1,29 @@
-import { useState, useEffect, useMemo } from "react";
+/**
+ * RadioFarm — Sistema de Gestión de Radiofármacos
+ *
+ * Copyright © 2025 Pablo Forni. Todos los derechos reservados.
+ *
+ * Este software y su documentación asociada son propiedad exclusiva
+ * de Pablo Forni (en adelante "el Autor"). Queda estrictamente prohibido,
+ * sin autorización expresa y por escrito del Autor:
+ *
+ *   - Copiar, reproducir o duplicar este software total o parcialmente
+ *   - Modificar, adaptar o crear obras derivadas
+ *   - Distribuir, sublicenciar o transferir a terceros
+ *   - Usar con fines comerciales sin licencia vigente
+ *
+ * El uso de este software por parte de una institución no implica
+ * transferencia de propiedad ni de derechos de autor.
+ *
+ * Para licencias comerciales, contacto o autorizaciones:
+ * pablo@email.com — Mendoza, Argentina
+ *
+ * Obra registrada ante la Dirección Nacional del Derecho de Autor
+ * (DNDA), República Argentina. Ley 11.723.
+ */
+
+import { useState, useEffect, useMemo, useRef } from "react";
+import * as React from "react";
 
 // ─── Sedes (fijas) ────────────────────────────────────────────────────────────
 const SEDES = [
@@ -63,6 +88,10 @@ function estadoInicial() {
       { id:"m2", fecha:new Date(Date.now()-7200000).toISOString(), tipo:"egreso", sedeId:"italiano", sedeNombre:"C. Gamma Hospital Italiano", farmId:"osteobac", farmNombre:"Osteobac", cantidad:1, lote:"ARN-2025-031", motivo:"Estudio", usuarioNombre:"Laura M." },
       { id:"m3", fecha:new Date(Date.now()-86400000).toISOString(), tipo:"ingreso", sedeId:"central", sedeNombre:"FUESMEN Central", farmId:"mibi", farmNombre:"MIBI (Sestamibi)", cantidad:4, lote:"ARN-2025-030", motivo:"Recepción de pedido", usuarioNombre:"Ana R." },
     ],
+    actas: [
+      { id:"a1", fecha:new Date(Date.now()-3600000).toISOString(), tipo:"marcacion", sedeId:"central", sedeNombre:"FUESMEN Central", farmId:"mibi", farmNombre:"MIBI (Sestamibi)", lote:"ARN-2025-030", mciMarcacion:20, usuarioNombre:"Carlos T.", observacion:"" },
+      { id:"a2", fecha:new Date(Date.now()-3600000).toISOString(), tipo:"paciente", sedeId:"central", sedeNombre:"FUESMEN Central", pacienteNombre:"García Juan", pacienteDni:"28456789", estudio:"Centellograma de perfusión miocárdica", peso:78, talla:172, mciAdministrados:10, farmNombre:"MIBI (Sestamibi)", lote:"ARN-2025-030", usuarioNombre:"Carlos T.", observacion:"" },
+    ],
     proveedores:[{ id:"principal", nombre:"Proveedor Principal", contacto:"0800-555-0001", principal:true }],
   };
 }
@@ -83,6 +112,8 @@ const totStock = (lotes=[]) => lotes.reduce((s,l)=>s+(l.cantidad||0),0);
 const proxVenc = (lotes=[]) => { const a=lotes.filter(l=>l.cantidad>0&&l.vencimiento); return a.length?a.reduce((mn,l)=>(!mn||l.vencimiento<mn?l.vencimiento:mn),null):null; };
 const diasV    = f => { if(!f) return null; const h=new Date(); h.setHours(0,0,0,0); return Math.ceil((new Date(f+"T00:00:00")-h)/86400000); };
 const farmsDeSede = (estado,sid) => estado.farms.filter(f=>(estado.sedeFarms[sid]||[]).includes(f.id));
+const idsSedesActivas = e => e.sedesActivas || SEDES.map(s=>s.id);
+const sedesActivas = e => SEDES.filter(s=>idsSedesActivas(e).includes(s.id));
 const slugify = s => s.toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/(^-|-$)/g,"");
 
 // ─── UI Primitivos ────────────────────────────────────────────────────────────
@@ -237,7 +268,7 @@ function ModalIngreso({open,farm,proveedores,onConfirm,onClose}){
 // ─── Panel resumen (admin) ────────────────────────────────────────────────────
 function PanelResumen({estado}){
   return <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-2">
-    {SEDES.map(sede=>{
+    {sedesActivas(estado).map(sede=>{
       const farms=farmsDeSede(estado,sede.id);
       const pedir=farms.filter(f=>totStock(estado.stock[sede.id]?.[f.id]||[])<=(estado.puntosReorden[sede.id]?.[f.id]??2));
       const conStock=farms.filter(f=>totStock(estado.stock[sede.id]?.[f.id]||[])>0);
@@ -426,7 +457,7 @@ function ModalTransferencia({open,farm,sedeOrigenId,estado,usuario,onConfirm,onC
   const [loteId,setLoteId]=useState(""); const [cantidad,setCantidad]=useState(1); const [destino,setDestino]=useState(""); const [obs,setObs]=useState("");
   const disp=(estado.stock[sedeOrigenId]?.[farm?.id]||[]).filter(l=>l.cantidad>0);
   // Sedes destino: las que tienen este farmaco asignado y no son el origen
-  const destinos=SEDES.filter(s=>s.id!==sedeOrigenId&&(estado.sedeFarms[s.id]||[]).includes(farm?.id));
+  const destinos=sedesActivas(estado).filter(s=>s.id!==sedeOrigenId&&(estado.sedeFarms[s.id]||[]).includes(farm?.id));
   useEffect(()=>{if(disp.length)setLoteId(disp[0].id);setCantidad(1);setDestino(destinos[0]?.id||"");setObs("");},[open,farm?.id]);
   const lote=disp.find(l=>l.id===loteId);
   const sedeOrigen=SEDES.find(s=>s.id===sedeOrigenId);
@@ -460,7 +491,7 @@ function ModalTransferencia({open,farm,sedeOrigenId,estado,usuario,onConfirm,onC
 
 // ─── Vista Inventario ─────────────────────────────────────────────────────────
 function VistaInventario({estado,setEstado,usuario,esAdmin,onToast}){
-  const sedesVisibles=esAdmin?SEDES:SEDES.filter(s=>s.id===usuario.sede);
+  const sedesVisibles=esAdmin?sedesActivas(estado):sedesActivas(estado).filter(s=>s.id===usuario.sede);
   const [sedeActiva,setSedeActiva]=useState(usuario.sede);
   const countPedirSede=sid=>farmsDeSede(estado,sid).filter(f=>totStock(estado.stock[sid]?.[f.id]||[])<=(estado.puntosReorden[sid]?.[f.id]??2)).length;
   return <div className="flex flex-col gap-4">
@@ -484,7 +515,7 @@ function VistaPedidos({estado,esAdmin,onToast}){
   const [sedeF,setSedeF]=useState("");
   const items=useMemo(()=>{
     const res=[];
-    SEDES.forEach(sede=>{
+    sedesActivas(estado).forEach(sede=>{
       if(sedeF&&sede.id!==sedeF) return;
       farmsDeSede(estado,sede.id).forEach(f=>{
         const tot=totStock(estado.stock[sede.id]?.[f.id]||[]);
@@ -517,7 +548,7 @@ function VistaPedidos({estado,esAdmin,onToast}){
       <div className="flex gap-2 flex-wrap">
         {esAdmin&&<Sel value={sedeF} onChange={e=>setSedeF(e.target.value)}>
           <option value="">Todas las sedes</option>
-          {SEDES.map(s=><option key={s.id} value={s.id}>{s.short}</option>)}
+          {sedesActivas(estado).map(s=><option key={s.id} value={s.id}>{s.short}</option>)}
         </Sel>}
         {esAdmin&&items.length>0&&<Btn size="sm" variant="outline" onClick={exportarTxt}>↓ .txt</Btn>}
       </div>
@@ -529,7 +560,7 @@ function VistaPedidos({estado,esAdmin,onToast}){
           <div className="text-xs text-emerald-500 mt-1">No hay productos por debajo del mínimo</div>
         </div>
       :<div className="flex flex-col gap-2">
-        {SEDES.map(sede=>{
+        {sedesActivas(estado).map(sede=>{
           const its=items.filter(i=>i.sede.id===sede.id);
           if(!its.length) return null;
           return <div key={sede.id}>
@@ -627,7 +658,7 @@ function VistaHistorial({estado,setEstado,usuario,esAdmin,onToast}){
     <div className="flex items-center justify-between flex-wrap gap-3">
       <div className="flex gap-2 flex-wrap">
         {esAdmin&&<Sel value={filtroSede} onChange={e=>setFiltroSede(e.target.value)}>
-          <option value="">Todas las sedes</option>{SEDES.map(s=><option key={s.id} value={s.id}>{s.short}</option>)}
+          <option value="">Todas las sedes</option>{sedesActivas(estado).map(s=><option key={s.id} value={s.id}>{s.short}</option>)}
         </Sel>}
         <Sel value={filtroF} onChange={e=>setFiltroF(e.target.value)}>
           <option value="">Todos los radiofármacos</option>{estado.farms.map(f=><option key={f.id} value={f.id}>{f.nombre}</option>)}
@@ -709,6 +740,439 @@ function ModalAnular({mov,onConfirm,onClose}){
   </Modal>;
 }
 
+
+// ─── Vista Administración / Actas ARN ────────────────────────────────────────
+function VistaAdministracion({estado,setEstado,usuario,esAdmin,onToast}){
+  const [tab,setTab]=useState("pacientes");
+  return <div className="flex flex-col gap-4">
+    <div>
+      <h2 className="text-base font-bold text-gray-800">Administración de dosis</h2>
+      <p className="text-xs text-gray-400 mt-0.5">Registro equivalente a los Libros de Actas ARN</p>
+    </div>
+    <div className="flex gap-1 bg-gray-100 p-1 rounded-xl w-fit">
+      {[{id:"pacientes",label:"Libro 2 — Pacientes"},{id:"marcacion",label:"Libro 1 — Marcación"}].map(t=>(
+        <button key={t.id} onClick={()=>setTab(t.id)}
+          className={`px-4 py-1.5 text-xs font-semibold rounded-lg transition ${tab===t.id?"bg-white text-gray-800 shadow-sm":"text-gray-500 hover:text-gray-700"}`}>
+          {t.label}
+        </button>
+      ))}
+    </div>
+    {tab==="pacientes"&&<TabPacientes estado={estado} setEstado={setEstado} usuario={usuario} esAdmin={esAdmin} onToast={onToast}/>}
+    {tab==="marcacion"&&<TabMarcacion estado={estado} setEstado={setEstado} usuario={usuario} esAdmin={esAdmin} onToast={onToast}/>}
+  </div>;
+}
+
+// ─── QR Scanner Component ────────────────────────────────────────────────────
+function QRScanner({onResult,onClose}){
+  const videoRef = useRef(null);
+  const [error,setError]=useState("");
+  const [scanning,setScanning]=useState(false);
+  const streamRef = useRef(null);
+
+  useEffect(()=>{
+    let animFrame;
+    async function startCamera(){
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video:{ facingMode:"environment", width:{ideal:1280}, height:{ideal:720} }
+        });
+        streamRef.current=stream;
+        if(videoRef.current){
+          videoRef.current.srcObject=stream;
+          videoRef.current.play();
+          setScanning(true);
+        }
+      } catch(e){
+        setError("No se pudo acceder a la cámara. Verificá los permisos del navegador.");
+      }
+    }
+    startCamera();
+    return ()=>{
+      if(streamRef.current) streamRef.current.getTracks().forEach(t=>t.stop());
+      cancelAnimationFrame(animFrame);
+    };
+  },[]);
+
+  // Escaneo con BarcodeDetector API (nativa en Chrome/Android)
+  useEffect(()=>{
+    if(!scanning||!videoRef.current) return;
+    let active=true;
+    async function scan(){
+      if(!active) return;
+      if(!("BarcodeDetector" in window)){
+        setError("Tu navegador no soporta escaneo nativo. Ingresá los datos manualmente.");
+        return;
+      }
+      const detector = new window.BarcodeDetector({formats:["qr_code"]});
+      async function tick(){
+        if(!active||!videoRef.current) return;
+        try {
+          const codes = await detector.detect(videoRef.current);
+          if(codes.length>0){
+            if(streamRef.current) streamRef.current.getTracks().forEach(t=>t.stop());
+            onResult(codes[0].rawValue);
+            return;
+          }
+        } catch {}
+        if(active) requestAnimationFrame(tick);
+      }
+      tick();
+    }
+    scan();
+    return ()=>{ active=false; };
+  },[scanning]);
+
+  return <Modal open title="Escanear pulsera QR" onClose={()=>{
+    if(streamRef.current) streamRef.current.getTracks().forEach(t=>t.stop());
+    onClose();
+  }} size="md">
+    <div className="flex flex-col gap-4">
+      {error
+        ? <div className="bg-red-50 border border-red-100 rounded-xl px-4 py-3 text-sm text-red-600">{error}</div>
+        : <>
+          <div className="relative rounded-xl overflow-hidden bg-black aspect-video">
+            <video ref={videoRef} className="w-full h-full object-cover" playsInline muted/>
+            {/* Marco de escaneo */}
+            <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+              <div className="w-48 h-48 border-2 border-blue-400 rounded-xl opacity-80">
+                <div className="absolute top-0 left-0 w-6 h-6 border-t-4 border-l-4 border-blue-400 rounded-tl"/>
+                <div className="absolute top-0 right-0 w-6 h-6 border-t-4 border-r-4 border-blue-400 rounded-tr"/>
+                <div className="absolute bottom-0 left-0 w-6 h-6 border-b-4 border-l-4 border-blue-400 rounded-bl"/>
+                <div className="absolute bottom-0 right-0 w-6 h-6 border-b-4 border-r-4 border-blue-400 rounded-br"/>
+              </div>
+            </div>
+          </div>
+          <p className="text-xs text-gray-400 text-center">Apuntá la cámara al QR de la pulsera del paciente</p>
+        </>}
+      <Btn variant="outline" onClick={()=>{
+        if(streamRef.current) streamRef.current.getTracks().forEach(t=>t.stop());
+        onClose();
+      }}>Cancelar</Btn>
+    </div>
+  </Modal>;
+}
+
+function parseQR(raw){
+  // Formato: nombre|dni|peso|talla|estudio
+  const parts = raw.split("|");
+  if(parts.length>=2) return {
+    pacienteNombre: parts[0]?.trim()||"",
+    pacienteDni:    parts[1]?.trim()||"",
+    peso:           parseFloat(parts[2])||"",
+    talla:          parseFloat(parts[3])||"",
+    estudio:        parts[4]?.trim()||"",
+  };
+  return null;
+}
+
+// ─── Tab Pacientes (Libro 2) ─────────────────────────────────────────────────
+function TabPacientes({estado,setEstado,usuario,esAdmin,onToast}){
+  const [mostrarForm,setMostrarForm]=useState(false);
+  const [mostrarQR,setMostrarQR]=useState(false);
+  const [filtroFecha,setFiltroFecha]=useState(hoy());
+  const [filtroSede,setFiltroSede]=useState(usuario.sede);
+
+  // Form fields
+  const [nombre,setNombre]=useState(""); const [dni,setDni]=useState("");
+  const [peso,setPeso]=useState(""); const [talla,setTalla]=useState("");
+  const [estudio,setEstudio]=useState(""); const [mci,setMci]=useState("");
+  const [farmId,setFarmId]=useState(""); const [lote,setLote]=useState("");
+  const [obs,setObs]=useState("");
+  const [sedeId,setSedeId]=useState(usuario.sede);
+
+  const ESTUDIOS=[
+    "Centellograma de perfusión miocárdica","Centellograma óseo","Centellograma renal con DMSA",
+    "Renograma con DTPA","Centellograma pulmonar","Centellograma hepatobiliar",
+    "Centellograma de infección/inflamación","Centellograma cerebral","Otro"
+  ];
+
+  function handleQRResult(raw){
+    setMostrarQR(false);
+    const data=parseQR(raw);
+    if(data){
+      setNombre(data.pacienteNombre); setDni(data.pacienteDni);
+      setPeso(data.peso); setTalla(data.talla); setEstudio(data.estudio||"");
+      setMostrarForm(true);
+      onToast("Pulsera leída correctamente","success");
+    } else {
+      onToast("QR no reconocido. Ingresá los datos manualmente.","error");
+      setMostrarForm(true);
+    }
+  }
+
+  function limpiarForm(){
+    setNombre("");setDni("");setPeso("");setTalla("");setEstudio("");setMci("");setFarmId("");setLote("");setObs("");
+    setSedeId(usuario.sede);
+  }
+
+  function guardar(){
+    if(!nombre.trim()||!dni.trim()||!mci||!estudio) return;
+    const farm=estado.farms.find(f=>f.id===farmId);
+    const reg={id:uid(),fecha:new Date().toISOString(),tipo:"paciente",
+      sedeId,sedeNombre:SEDES.find(s=>s.id===sedeId)?.nombre,
+      pacienteNombre:nombre.trim(),pacienteDni:dni.trim(),
+      peso:parseFloat(peso)||0,talla:parseFloat(talla)||0,
+      estudio,mciAdministrados:parseFloat(mci)||0,
+      farmId,farmNombre:farm?.nombre||"",lote,
+      usuarioNombre:usuario.nombre,observacion:obs.trim()};
+    const nuevo={...estado,actas:[reg,...(estado.actas||[])]};
+    guardar(nuevo);setEstado(nuevo);
+    onToast("Registro guardado");limpiarForm();setMostrarForm(false);
+  }
+
+  const actas=(estado.actas||[]).filter(a=>{
+    if(a.tipo!=="paciente") return false;
+    if(filtroFecha&&!a.fecha.startsWith(filtroFecha)) return false;
+    if(filtroSede&&a.sedeId!==filtroSede) return false;
+    return true;
+  });
+
+  // Lotes disponibles para la sede y farmaco seleccionado
+  const lotesDisp=(estado.stock[sedeId]?.[farmId]||[]).filter(l=>l.cantidad>0);
+
+  function exportarCSV(){
+    const filas=[["Fecha","Hora","Sede","Paciente","DNI","Peso (kg)","Talla (cm)","Estudio","Radiofármaco","Lote","mCi administrados","Técnico","Observación"],
+      ...actas.map(a=>{
+        const d=new Date(a.fecha);
+        return[d.toLocaleDateString("es-AR"),d.toLocaleTimeString("es-AR",{hour:"2-digit",minute:"2-digit"}),
+          a.sedeNombre,a.pacienteNombre,a.pacienteDni,a.peso,a.talla,a.estudio,a.farmNombre||"—",a.lote||"—",a.mciAdministrados,a.usuarioNombre,a.observacion||"—"];
+      })];
+    const csv=filas.map(r=>r.map(x=>`"${x}"`).join(",")).join("\n");
+    const a=document.createElement("a");a.href="data:text/csv;charset=utf-8,\uFEFF"+encodeURIComponent(csv);
+    a.download=`libro2_pacientes_${filtroFecha||hoy()}.csv`;a.click();
+    onToast("Libro 2 exportado");
+  }
+
+  return <div className="flex flex-col gap-4">
+    {/* Barra de acciones */}
+    <div className="flex flex-wrap gap-2 items-center justify-between">
+      <div className="flex gap-2 flex-wrap">
+        <Input type="date" value={filtroFecha} onChange={e=>setFiltroFecha(e.target.value)}/>
+        {esAdmin&&<Sel value={filtroSede} onChange={e=>setFiltroSede(e.target.value)}>
+          <option value="">Todas las sedes</option>
+          {sedesActivas(estado).map(s=><option key={s.id} value={s.id}>{s.short}</option>)}
+        </Sel>}
+      </div>
+      <div className="flex gap-2">
+        {actas.length>0&&<Btn size="sm" variant="outline" onClick={exportarCSV}>↓ CSV</Btn>}
+        <Btn size="sm" variant="primary" onClick={()=>setMostrarQR(true)}>
+          <span className="flex items-center gap-1.5">
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v1m6 11h2m-6 0h-2v4m0-11v3m0 0h.01M12 12h4.01M16 20h4M4 12h4m12 0h.01M5 8h2a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1zm12 0h2a1 1 0 001-1V5a1 1 0 00-1-1h-2a1 1 0 00-1 1v2a1 1 0 001 1zM5 20h2a1 1 0 001-1v-2a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1z"/>
+            </svg>
+            Escanear pulsera
+          </span>
+        </Btn>
+        <Btn size="sm" variant="ghost" onClick={()=>{limpiarForm();setMostrarForm(true)}}>+ Manual</Btn>
+      </div>
+    </div>
+
+    {/* Formulario de registro */}
+    {mostrarForm&&<div className="bg-white border border-blue-100 rounded-2xl p-5 shadow-sm">
+      <div className="flex items-center justify-between mb-4">
+        <h3 className="text-sm font-bold text-gray-800">Nuevo registro de paciente</h3>
+        <button onClick={()=>{setMostrarForm(false);limpiarForm();}} className="text-gray-400 hover:text-gray-600">
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12"/></svg>
+        </button>
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <Input label="Apellido y nombre" value={nombre} onChange={e=>setNombre(e.target.value)} placeholder="García Juan"/>
+        <Input label="DNI" value={dni} onChange={e=>setDni(e.target.value)} placeholder="28456789"/>
+        <Input label="Peso (kg)" type="number" min={0} value={peso} onChange={e=>setPeso(e.target.value)} placeholder="78"/>
+        <Input label="Talla (cm)" type="number" min={0} value={talla} onChange={e=>setTalla(e.target.value)} placeholder="172"/>
+        <div className="sm:col-span-2">
+          <Sel label="Estudio" value={estudio} onChange={e=>setEstudio(e.target.value)}>
+            <option value="">Seleccionar estudio...</option>
+            {ESTUDIOS.map(e=><option key={e}>{e}</option>)}
+          </Sel>
+        </div>
+        {esAdmin&&<Sel label="Sede" value={sedeId} onChange={e=>{setSedeId(e.target.value);setFarmId("");setLote("");}}>
+          {sedesActivas(estado).map(s=><option key={s.id} value={s.id}>{s.short}</option>)}
+        </Sel>}
+        <Sel label="Radiofármaco utilizado" value={farmId} onChange={e=>{setFarmId(e.target.value);setLote("");}}>
+          <option value="">Seleccionar...</option>
+          {farmsDeSede(estado,sedeId).map(f=><option key={f.id} value={f.id}>{f.nombre}</option>)}
+        </Sel>
+        <Sel label="Lote" value={lote} onChange={e=>setLote(e.target.value)} disabled={!farmId}>
+          <option value="">Seleccionar lote...</option>
+          {lotesDisp.map(l=><option key={l.id} value={l.lote}>{l.lote} · Venc: {fmtF(l.vencimiento)}</option>)}
+        </Sel>
+        <Input label="Dosis administrada (mCi)" type="number" min={0} step={0.1} value={mci} onChange={e=>setMci(e.target.value)} placeholder="10.5"/>
+        <Input label="Observación (opcional)" value={obs} onChange={e=>setObs(e.target.value)} placeholder="Ej: paciente con marcapasos"/>
+      </div>
+      <div className="flex gap-2 justify-end mt-4">
+        <Btn variant="outline" onClick={()=>{setMostrarForm(false);limpiarForm();}}>Cancelar</Btn>
+        <Btn onClick={guardar} disabled={!nombre.trim()||!dni.trim()||!mci||!estudio}>Guardar registro</Btn>
+      </div>
+    </div>}
+
+    {/* Tabla de registros del día */}
+    <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-x-auto">
+      <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
+        <span className="text-xs font-bold text-gray-500 uppercase tracking-wide">
+          {filtroFecha?`Registros del ${fmtF(filtroFecha)}`:"Todos los registros"}
+        </span>
+        <Badge color="blue">{actas.length} paciente{actas.length!==1?"s":""}</Badge>
+      </div>
+      <table className="w-full text-sm min-w-[700px]">
+        <thead><tr className="border-b border-gray-100 bg-gray-50/60">
+          {["Hora","Paciente","DNI","Estudio","Radiofármaco / Lote","Dosis (mCi)","Técnico"].map((h,i)=>(
+            <th key={h} className={`px-3 py-3 text-xs font-bold text-gray-500 uppercase tracking-wide ${i===0||i>=4?"text-left":"text-left"}`}>{h}</th>
+          ))}
+        </tr></thead>
+        <tbody>
+          {actas.map(a=>{
+            const d=new Date(a.fecha);
+            return <tr key={a.id} className="border-b border-gray-50 last:border-0 hover:bg-gray-50/30">
+              <td className="px-3 py-2.5 text-xs text-gray-500 whitespace-nowrap">{d.toLocaleTimeString("es-AR",{hour:"2-digit",minute:"2-digit"})}</td>
+              <td className="px-3 py-2.5 font-semibold text-gray-800 text-xs">
+                {a.pacienteNombre}
+                {(a.peso||a.talla)&&<div className="text-xs font-normal text-gray-400">{a.peso&&`${a.peso}kg`}{a.talla&&` · ${a.talla}cm`}</div>}
+              </td>
+              <td className="px-3 py-2.5 text-xs font-mono text-gray-500">{a.pacienteDni}</td>
+              <td className="px-3 py-2.5 text-xs text-gray-700">{a.estudio}</td>
+              <td className="px-3 py-2.5 text-xs text-gray-700">
+                {a.farmNombre||"—"}
+                {a.lote&&<div className="text-xs text-gray-400 font-mono">{a.lote}</div>}
+              </td>
+              <td className="px-3 py-2.5">
+                <span className="font-bold text-blue-700 text-sm">{a.mciAdministrados}</span>
+                <span className="text-xs text-gray-400 ml-1">mCi</span>
+              </td>
+              <td className="px-3 py-2.5 text-xs text-gray-500">{a.usuarioNombre}</td>
+            </tr>;
+          })}
+        </tbody>
+      </table>
+      {actas.length===0&&<div className="text-center py-12 text-gray-400 text-sm">No hay registros para la fecha seleccionada.</div>}
+    </div>
+
+    {mostrarQR&&<QRScanner onResult={handleQRResult} onClose={()=>setMostrarQR(false)}/>}
+  </div>;
+}
+
+// ─── Tab Marcación (Libro 1) ─────────────────────────────────────────────────
+function TabMarcacion({estado,setEstado,usuario,esAdmin,onToast}){
+  const [mostrarForm,setMostrarForm]=useState(false);
+  const [filtroFecha,setFiltroFecha]=useState(hoy());
+  const [filtroSede,setFiltroSede]=useState(usuario.sede);
+
+  const [farmId,setFarmId]=useState(""); const [lote,setLote]=useState("");
+  const [mciMarcacion,setMciMarcacion]=useState(""); const [obs,setObs]=useState("");
+  const [sedeId,setSedeId]=useState(usuario.sede);
+
+  const lotesDisp=(estado.stock[sedeId]?.[farmId]||[]).filter(l=>l.cantidad>0);
+
+  function guardar(){
+    if(!farmId||!mciMarcacion) return;
+    const farm=estado.farms.find(f=>f.id===farmId);
+    const reg={id:uid(),fecha:new Date().toISOString(),tipo:"marcacion",
+      sedeId,sedeNombre:SEDES.find(s=>s.id===sedeId)?.nombre,
+      farmId,farmNombre:farm?.nombre||"",lote,
+      mciMarcacion:parseFloat(mciMarcacion)||0,
+      usuarioNombre:usuario.nombre,observacion:obs.trim()};
+    const nuevo={...estado,actas:[reg,...(estado.actas||[])]};
+    guardar(nuevo);setEstado(nuevo);
+    onToast("Marcación registrada");
+    setFarmId("");setLote("");setMciMarcacion("");setObs("");setMostrarForm(false);
+  }
+
+  const actas=(estado.actas||[]).filter(a=>{
+    if(a.tipo!=="marcacion") return false;
+    if(filtroFecha&&!a.fecha.startsWith(filtroFecha)) return false;
+    if(filtroSede&&a.sedeId!==filtroSede) return false;
+    return true;
+  });
+
+  function exportarCSV(){
+    const filas=[["Fecha","Hora","Sede","Radiofármaco","Lote","mCi marcación","Técnico","Observación"],
+      ...actas.map(a=>{
+        const d=new Date(a.fecha);
+        return[d.toLocaleDateString("es-AR"),d.toLocaleTimeString("es-AR",{hour:"2-digit",minute:"2-digit"}),
+          a.sedeNombre,a.farmNombre,a.lote||"—",a.mciMarcacion,a.usuarioNombre,a.observacion||"—"];
+      })];
+    const csv=filas.map(r=>r.map(x=>`"${x}"`).join(",")).join("\n");
+    const a=document.createElement("a");a.href="data:text/csv;charset=utf-8,\uFEFF"+encodeURIComponent(csv);
+    a.download=`libro1_marcacion_${filtroFecha||hoy()}.csv`;a.click();
+    onToast("Libro 1 exportado");
+  }
+
+  return <div className="flex flex-col gap-4">
+    <div className="flex flex-wrap gap-2 items-center justify-between">
+      <div className="flex gap-2 flex-wrap">
+        <Input type="date" value={filtroFecha} onChange={e=>setFiltroFecha(e.target.value)}/>
+        {esAdmin&&<Sel value={filtroSede} onChange={e=>setFiltroSede(e.target.value)}>
+          <option value="">Todas las sedes</option>
+          {sedesActivas(estado).map(s=><option key={s.id} value={s.id}>{s.short}</option>)}
+        </Sel>}
+      </div>
+      <div className="flex gap-2">
+        {actas.length>0&&<Btn size="sm" variant="outline" onClick={exportarCSV}>↓ CSV</Btn>}
+        <Btn size="sm" variant="primary" onClick={()=>setMostrarForm(true)}>+ Registrar marcación</Btn>
+      </div>
+    </div>
+
+    {mostrarForm&&<div className="bg-white border border-blue-100 rounded-2xl p-5 shadow-sm">
+      <div className="flex items-center justify-between mb-4">
+        <h3 className="text-sm font-bold text-gray-800">Nueva marcación</h3>
+        <button onClick={()=>setMostrarForm(false)} className="text-gray-400 hover:text-gray-600">
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12"/></svg>
+        </button>
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        {esAdmin&&<Sel label="Sede" value={sedeId} onChange={e=>{setSedeId(e.target.value);setFarmId("");setLote("");}}>
+          {sedesActivas(estado).map(s=><option key={s.id} value={s.id}>{s.short}</option>)}
+        </Sel>}
+        <Sel label="Radiofármaco" value={farmId} onChange={e=>{setFarmId(e.target.value);setLote("");}}>
+          <option value="">Seleccionar...</option>
+          {farmsDeSede(estado,sedeId).map(f=><option key={f.id} value={f.id}>{f.nombre}</option>)}
+        </Sel>
+        <Sel label="Lote" value={lote} onChange={e=>setLote(e.target.value)} disabled={!farmId}>
+          <option value="">Seleccionar lote...</option>
+          {lotesDisp.map(l=><option key={l.id} value={l.lote}>{l.lote} · Venc: {fmtF(l.vencimiento)}</option>)}
+        </Sel>
+        <Input label="mCi utilizados en marcación" type="number" min={0} step={0.1} value={mciMarcacion} onChange={e=>setMciMarcacion(e.target.value)} placeholder="20"/>
+        <Input label="Observación (opcional)" value={obs} onChange={e=>setObs(e.target.value)} placeholder="Ej: rendimiento del kit, incidencias..."/>
+      </div>
+      <div className="flex gap-2 justify-end mt-4">
+        <Btn variant="outline" onClick={()=>setMostrarForm(false)}>Cancelar</Btn>
+        <Btn onClick={guardar} disabled={!farmId||!mciMarcacion}>Guardar marcación</Btn>
+      </div>
+    </div>}
+
+    <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-x-auto">
+      <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
+        <span className="text-xs font-bold text-gray-500 uppercase tracking-wide">
+          {filtroFecha?`Marcaciones del ${fmtF(filtroFecha)}`:"Todas las marcaciones"}
+        </span>
+        <Badge color="blue">{actas.length} registro{actas.length!==1?"s":""}</Badge>
+      </div>
+      <table className="w-full text-sm min-w-[560px]">
+        <thead><tr className="border-b border-gray-100 bg-gray-50/60">
+          {["Hora","Sede","Radiofármaco","Lote","mCi marcación","Técnico","Observación"].map(h=>(
+            <th key={h} className="px-3 py-3 text-xs font-bold text-gray-500 uppercase tracking-wide text-left">{h}</th>
+          ))}
+        </tr></thead>
+        <tbody>
+          {actas.map(a=>{
+            const d=new Date(a.fecha);
+            return <tr key={a.id} className="border-b border-gray-50 last:border-0 hover:bg-gray-50/30">
+              <td className="px-3 py-2.5 text-xs text-gray-500 whitespace-nowrap">{d.toLocaleTimeString("es-AR",{hour:"2-digit",minute:"2-digit"})}</td>
+              <td className="px-3 py-2.5 text-xs text-gray-600">{SEDES.find(s=>s.id===a.sedeId)?.short||"—"}</td>
+              <td className="px-3 py-2.5 text-xs font-semibold text-gray-800">{a.farmNombre}</td>
+              <td className="px-3 py-2.5 text-xs font-mono text-gray-500">{a.lote||"—"}</td>
+              <td className="px-3 py-2.5"><span className="font-bold text-blue-700 text-sm">{a.mciMarcacion}</span><span className="text-xs text-gray-400 ml-1">mCi</span></td>
+              <td className="px-3 py-2.5 text-xs text-gray-500">{a.usuarioNombre}</td>
+              <td className="px-3 py-2.5 text-xs text-gray-400 italic">{a.observacion||"—"}</td>
+            </tr>;
+          })}
+        </tbody>
+      </table>
+      {actas.length===0&&<div className="text-center py-12 text-gray-400 text-sm">No hay marcaciones para la fecha seleccionada.</div>}
+    </div>
+  </div>;
+}
+
 // ─── Vista Configuración (solo admin) ────────────────────────────────────────
 function VistaConfiguracion({estado,setEstado,onToast}){
   const [tab,setTab]=useState("catalogo");
@@ -718,7 +1182,7 @@ function VistaConfiguracion({estado,setEstado,onToast}){
       <p className="text-xs text-gray-400 mt-0.5">Catálogo de radiofármacos y asignación por sede</p>
     </div>
     <div className="flex gap-1 bg-gray-100 p-1 rounded-xl w-fit">
-      {[{id:"catalogo",label:"Catálogo"},{id:"sedes",label:"Asignación por sede"}].map(t=>(
+      {[{id:"catalogo",label:"Catálogo"},{id:"sedes",label:"Asignación por sede"},{id:"activas",label:"Sedes activas"}].map(t=>(
         <button key={t.id} onClick={()=>setTab(t.id)}
           className={`px-4 py-1.5 text-xs font-semibold rounded-lg transition ${tab===t.id?"bg-white text-gray-800 shadow-sm":"text-gray-500 hover:text-gray-700"}`}>
           {t.label}
@@ -727,6 +1191,7 @@ function VistaConfiguracion({estado,setEstado,onToast}){
     </div>
     {tab==="catalogo"&&<TabCatalogo estado={estado} setEstado={setEstado} onToast={onToast}/>}
     {tab==="sedes"&&<TabSedes estado={estado} setEstado={setEstado} onToast={onToast}/>}
+    {tab==="activas"&&<TabSedesActivas estado={estado} setEstado={setEstado} onToast={onToast}/>}
   </div>;
 }
 
@@ -842,6 +1307,52 @@ function FormFarm({nombre,setNombre,kit,setKit,onConfirm,onCancel,confirmLabel})
   </div>;
 }
 
+function TabSedesActivas({estado,setEstado,onToast}){
+  const activas=idsSedesActivas(estado);
+
+  function toggleSede(sedeId){
+    if(sedeId==="central") return; // Central siempre activa
+    const nuevas=activas.includes(sedeId)
+      ? activas.filter(id=>id!==sedeId)
+      : [...activas, sedeId];
+    const nuevo={...estado, sedesActivas:nuevas};
+    guardar(nuevo);setEstado(nuevo);
+    const sede=SEDES.find(s=>s.id===sedeId);
+    onToast(activas.includes(sedeId)
+      ? `${sede?.short} desactivada — oculta en toda la app`
+      : `${sede?.short} activada`);
+  }
+
+  return <div className="flex flex-col gap-4">
+    <div className="bg-blue-50 border border-blue-100 rounded-xl px-4 py-3 text-xs text-blue-700">
+      <span className="font-semibold">Modo piloto:</span> desactivá las sedes que aún no operan con la app. Las sedes desactivadas desaparecen del inventario, pedidos, historial y actas, pero <span className="font-semibold">sus datos se conservan intactos</span> y reaparecen al reactivarlas. FUESMEN Central no se puede desactivar.
+    </div>
+    <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+      {SEDES.map((s,i)=>{
+        const activa=activas.includes(s.id);
+        const esCentral=s.id==="central";
+        const usuariosSede=USUARIOS.filter(u=>u.sede===s.id&&u.rol!=="admin").length;
+        return <div key={s.id} className={`flex items-center justify-between px-5 py-4 ${i<SEDES.length-1?"border-b border-gray-50":""} ${!activa?"bg-gray-50/50":""}`}>
+          <div>
+            <div className={`font-semibold text-sm ${activa?"text-gray-800":"text-gray-400"}`}>{s.nombre}</div>
+            <div className="text-xs text-gray-400 mt-0.5">
+              {esCentral
+                ? "Sede principal — siempre activa"
+                : activa ? `Operativa · ${usuariosSede} técnico${usuariosSede!==1?"s":""} asignado${usuariosSede!==1?"s":""}` : "Desactivada — datos conservados"}
+            </div>
+          </div>
+          {esCentral
+            ? <Badge color="blue">Siempre activa</Badge>
+            : <button onClick={()=>toggleSede(s.id)}
+                className={`relative w-11 h-6 rounded-full transition-colors focus:outline-none ${activa?"bg-blue-600":"bg-gray-200"}`}>
+                <span className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform ${activa?"translate-x-5":"translate-x-0"}`}/>
+              </button>}
+        </div>;
+      })}
+    </div>
+  </div>;
+}
+
 function TabSedes({estado,setEstado,onToast}){
   const [sedeActiva,setSedeActiva]=useState("central");
 
@@ -906,7 +1417,7 @@ export default function App(){
 
   const countPedirTotal=useMemo(()=>{
     let n=0;
-    SEDES.forEach(sede=>farmsDeSede(estado,sede.id).forEach(f=>{
+    sedesActivas(estado).forEach(sede=>farmsDeSede(estado,sede.id).forEach(f=>{
       if(totStock(estado.stock[sede.id]?.[f.id]||[])<=(estado.puntosReorden[sede.id]?.[f.id]??2)) n++;
     }));
     return n;
@@ -916,10 +1427,30 @@ export default function App(){
     {id:"inventario",label:"Inventario",path:"M4 6h16M4 10h16M4 14h16M4 18h16"},
     {id:"pedidos",label:"Pedidos",path:"M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"},
     {id:"historial",label:"Historial",path:"M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"},
+    {id:"administracion",label:"Actas ARN",path:"M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"},
     ...(esAdmin?[{id:"configuracion",label:"Config.",path:"M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z M15 12a3 3 0 11-6 0 3 3 0 016 0z"}]:[]),
   ];
 
   if(!usuario) return <PantallaLogin onLogin={u=>{setUsuario(u);setVista("inventario");}}/>;
+
+  // Bloqueo para técnicos de sedes desactivadas (la encargada siempre entra)
+  if(!esAdmin && !idsSedesActivas(estado).includes(usuario.sede)){
+    const sede=SEDES.find(s=>s.id===usuario.sede);
+    return <div className="min-h-screen bg-gray-50 flex items-center justify-center p-6">
+      <div className="bg-white rounded-3xl shadow-sm border border-gray-100 p-10 max-w-sm text-center">
+        <div className="w-14 h-14 mx-auto mb-5 rounded-2xl bg-amber-50 border border-amber-100 flex items-center justify-center">
+          <svg className="w-7 h-7 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+          </svg>
+        </div>
+        <h2 className="text-base font-bold text-gray-800 mb-2">Sede no habilitada</h2>
+        <p className="text-sm text-gray-500 mb-6">
+          {sede?.nombre} aún no está operando con RadioFarm. Consultá con la encargada de radiofarmacia.
+        </p>
+        <Btn variant="outline" onClick={()=>setUsuario(null)}>Volver al inicio</Btn>
+      </div>
+    </div>;
+  }
 
   return <div className="min-h-screen bg-gray-50 font-sans">
     <header className="bg-white border-b border-gray-100 sticky top-0 z-30 shadow-sm">
@@ -975,6 +1506,7 @@ export default function App(){
       {vista==="inventario"    &&<VistaInventario estado={estado} setEstado={setEstado} usuario={usuario} esAdmin={esAdmin} onToast={(m,t)=>setToast({m,t})}/>}
       {vista==="pedidos"       &&<VistaPedidos estado={estado} esAdmin={esAdmin} onToast={(m,t)=>setToast({m,t})}/>}
       {vista==="historial"     &&<VistaHistorial estado={estado} setEstado={setEstado} usuario={usuario} esAdmin={esAdmin} onToast={(m,t)=>setToast({m,t})}/>}
+      {vista==="administracion"&&<VistaAdministracion estado={estado} setEstado={setEstado} usuario={usuario} esAdmin={esAdmin} onToast={(m,t)=>setToast({m,t})}/>}
       {vista==="configuracion" &&esAdmin&&<VistaConfiguracion estado={estado} setEstado={setEstado} onToast={(m,t)=>setToast({m,t})}/>}
     </main>
 
