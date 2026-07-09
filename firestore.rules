@@ -1,0 +1,81 @@
+rules_version = '2';
+
+// Asume que roles/{email} usa siempre el email en minúsculas (así lo escribe
+// services/auth.js#setRol) y que request.auth.token.email también viene en
+// minúsculas (así lo devuelve Google para cuentas Gmail/Workspace estándar).
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function tieneAcceso() {
+      return request.auth != null &&
+        exists(/databases/$(database)/documents/roles/$(request.auth.token.email));
+    }
+
+    function miRol() {
+      return get(/databases/$(database)/documents/roles/$(request.auth.token.email)).data;
+    }
+
+    function isAdmin() {
+      return request.auth != null && tieneAcceso() && miRol().rol == 'admin';
+    }
+
+    // roles: cada quien lee su propio doc; sólo admins leen/escriben todo.
+    match /roles/{email} {
+      allow read: if request.auth != null && (request.auth.token.email == email || isAdmin());
+      allow write: if isAdmin();
+    }
+
+    // Catálogo y proveedores: lectura para cualquier usuario con acceso, escritura sólo admin.
+    match /farms/{farmId} {
+      allow read: if tieneAcceso();
+      allow write: if isAdmin();
+    }
+    match /proveedores/{provId} {
+      allow read: if tieneAcceso();
+      allow write: if isAdmin();
+    }
+
+    // sedes: config (activo/farmIds/puntosReorden) sólo la edita un admin.
+    match /sedes/{sedeId} {
+      allow read: if tieneAcceso();
+      allow write: if isAdmin();
+
+      // lotes: técnico de esa sede puede actualizar (egreso, siempre resta
+      // cantidad); crear/borrar lotes (ingreso, alta de transferencia) es
+      // sólo admin, igual que en la UI. NOTA: esto no distingue con precisión
+      // "actualizar mi propio lote (egreso)" de "acreditar una transferencia
+      // ajena a mi sede" -- ambas son un `update` sobre un lote existente de
+      // mi propia sede. Suficiente para v1; una distinción más fina
+      // requeriría Cloud Functions.
+      match /lotes/{loteId} {
+        allow read: if tieneAcceso();
+        allow update: if isAdmin() || (miRol().rol == 'tecnico' && miRol().sede == sedeId);
+        allow create, delete: if isAdmin();
+      }
+    }
+
+    // La regla anidada de arriba sólo cubre lecturas/escrituras cuando se
+    // conoce la sede de antemano (getDocs(collection(db,'sedes',id,'lotes'))).
+    // CatalogoContext escucha TODAS las sedes con un solo
+    // collectionGroup('lotes') (ver services/firestore/stock.js#listenLotes),
+    // y Firestore exige una regla aparte con el wildcard recursivo {path=**}
+    // para autorizar ese tipo de consulta -- si no está, el listener falla
+    // con permission-denied aunque la regla anidada de arriba sea correcta.
+    match /{path=**}/lotes/{loteId} {
+      allow read: if tieneAcceso();
+    }
+
+    // movimientos y actas: inmutables por diseño (requisito 8) -- create-only,
+    // nunca update/delete. La "anulación" es siempre un movimiento nuevo.
+    match /movimientos/{movId} {
+      allow read: if tieneAcceso();
+      allow create: if tieneAcceso();
+      allow update, delete: if false;
+    }
+    match /actas/{actaId} {
+      allow read: if tieneAcceso();
+      allow create: if tieneAcceso();
+      allow update, delete: if false;
+    }
+  }
+}

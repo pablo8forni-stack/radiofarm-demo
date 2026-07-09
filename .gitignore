@@ -22,3 +22,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Credencial de service account para scripts/seed.mjs -- nunca al repo.
+serviceAccountKey.json

@@ -8,9 +8,12 @@
     "build": "vite build",
     "lint": "oxlint",
     "preview": "vite preview",
-    "deploy": "gh-pages -d dist"
+    "deploy": "gh-pages -d dist",
+    "seed": "node scripts/seed.mjs"
   },
   "dependencies": {
+    "firebase": "^12.16.0",
+    "html5-qrcode": "^2.3.8",
     "react": "^19.2.7",
     "react-dom": "^19.2.7"
   },
@@ -18,6 +21,8 @@
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.2",
+    "firebase-admin": "^14.1.0",
+    "firebase-tools": "^15.22.4",
     "gh-pages": "^6.3.0",
     "oxlint": "^1.69.0",
     "vite": "^8.1.0"
