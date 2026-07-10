@@ -23,8 +23,15 @@ export const MENSAJE_PERMISO =
 export const MENSAJE_CONTENCION =
   "No se pudo registrar por mucha actividad al mismo tiempo sobre este lote. Esperá unos segundos y probá de nuevo; si vuelve a fallar, anotalo en la planilla de papel de contingencia.";
 
+// `typeof navigator` guarda contra entornos sin ese global (p. ej. los
+// scripts de prueba en scripts/testing/, que corren esta misma función en
+// Node): ahí `navigator.onLine` no existe, y un `!navigator.onLine` sin
+// guardar clasificaría CUALQUIER error como "sin conexión" sin importar su
+// causa real. En el browser el comportamiento no cambia (navigator.onLine
+// siempre es un booleano real ahí).
 export function esErrorSinConexion(error) {
-  return !navigator.onLine || CODIGOS_SIN_CONEXION.has(error?.code);
+  const offline = typeof navigator !== "undefined" && navigator.onLine === false;
+  return offline || CODIGOS_SIN_CONEXION.has(error?.code);
 }
 
 export function esErrorDePermiso(error) {

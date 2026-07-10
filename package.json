@@ -6,10 +6,15 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "dev:staging": "vite --mode staging",
+    "build:staging": "vite build --mode staging",
     "lint": "oxlint",
     "preview": "vite preview",
     "deploy": "gh-pages -d dist",
-    "seed": "node scripts/seed.mjs"
+    "seed": "node scripts/seed.mjs",
+    "test:staging": "node --env-file=.env.staging --test --test-concurrency=1 --test-timeout=30000 scripts/testing/reglas.test.mjs scripts/testing/transacciones.test.mjs scripts/testing/anulacion.test.mjs scripts/testing/solicitudes.test.mjs",
+    "test:emulator": "firebase emulators:exec --only firestore,auth --project radiofarm-fuesmen-staging \"node --env-file=.env.emulator --test --test-concurrency=1 --test-timeout=30000 scripts/testing/reglas.test.mjs scripts/testing/transacciones.test.mjs scripts/testing/anulacion.test.mjs scripts/testing/solicitudes.test.mjs\"",
+    "staging:reset": "firebase firestore:delete --all-collections --project radiofarm-fuesmen-staging --force"
   },
   "dependencies": {
     "firebase": "^12.16.0",
