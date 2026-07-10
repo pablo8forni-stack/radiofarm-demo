@@ -11,6 +11,7 @@ export function ModalTransferencia({ open, farm, sedeOrigenId, catalogo, usuario
   const [cantidad, setCantidad] = useState(1);
   const [destino, setDestino] = useState("");
   const [obs, setObs] = useState("");
+  const [enviando, setEnviando] = useState(false);
 
   const disp = (catalogo.stock[sedeOrigenId]?.[farm?.id] || []).filter((l) => l.cantidad > 0);
   const destinos = sedesActivas(catalogo).filter((s) => s.id !== sedeOrigenId && (catalogo.sedes[s.id]?.farmIds || []).includes(farm?.id));
@@ -20,9 +21,19 @@ export function ModalTransferencia({ open, farm, sedeOrigenId, catalogo, usuario
     setCantidad(1);
     setDestino(destinos[0]?.id || "");
     setObs("");
+    setEnviando(false);
   }, [open, farm?.id]);
 
   const lote = disp.find((l) => l.id === loteId);
+
+  async function confirmar() {
+    setEnviando(true);
+    try {
+      await onConfirm({ loteId, cantidad, sedeDestino: destino, observacion: obs.trim() });
+    } finally {
+      setEnviando(false);
+    }
+  }
   const sedeOrigen = sedesActivas(catalogo).find((s) => s.id === sedeOrigenId) || { short: sedeOrigenId };
 
   return (
@@ -48,9 +59,9 @@ export function ModalTransferencia({ open, farm, sedeOrigenId, catalogo, usuario
             <Input label="Observación (opcional)" value={obs} onChange={(e) => setObs(e.target.value)} placeholder="Ej: Préstamo por faltante puntual" />
             <div className="bg-gray-50 rounded-xl px-3 py-2 text-xs text-gray-500">Por: <span className="font-semibold text-gray-700">{usuario?.nombre}</span></div>
             <div className="flex gap-2 justify-end">
-              <Btn variant="outline" onClick={onClose}>Cancelar</Btn>
-              <Btn variant="teal" onClick={() => onConfirm({ loteId, cantidad, sedeDestino: destino, observacion: obs.trim() })} disabled={!loteId || !destino}>
-                Confirmar transferencia
+              <Btn variant="outline" onClick={onClose} disabled={enviando}>Cancelar</Btn>
+              <Btn variant="teal" onClick={confirmar} disabled={!loteId || !destino || enviando}>
+                {enviando ? "Transfiriendo..." : "Confirmar transferencia"}
               </Btn>
             </div>
           </>

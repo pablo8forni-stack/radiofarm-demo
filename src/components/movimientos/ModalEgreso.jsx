@@ -10,6 +10,7 @@ export function ModalEgreso({ open, farm, lotes, usuario, onConfirm, onClose }) 
   const [cantidad, setCantidad] = useState(1);
   const [motivo, setMotivo] = useState("Estudio");
   const [obs, setObs] = useState("");
+  const [enviando, setEnviando] = useState(false);
   const disp = (lotes || []).filter((l) => l.cantidad > 0);
 
   useEffect(() => {
@@ -17,9 +18,19 @@ export function ModalEgreso({ open, farm, lotes, usuario, onConfirm, onClose }) 
     setCantidad(1);
     setMotivo("Estudio");
     setObs("");
+    setEnviando(false);
   }, [open, farm?.id]);
 
   const lote = disp.find((l) => l.id === loteId);
+
+  async function confirmar() {
+    setEnviando(true);
+    try {
+      await onConfirm({ loteId, cantidad, motivo, observacion: obs.trim() });
+    } finally {
+      setEnviando(false);
+    }
+  }
 
   return (
     <Modal open={open} title={`Egreso — ${farm?.nombre}`} onClose={onClose} size="sm">
@@ -41,8 +52,8 @@ export function ModalEgreso({ open, farm, lotes, usuario, onConfirm, onClose }) 
             <Input label="Observación (opcional)" value={obs} onChange={(e) => setObs(e.target.value)} placeholder="Ej: Paciente suspendido, vial roto..." />
             <div className="bg-gray-50 rounded-xl px-3 py-2 text-xs text-gray-500">Por: <span className="font-semibold text-gray-700">{usuario?.nombre}</span></div>
             <div className="flex gap-2 justify-end">
-              <Btn variant="outline" onClick={onClose}>Cancelar</Btn>
-              <Btn variant="danger" onClick={() => onConfirm({ loteId, cantidad, motivo, observacion: obs.trim() })}>Registrar egreso</Btn>
+              <Btn variant="outline" onClick={onClose} disabled={enviando}>Cancelar</Btn>
+              <Btn variant="danger" onClick={confirmar} disabled={enviando}>{enviando ? "Registrando..." : "Registrar egreso"}</Btn>
             </div>
           </>
         )}

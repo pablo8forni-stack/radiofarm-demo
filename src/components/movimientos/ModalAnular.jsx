@@ -7,11 +7,21 @@ import { TIPO_INFO } from "../../constants/tipoMovimiento.js";
 
 export function ModalAnular({ mov, onConfirm, onClose }) {
   const [obs, setObs] = useState("");
+  const [enviando, setEnviando] = useState(false);
   const info = TIPO_INFO[mov.tipo] || { label: mov.tipo };
   const esEntrada = mov.tipo === "ingreso" || mov.tipo === "transferencia_entrada";
   const esTransferencia = mov.tipo === "transferencia_salida" || mov.tipo === "transferencia_entrada";
   const sedeOrigen = mov.tipo === "transferencia_salida" ? mov.sedeNombre : mov.sedeRelacionada;
   const sedeDestino = mov.tipo === "transferencia_salida" ? mov.sedeRelacionada : mov.sedeNombre;
+
+  async function confirmar() {
+    setEnviando(true);
+    try {
+      await onConfirm(mov, obs.trim());
+    } finally {
+      setEnviando(false);
+    }
+  }
   return (
     <Modal open title={esTransferencia ? "Anular transferencia" : "Anular movimiento"} onClose={onClose} size="sm">
       <div className="flex flex-col gap-4">
@@ -31,8 +41,8 @@ export function ModalAnular({ mov, onConfirm, onClose }) {
         </div>
         <Input label="Motivo de la anulación (obligatorio)" value={obs} onChange={(e) => setObs(e.target.value)} placeholder="Ej: Estudio cancelado, error de carga..." />
         <div className="flex gap-2 justify-end">
-          <Btn variant="outline" onClick={onClose}>Cancelar</Btn>
-          <Btn variant="danger" onClick={() => onConfirm(mov, obs.trim())} disabled={!obs.trim()}>Confirmar anulación</Btn>
+          <Btn variant="outline" onClick={onClose} disabled={enviando}>Cancelar</Btn>
+          <Btn variant="danger" onClick={confirmar} disabled={!obs.trim() || enviando}>{enviando ? "Anulando..." : "Confirmar anulación"}</Btn>
         </div>
       </div>
     </Modal>
