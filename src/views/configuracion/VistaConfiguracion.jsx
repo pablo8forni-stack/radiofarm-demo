@@ -4,7 +4,7 @@ import { TabSedes } from "./TabSedes.jsx";
 import { TabSedesActivas } from "./TabSedesActivas.jsx";
 import { TabUsuarios } from "./TabUsuarios.jsx";
 import { TabBackup } from "./TabBackup.jsx";
-import { listenRoles } from "../../services/auth.js";
+import { listenRoles, listenSolicitudes } from "../../services/auth.js";
 
 const TABS = [
   { id: "catalogo", label: "Catálogo" },
@@ -17,8 +17,10 @@ const TABS = [
 export function VistaConfiguracion({ catalogo, usuario, onToast }) {
   const [tab, setTab] = useState("catalogo");
   const [roles, setRoles] = useState([]);
+  const [solicitudes, setSolicitudes] = useState([]);
 
   useEffect(() => listenRoles(setRoles), []);
+  useEffect(() => listenSolicitudes(setSolicitudes), []);
 
   return (
     <div className="flex flex-col gap-4">
@@ -36,7 +38,7 @@ export function VistaConfiguracion({ catalogo, usuario, onToast }) {
       {tab === "catalogo" && <TabCatalogo catalogo={catalogo} onToast={onToast} />}
       {tab === "sedes" && <TabSedes catalogo={catalogo} onToast={onToast} />}
       {tab === "activas" && <TabSedesActivas catalogo={catalogo} roles={roles} onToast={onToast} />}
-      {tab === "usuarios" && <TabUsuarios roles={roles} usuarioActual={usuario} onToast={onToast} />}
+      {tab === "usuarios" && <TabUsuarios roles={roles} solicitudes={solicitudes} usuarioActual={usuario} onToast={onToast} />}
       {tab === "backup" && <TabBackup catalogo={catalogo} onToast={onToast} />}
     </div>
   );

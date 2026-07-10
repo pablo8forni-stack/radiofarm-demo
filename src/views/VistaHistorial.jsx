@@ -8,7 +8,7 @@ import { TIPO_INFO } from "../constants/tipoMovimiento.js";
 import { fmtTs, hoy } from "../helpers/formato.js";
 import { descargarArchivo } from "../helpers/descargarArchivo.js";
 import { sedesActivas } from "../helpers/stock.js";
-import { listenMovimientos, anularMovimientoTransaction } from "../services/firestore/movimientos.js";
+import { listenMovimientos, anularMovimientoTransaction, anularTransferenciaTransaction } from "../services/firestore/movimientos.js";
 
 export function VistaHistorial({ catalogo, usuario, esAdmin, onToast }) {
   const [filtroSede, setFiltroSede] = useState(esAdmin ? "" : usuario.sede);
@@ -32,10 +32,16 @@ export function VistaHistorial({ catalogo, usuario, esAdmin, onToast }) {
   const anulados = useMemo(() => new Set(movimientos.filter((m) => m.tipo === "anulacion").map((m) => m.anulaId)), [movimientos]);
 
   async function confirmarAnulacion(mov, observacion) {
+    const esTransferencia = mov.tipo === "transferencia_salida" || mov.tipo === "transferencia_entrada";
     const motivoLabel = `Anula ${TIPO_INFO[mov.tipo]?.label || mov.tipo} del ${fmtTs(mov.fecha)}`;
     try {
-      await anularMovimientoTransaction(mov, observacion, usuario, motivoLabel);
-      onToast("Movimiento anulado", "info");
+      if (esTransferencia) {
+        await anularTransferenciaTransaction(mov, observacion, usuario, motivoLabel);
+        onToast("Transferencia anulada (ambas puntas)", "info");
+      } else {
+        await anularMovimientoTransaction(mov, observacion, usuario, motivoLabel);
+        onToast("Movimiento anulado", "info");
+      }
       setMAnular(null);
     } catch (e) {
       onToast(e.message, "error");
@@ -118,7 +124,11 @@ export function VistaHistorial({ catalogo, usuario, esAdmin, onToast }) {
                   <td className="px-3 py-2.5 text-xs font-mono text-gray-500">{m.lote || "—"}</td>
                   <td className="px-3 py-2.5 text-xs text-gray-500">{m.usuarioNombre || "—"}</td>
                   <td className="px-3 py-2.5 text-right">
-                    {esAnulable(m) && <button onClick={() => setMAnular(m)} className="text-xs text-orange-500 hover:text-orange-700 font-semibold px-2 py-1 rounded-lg hover:bg-orange-50 transition">Anular</button>}
+                    {esAnulable(m) && (
+                      <button onClick={() => setMAnular(m)} className="text-xs text-orange-500 hover:text-orange-700 font-semibold px-2 py-1 rounded-lg hover:bg-orange-50 transition">
+                        {m.tipo === "transferencia_salida" || m.tipo === "transferencia_entrada" ? "Anular transferencia" : "Anular"}
+                      </button>
+                    )}
                   </td>
                 </tr>
               );

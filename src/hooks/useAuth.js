@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { listenAuthState, fetchRol } from "../services/auth.js";
+import { listenAuthState, fetchRol, fetchSolicitud, crearSolicitud } from "../services/auth.js";
 
 // usuario:
 //   null                                     -> nadie logueado
@@ -19,6 +19,8 @@ export function useAuth() {
       setCargando(true);
       const rol = await fetchRol(firebaseUser.email);
       if (!rol) {
+        const solicitudExistente = await fetchSolicitud(firebaseUser.email);
+        if (!solicitudExistente) await crearSolicitud(firebaseUser.email, firebaseUser.displayName);
         setUsuario({ sinAcceso: true, email: firebaseUser.email, nombreGoogle: firebaseUser.displayName });
       } else {
         setUsuario({ ...rol, initial: (rol.nombre || rol.email)[0].toUpperCase() });

@@ -12,11 +12,15 @@ import {
   onSnapshot,
   orderBy,
   query,
+  serverTimestamp,
 } from "firebase/firestore";
 import { auth, db, googleProvider } from "../firebase.js";
 
 const rolesCol = collection(db, "roles");
 const rolRef = (email) => doc(rolesCol, email.trim().toLowerCase());
+
+const solicitudesCol = collection(db, "solicitudes");
+const solicitudRef = (email) => doc(solicitudesCol, email.trim().toLowerCase());
 
 export function signInWithGoogle() {
   return signInWithPopup(auth, googleProvider);
@@ -51,4 +55,39 @@ export function setRol(email, { nombre, rol, sede }) {
 
 export function eliminarRol(email) {
   return deleteDoc(rolRef(email));
+}
+
+// Devuelve la solicitud de acceso ya enviada por ese email, o null si no hay ninguna.
+export async function fetchSolicitud(email) {
+  const snap = await getDoc(solicitudRef(email));
+  if (!snap.exists()) return null;
+  return { email: email.trim().toLowerCase(), ...snap.data() };
+}
+
+// Se llama cuando alguien se loguea con Google y no tiene doc en roles/.
+export function crearSolicitud(email, nombre) {
+  return setDoc(solicitudRef(email), {
+    nombre: nombre || "",
+    email: email.trim().toLowerCase(),
+    fecha: serverTimestamp(),
+    estado: "pendiente",
+  });
+}
+
+// Para Configuración → Usuarios (sólo admin): lista en vivo de solicitudes pendientes.
+export function listenSolicitudes(callback) {
+  return onSnapshot(query(solicitudesCol, orderBy("fecha")), (snap) => {
+    callback(snap.docs.map((d) => ({ email: d.id, ...d.data() })));
+  });
+}
+
+// Aprobar: otorga el rol/sede elegidos y borra la solicitud.
+export async function aprobarSolicitud(email, { nombre, rol, sede }) {
+  await setRol(email, { nombre, rol, sede });
+  await eliminarSolicitud(email);
+}
+
+// Rechazar: sólo borra la solicitud, sin otorgar acceso.
+export function eliminarSolicitud(email) {
+  return deleteDoc(solicitudRef(email));
 }

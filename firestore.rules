@@ -25,6 +25,18 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
 
+    // solicitudes: cualquier autenticado puede crear/leer la propia (para pedir
+    // acceso); sólo un admin lee todas y las borra (al aprobar o rechazar).
+    // No hay update: aprobar = crear roles/{email} + borrar la solicitud.
+    match /solicitudes/{email} {
+      allow create: if request.auth != null &&
+                       request.auth.token.email == email &&
+                       request.auth.token.email == request.resource.data.email;
+      allow read: if request.auth != null && (request.auth.token.email == email || isAdmin());
+      allow delete: if isAdmin();
+      allow update: if false;
+    }
+
     // Catálogo y proveedores: lectura para cualquier usuario con acceso, escritura sólo admin.
     match /farms/{farmId} {
       allow read: if tieneAcceso();
@@ -67,14 +79,56 @@ service cloud.firestore {
 
     // movimientos y actas: inmutables por diseño (requisito 8) -- create-only,
     // nunca update/delete. La "anulación" es siempre un movimiento nuevo.
+
+    function tiposMovimiento() {
+      return ['ingreso', 'egreso', 'transferencia_salida', 'transferencia_entrada', 'anulacion'];
+    }
+
+    // Valida contenido, no sólo permiso de escribir. Técnico sólo puede crear
+    // 'egreso' (nunca ingreso, transferencia ni anulación) y siempre sobre su
+    // propia sede; admin no tiene esa restricción de tipo/sede.
+    function movimientoValido() {
+      let d = request.resource.data;
+      return d.usuarioEmail == request.auth.token.email &&
+        d.tipo in tiposMovimiento() &&
+        d.cantidad is number && d.cantidad > 0 &&
+        d.sedeId is string && d.sedeId.size() > 0 &&
+        d.farmId is string && d.farmId.size() > 0 &&
+        d.lote is string && d.lote.size() > 0 &&
+        (isAdmin() || miRol().sede == d.sedeId) &&
+        (d.tipo == 'egreso' || isAdmin()) &&
+        (!(d.tipo == 'ingreso' || d.tipo == 'egreso') || (d.loteId is string && d.loteId.size() > 0)) &&
+        (!(d.tipo == 'transferencia_salida' || d.tipo == 'transferencia_entrada') ||
+          (d.grupoId is string && d.grupoId.size() > 0 && d.sedeRelacionada is string)) &&
+        (d.tipo != 'anulacion' || (d.anulaId is string && d.anulaId.size() > 0));
+    }
+
     match /movimientos/{movId} {
       allow read: if tieneAcceso();
-      allow create: if tieneAcceso();
+      allow create: if tieneAcceso() && movimientoValido();
       allow update, delete: if false;
     }
+
+    function tiposActa() {
+      return ['paciente', 'marcacion'];
+    }
+
+    // Sede y tipo, más que la dosis declarada sea > 0. No exige farmId/lote
+    // todavía (hallazgo #5, pendiente junto con el formulario de Actas).
+    function actaValida() {
+      let d = request.resource.data;
+      return d.usuarioEmail == request.auth.token.email &&
+        d.tipo in tiposActa() &&
+        d.sedeId is string && d.sedeId.size() > 0 &&
+        (isAdmin() || miRol().sede == d.sedeId) &&
+        (d.tipo == 'paciente'
+          ? (d.mciAdministrados is number && d.mciAdministrados > 0)
+          : (d.mciMarcacion is number && d.mciMarcacion > 0));
+    }
+
     match /actas/{actaId} {
       allow read: if tieneAcceso();
-      allow create: if tieneAcceso();
+      allow create: if tieneAcceso() && actaValida();
       allow update, delete: if false;
     }
   }

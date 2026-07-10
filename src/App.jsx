@@ -162,9 +162,9 @@ function PantallaSinAcceso({ usuario }) {
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
           </svg>
         </div>
-        <h2 className="text-base font-bold text-gray-800 mb-2">Cuenta no autorizada</h2>
+        <h2 className="text-base font-bold text-gray-800 mb-2">Solicitud enviada</h2>
         <p className="text-sm text-gray-500 mb-6">
-          {usuario.email} todavía no tiene acceso a RadioFarm. Consultá con la encargada de radiofarmacia para que te dé de alta.
+          Tu solicitud de acceso ({usuario.email}) fue enviada. Un administrador te va a habilitar el acceso — probá iniciar sesión de nuevo en unos minutos.
         </p>
         <Btn variant="outline" onClick={() => signOutUser()}>Volver al inicio</Btn>
       </div>
