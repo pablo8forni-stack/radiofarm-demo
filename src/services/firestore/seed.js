@@ -20,7 +20,9 @@ export function sembrarCatalogoInicial() {
     batch.set(doc(db, "sedes", sede.id), {
       nombre: sede.nombre,
       short: sede.short,
-      activo: sede.id === "central", // modo piloto: arranca sólo Central activa
+      activo: !!sede.principal, // modo piloto: arranca sólo activa la sede principal
+      principal: !!sede.principal,
+      eliminada: false,
       farmIds,
       puntosReorden: Object.fromEntries(farmIds.map((fid) => [fid, 2])),
     });

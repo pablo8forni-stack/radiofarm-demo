@@ -1,6 +1,5 @@
-import { collection, doc, getDoc, getDocs, writeBatch } from "firebase/firestore";
+import { collection, doc, getDocs, writeBatch } from "firebase/firestore";
 import { db } from "../../firebase.js";
-import { SEDES } from "../../constants/sedes.js";
 import { descargarArchivo } from "../../helpers/descargarArchivo.js";
 import { hoy } from "../../helpers/formato.js";
 
@@ -9,20 +8,18 @@ const VERSION = 1;
 // Backup completo (requisito 6): catálogo, sedes+stock, proveedores y roles.
 // No incluye movimientos ni actas -> son inmutables, nunca hay nada que restaurar ahí.
 export async function exportarBackup() {
-  const [farmsSnap, proveedoresSnap, rolesSnap] = await Promise.all([
+  const [sedesSnap, farmsSnap, proveedoresSnap, rolesSnap] = await Promise.all([
+    getDocs(collection(db, "sedes")),
     getDocs(collection(db, "farms")),
     getDocs(collection(db, "proveedores")),
     getDocs(collection(db, "roles")),
   ]);
 
   const sedes = {};
-  for (const s of SEDES) {
-    const [sedeDoc, lotesSnap] = await Promise.all([
-      getDoc(doc(db, "sedes", s.id)),
-      getDocs(collection(db, "sedes", s.id, "lotes")),
-    ]);
-    sedes[s.id] = {
-      ...(sedeDoc.exists() ? sedeDoc.data() : {}),
+  for (const sedeDoc of sedesSnap.docs) {
+    const lotesSnap = await getDocs(collection(db, "sedes", sedeDoc.id, "lotes"));
+    sedes[sedeDoc.id] = {
+      ...sedeDoc.data(),
       lotes: lotesSnap.docs.map((d) => ({ id: d.id, ...d.data() })),
     };
   }
@@ -77,17 +74,15 @@ export async function importarBackup(backup) {
     operaciones.push({ tipo: "set", ref: doc(db, "proveedores", id), data });
   });
 
-  for (const s of SEDES) {
-    const sedeBackup = backup.sedes?.[s.id];
-    if (!sedeBackup) continue;
-    const { lotes = [], ...sedeData } = sedeBackup;
-    operaciones.push({ tipo: "set", ref: doc(db, "sedes", s.id), data: sedeData });
+  for (const sedeId of Object.keys(backup.sedes || {})) {
+    const { lotes = [], ...sedeData } = backup.sedes[sedeId];
+    operaciones.push({ tipo: "set", ref: doc(db, "sedes", sedeId), data: sedeData });
 
-    const lotesActuales = await getDocs(collection(db, "sedes", s.id, "lotes"));
+    const lotesActuales = await getDocs(collection(db, "sedes", sedeId, "lotes"));
     lotesActuales.docs.forEach((d) => operaciones.push({ tipo: "delete", ref: d.ref }));
     lotes.forEach((l) => {
       const { id, ...data } = l;
-      operaciones.push({ tipo: "set", ref: doc(db, "sedes", s.id, "lotes", id), data });
+      operaciones.push({ tipo: "set", ref: doc(db, "sedes", sedeId, "lotes", id), data });
     });
   }
 

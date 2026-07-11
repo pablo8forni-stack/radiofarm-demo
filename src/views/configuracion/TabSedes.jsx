@@ -1,10 +1,10 @@
 import { useState } from "react";
-import { SEDES } from "../../constants/sedes.js";
-import { totStock } from "../../helpers/stock.js";
+import { todasLasSedes, totStock } from "../../helpers/stock.js";
 import { toggleFarmEnSede } from "../../services/firestore/sedes.js";
 
 export function TabSedes({ catalogo, onToast }) {
-  const [sedeActiva, setSedeActiva] = useState("central");
+  const sedes = todasLasSedes(catalogo);
+  const [sedeActiva, setSedeActiva] = useState(() => (sedes.find((s) => s.principal) || sedes[0])?.id);
 
   async function toggleFarm(farmId) {
     const actuales = catalogo.sedes[sedeActiva]?.farmIds || [];
@@ -16,7 +16,7 @@ export function TabSedes({ catalogo, onToast }) {
     try {
       await toggleFarmEnSede(sedeActiva, farmId, !activo);
       const farm = catalogo.farms.find((f) => f.id === farmId);
-      onToast(activo ? `${farm?.nombre} quitado de ${SEDES.find((s) => s.id === sedeActiva)?.short}` : `${farm?.nombre} agregado a ${SEDES.find((s) => s.id === sedeActiva)?.short}`);
+      onToast(activo ? `${farm?.nombre} quitado de ${catalogo.sedes[sedeActiva]?.short}` : `${farm?.nombre} agregado a ${catalogo.sedes[sedeActiva]?.short}`);
     } catch (e) {
       onToast(e.message, "error");
     }
@@ -26,15 +26,15 @@ export function TabSedes({ catalogo, onToast }) {
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex gap-1 bg-gray-100 p-1 rounded-xl w-fit">
-        {SEDES.map((s) => (
-          <button key={s.id} onClick={() => setSedeActiva(s.id)} className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition ${sedeActiva === s.id ? "bg-white text-gray-800 shadow-sm" : "text-gray-500 hover:text-gray-700"}`}>
+      <div className="flex gap-1 bg-gray-100 p-1 rounded-xl w-fit overflow-x-auto">
+        {sedes.map((s) => (
+          <button key={s.id} onClick={() => setSedeActiva(s.id)} className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition whitespace-nowrap ${sedeActiva === s.id ? "bg-white text-gray-800 shadow-sm" : "text-gray-500 hover:text-gray-700"}`}>
             {s.short}
           </button>
         ))}
       </div>
       <p className="text-xs text-gray-500">
-        Activá o desactivá radiofármacos para <span className="font-semibold text-gray-700">{SEDES.find((s) => s.id === sedeActiva)?.nombre}</span>.
+        Activá o desactivá radiofármacos para <span className="font-semibold text-gray-700">{catalogo.sedes[sedeActiva]?.nombre}</span>.
         Los desactivados dejan de aparecer en el inventario de esa sede.
       </p>
       <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">

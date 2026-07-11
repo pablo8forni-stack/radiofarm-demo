@@ -5,7 +5,6 @@ import { Input } from "../../components/ui/Input.jsx";
 import { Sel } from "../../components/ui/Sel.jsx";
 import { QRScanner } from "../../components/scanner/QRScanner.jsx";
 import { ESTUDIOS } from "../../constants/estudios.js";
-import { SEDES } from "../../constants/sedes.js";
 import { fmtF, fmtTs, fmtFechaISO, hoy } from "../../helpers/formato.js";
 import { descargarArchivo } from "../../helpers/descargarArchivo.js";
 import { parseQR } from "../../helpers/qr.js";
@@ -51,7 +50,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
     if (!nombre.trim() || !dni.trim() || !mci || !estudio) return;
     const farm = catalogo.farms.find((f) => f.id === farmId);
     addActaPaciente({
-      sedeId, sedeNombre: SEDES.find((s) => s.id === sedeId)?.nombre,
+      sedeId, sedeNombre: catalogo.sedes[sedeId]?.nombre,
       pacienteNombre: nombre.trim(), pacienteDni: dni.trim(),
       peso: parseFloat(peso) || 0, talla: parseFloat(talla) || 0,
       estudio, mciAdministrados: parseFloat(mci) || 0,

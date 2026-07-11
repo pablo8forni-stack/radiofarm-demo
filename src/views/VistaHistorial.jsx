@@ -3,7 +3,6 @@ import { Badge } from "../components/ui/Badge.jsx";
 import { Btn } from "../components/ui/Btn.jsx";
 import { Sel } from "../components/ui/Sel.jsx";
 import { ModalAnular } from "../components/movimientos/ModalAnular.jsx";
-import { SEDES } from "../constants/sedes.js";
 import { TIPO_INFO } from "../constants/tipoMovimiento.js";
 import { fmtTs, hoy } from "../helpers/formato.js";
 import { descargarArchivo } from "../helpers/descargarArchivo.js";
@@ -111,8 +110,8 @@ export function VistaHistorial({ catalogo, usuario, esAdmin, onToast }) {
                 <tr key={m.id} className={`border-b border-gray-50 last:border-0 hover:bg-gray-50/30 ${fueAnulado ? "opacity-50" : ""}`}>
                   <td className="px-3 py-2.5 text-xs text-gray-500 whitespace-nowrap">{fmtTs(m.fecha)}</td>
                   <td className="px-3 py-2.5 text-xs text-gray-600 font-medium">
-                    {SEDES.find((s) => s.id === m.sedeId)?.short || "—"}
-                    {m.sedeRelacionada && <span className="text-teal-600"> {m.tipo === "transferencia_salida" ? "→" : "←"} {SEDES.find((s) => s.nombre === m.sedeRelacionada)?.short || m.sedeRelacionada}</span>}
+                    {catalogo.sedes[m.sedeId]?.short || "—"}
+                    {m.sedeRelacionada && <span className="text-teal-600"> {m.tipo === "transferencia_salida" ? "→" : "←"} {Object.values(catalogo.sedes).find((s) => s.nombre === m.sedeRelacionada)?.short || m.sedeRelacionada}</span>}
                   </td>
                   <td className="px-3 py-2.5 font-medium text-gray-700 text-xs">
                     {m.farmNombre}

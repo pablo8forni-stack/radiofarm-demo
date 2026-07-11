@@ -6,7 +6,6 @@ import { ModalEgreso } from "../../components/movimientos/ModalEgreso.jsx";
 import { ModalIngreso } from "../../components/movimientos/ModalIngreso.jsx";
 import { ModalTransferencia } from "../../components/movimientos/ModalTransferencia.jsx";
 import { ReordenForm } from "../../components/movimientos/ReordenForm.jsx";
-import { SEDES } from "../../constants/sedes.js";
 import { fmtF, diasV } from "../../helpers/formato.js";
 import { totStock, proxVenc, farmsDeSede, puntoReorden } from "../../helpers/stock.js";
 import { egresoTransaction, ingresoBatch, transferenciaTransaction } from "../../services/firestore/stock.js";
@@ -19,7 +18,7 @@ export function TablaInventario({ sedeId, catalogo, usuario, esAdmin, onToast })
   const [mDetalle, setMDetalle] = useState(null);
   const [mTransf, setMTransf] = useState(null);
   const [busq, setBusq] = useState("");
-  const sedeNombre = SEDES.find((s) => s.id === sedeId)?.nombre;
+  const sedeNombre = catalogo.sedes[sedeId]?.nombre;
   const farms = farmsDeSede(catalogo, sedeId).filter((f) => f.nombre.toLowerCase().includes(busq.toLowerCase()));
 
   async function handleEgreso({ loteId, cantidad, motivo, observacion }) {
@@ -49,7 +48,7 @@ export function TablaInventario({ sedeId, catalogo, usuario, esAdmin, onToast })
 
   async function handleTransferencia({ loteId, cantidad, sedeDestino, observacion }) {
     const farm = mTransf;
-    const sedeDestNombre = SEDES.find((s) => s.id === sedeDestino)?.nombre;
+    const sedeDestNombre = catalogo.sedes[sedeDestino]?.nombre;
     try {
       await transferenciaTransaction({
         sedeOrigenId: sedeId, sedeOrigenNombre: sedeNombre, sedeDestinoId: sedeDestino, sedeDestinoNombre: sedeDestNombre,

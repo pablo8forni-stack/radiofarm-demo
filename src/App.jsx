@@ -35,7 +35,6 @@ import { VistaConfiguracion } from "./views/configuracion/VistaConfiguracion.jsx
 import { Badge } from "./components/ui/Badge.jsx";
 import { Btn } from "./components/ui/Btn.jsx";
 import { Toast } from "./components/ui/Toast.jsx";
-import { SEDES } from "./constants/sedes.js";
 import { signOutUser } from "./services/auth.js";
 import { totStock, farmsDeSede, sedesActivas, idsSedesActivas, puntoReorden } from "./helpers/stock.js";
 
@@ -62,7 +61,7 @@ function AppAutenticada({ usuario }) {
   if (catalogo.cargando) return <PantallaCargando />;
 
   if (!esAdmin && !idsSedesActivas(catalogo).includes(usuario.sede)) {
-    return <PantallaSedeNoHabilitada usuario={usuario} />;
+    return <PantallaSedeNoHabilitada usuario={usuario} nombreSede={catalogo.sedes[usuario.sede]?.nombre} />;
   }
 
   let countPedirTotal = 0;
@@ -92,7 +91,7 @@ function AppAutenticada({ usuario }) {
             </div>
             <div>
               <div className="text-sm font-bold text-gray-800 leading-tight">RadioFarm</div>
-              <div className="text-xs text-gray-400 leading-tight">{SEDES.find((s) => s.id === usuario.sede)?.nombre || "FUESMEN"}</div>
+              <div className="text-xs text-gray-400 leading-tight">{catalogo.sedes[usuario.sede]?.nombre || "FUESMEN"}</div>
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -172,8 +171,7 @@ function PantallaSinAcceso({ usuario }) {
   );
 }
 
-function PantallaSedeNoHabilitada({ usuario }) {
-  const sede = SEDES.find((s) => s.id === usuario.sede);
+function PantallaSedeNoHabilitada({ usuario, nombreSede }) {
   return (
     <div className="min-h-screen bg-gray-50 flex items-center justify-center p-6">
       <div className="bg-white rounded-3xl shadow-sm border border-gray-100 p-10 max-w-sm text-center">
@@ -184,7 +182,7 @@ function PantallaSedeNoHabilitada({ usuario }) {
         </div>
         <h2 className="text-base font-bold text-gray-800 mb-2">Sede no habilitada</h2>
         <p className="text-sm text-gray-500 mb-6">
-          {sede?.nombre} aún no está operando con RadioFarm. Consultá con la encargada de radiofarmacia.
+          {nombreSede} aún no está operando con RadioFarm. Consultá con la encargada de radiofarmacia.
         </p>
         <Btn variant="outline" onClick={() => signOutUser()}>Volver al inicio</Btn>
       </div>

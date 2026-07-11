@@ -3,7 +3,6 @@ import { Badge } from "../../components/ui/Badge.jsx";
 import { Btn } from "../../components/ui/Btn.jsx";
 import { Input } from "../../components/ui/Input.jsx";
 import { Sel } from "../../components/ui/Sel.jsx";
-import { SEDES } from "../../constants/sedes.js";
 import { fmtF, fmtTs, fmtFechaISO, hoy } from "../../helpers/formato.js";
 import { descargarArchivo } from "../../helpers/descargarArchivo.js";
 import { sedesActivas, farmsDeSede } from "../../helpers/stock.js";
@@ -27,7 +26,7 @@ export function TabMarcacion({ catalogo, usuario, esAdmin, onToast }) {
     if (!farmId || !mciMarcacion) return;
     const farm = catalogo.farms.find((f) => f.id === farmId);
     addActaMarcacion({
-      sedeId, sedeNombre: SEDES.find((s) => s.id === sedeId)?.nombre,
+      sedeId, sedeNombre: catalogo.sedes[sedeId]?.nombre,
       farmId, farmNombre: farm?.nombre || "", lote,
       mciMarcacion: parseFloat(mciMarcacion) || 0,
       usuarioNombre: usuario.nombre, usuarioEmail: usuario.email, observacion: obs.trim(),
@@ -124,7 +123,7 @@ export function TabMarcacion({ catalogo, usuario, esAdmin, onToast }) {
             {actas.map((a) => (
               <tr key={a.id} className="border-b border-gray-50 last:border-0 hover:bg-gray-50/30">
                 <td className="px-3 py-2.5 text-xs text-gray-500 whitespace-nowrap">{fmtTs(a.fecha).split(" ")[1] || ""}</td>
-                <td className="px-3 py-2.5 text-xs text-gray-600">{SEDES.find((s) => s.id === a.sedeId)?.short || "—"}</td>
+                <td className="px-3 py-2.5 text-xs text-gray-600">{catalogo.sedes[a.sedeId]?.short || "—"}</td>
                 <td className="px-3 py-2.5 text-xs font-semibold text-gray-800">{a.farmNombre}</td>
                 <td className="px-3 py-2.5 text-xs font-mono text-gray-500">{a.lote || "—"}</td>
                 <td className="px-3 py-2.5"><span className="font-bold text-blue-700 text-sm">{a.mciMarcacion}</span><span className="text-xs text-gray-400 ml-1">mCi</span></td>

@@ -4,23 +4,25 @@ import { Btn } from "../../components/ui/Btn.jsx";
 import { Input } from "../../components/ui/Input.jsx";
 import { Sel } from "../../components/ui/Sel.jsx";
 import { Modal } from "../../components/ui/Modal.jsx";
-import { SEDES } from "../../constants/sedes.js";
+import { todasLasSedes } from "../../helpers/stock.js";
 import { setRol, eliminarRol, aprobarSolicitud, eliminarSolicitud } from "../../services/auth.js";
-
-const VACIO = { email: "", nombre: "", rol: "tecnico", sede: SEDES[0].id };
 
 function formatFecha(ts) {
   if (!ts?.toDate) return "—";
   return ts.toDate().toLocaleString("es-AR", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 
-export function TabUsuarios({ roles, solicitudes, usuarioActual, onToast }) {
-  const [mForm, setMForm] = useState(null); // null | "nuevo" | "editar" | "aprobar"
-  const [form, setForm] = useState(VACIO);
+export function TabUsuarios({ catalogo, roles, solicitudes, usuarioActual, onToast }) {
+  const sedes = todasLasSedes(catalogo);
+  const sedeDefault = (sedes.find((s) => s.principal) || sedes.find((s) => s.activo) || sedes[0])?.id;
+  const vacio = { email: "", nombre: "", rol: "tecnico", sede: sedeDefault };
 
-  function abrirNuevo() { setForm(VACIO); setMForm("nuevo"); }
+  const [mForm, setMForm] = useState(null); // null | "nuevo" | "editar" | "aprobar"
+  const [form, setForm] = useState(vacio);
+
+  function abrirNuevo() { setForm(vacio); setMForm("nuevo"); }
   function abrirEditar(r) { setForm({ email: r.email, nombre: r.nombre, rol: r.rol, sede: r.sede }); setMForm("editar"); }
-  function abrirAprobar(s) { setForm({ email: s.email, nombre: s.nombre, rol: "tecnico", sede: SEDES[0].id }); setMForm("aprobar"); }
+  function abrirAprobar(s) { setForm({ email: s.email, nombre: s.nombre, rol: "tecnico", sede: sedeDefault }); setMForm("aprobar"); }
 
   async function guardar() {
     if (!form.email.trim() || !form.nombre.trim()) return;
@@ -114,7 +116,7 @@ export function TabUsuarios({ roles, solicitudes, usuarioActual, onToast }) {
                 <td className="px-4 py-3 font-semibold text-gray-800 text-sm">{r.nombre}</td>
                 <td className="px-4 py-3 text-xs text-gray-500 font-mono">{r.email}</td>
                 <td className="px-4 py-3 text-center"><Badge color={r.rol === "admin" ? "purple" : "blue"}>{r.rol === "admin" ? "Encargada" : "Técnico"}</Badge></td>
-                <td className="px-4 py-3 text-center text-xs text-gray-600">{SEDES.find((s) => s.id === r.sede)?.short || r.sede}</td>
+                <td className="px-4 py-3 text-center text-xs text-gray-600">{catalogo.sedes[r.sede]?.short || r.sede}</td>
                 <td className="px-4 py-3">
                   <div className="flex gap-1.5 justify-end">
                     <Btn size="sm" variant="ghost" onClick={() => abrirEditar(r)}>Editar</Btn>
@@ -137,7 +139,7 @@ export function TabUsuarios({ roles, solicitudes, usuarioActual, onToast }) {
             <option value="admin">Encargada (admin)</option>
           </Sel>
           <Sel label="Sede" value={form.sede} onChange={(e) => setForm((f) => ({ ...f, sede: e.target.value }))}>
-            {SEDES.map((s) => <option key={s.id} value={s.id}>{s.nombre}</option>)}
+            {sedes.map((s) => <option key={s.id} value={s.id}>{s.nombre}</option>)}
           </Sel>
           <div className="flex gap-2 justify-end">
             <Btn variant="outline" onClick={() => setMForm(null)}>Cancelar</Btn>

@@ -3,8 +3,7 @@ import { Badge } from "../../components/ui/Badge.jsx";
 import { Btn } from "../../components/ui/Btn.jsx";
 import { Modal } from "../../components/ui/Modal.jsx";
 import { FormFarm } from "./FormFarm.jsx";
-import { SEDES } from "../../constants/sedes.js";
-import { totStock } from "../../helpers/stock.js";
+import { totStock, todasLasSedes } from "../../helpers/stock.js";
 import { addFarm, updateFarm, deleteFarm } from "../../services/firestore/farms.js";
 import { quitarFarmDeTodasLasSedes } from "../../services/firestore/sedes.js";
 
@@ -37,10 +36,11 @@ export function TabCatalogo({ catalogo, onToast }) {
   }
 
   async function eliminar(farm) {
-    const conStock = SEDES.some((s) => totStock(catalogo.stock[s.id]?.[farm.id] || []) > 0);
+    const sedes = todasLasSedes(catalogo);
+    const conStock = sedes.some((s) => totStock(catalogo.stock[s.id]?.[farm.id] || []) > 0);
     if (conStock) { onToast("No se puede eliminar: tiene stock en alguna sede", "error"); return; }
     try {
-      await quitarFarmDeTodasLasSedes(farm.id);
+      await quitarFarmDeTodasLasSedes(farm.id, sedes.map((s) => s.id));
       await deleteFarm(farm.id);
       onToast(`${farm.nombre} eliminado del catálogo`);
     } catch (e) {
@@ -68,7 +68,7 @@ export function TabCatalogo({ catalogo, onToast }) {
           </thead>
           <tbody>
             {catalogo.farms.map((f) => {
-              const sedesConFarm = SEDES.filter((s) => (catalogo.sedes[s.id]?.farmIds || []).includes(f.id));
+              const sedesConFarm = todasLasSedes(catalogo).filter((s) => (s.farmIds || []).includes(f.id));
               return (
                 <tr key={f.id} className="border-b border-gray-50 last:border-0 hover:bg-gray-50/30">
                   <td className="px-4 py-3 font-semibold text-gray-800 text-sm">{f.nombre}</td>

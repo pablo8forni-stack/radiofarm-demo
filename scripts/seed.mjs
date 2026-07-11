@@ -34,7 +34,9 @@ async function seed() {
     batch.set(db.collection("sedes").doc(sede.id), {
       nombre: sede.nombre,
       short: sede.short,
-      activo: sede.id === "central", // arranca sólo Central activa, igual que el modo piloto
+      activo: !!sede.principal, // arranca sólo activa la sede principal, igual que el modo piloto
+      principal: !!sede.principal,
+      eliminada: false,
       farmIds: SEDE_FARMS_DEFAULT[sede.id] || [],
       puntosReorden: Object.fromEntries((SEDE_FARMS_DEFAULT[sede.id] || []).map((fid) => [fid, 2])),
     });

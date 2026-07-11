@@ -1,7 +1,6 @@
-import { SEDES } from "../constants/sedes.js";
-
 // `catalogo` es la forma que expone CatalogoContext:
-// { farms:[{id,nombre,viales_x_kit}], sedes:{sedeId:{nombre,short,activo,farmIds,puntosReorden}},
+// { farms:[{id,nombre,viales_x_kit}],
+//   sedes:{sedeId:{nombre,short,activo,principal,eliminada,farmIds,puntosReorden}},
 //   stock:{sedeId:{farmId:[lotes]}}, proveedores:[...] }
 
 export const totStock = (lotes = []) => lotes.reduce((s, l) => s + (l.cantidad || 0), 0);
@@ -16,10 +15,25 @@ export const farmsDeSede = (catalogo, sedeId) => {
   return catalogo.farms.filter((f) => activos.includes(f.id));
 };
 
-export const idsSedesActivas = (catalogo) =>
-  SEDES.filter((s) => catalogo.sedes[s.id]?.activo).map((s) => s.id);
+// La principal siempre primero, después alfabético por nombre -- reemplaza
+// el orden fijo que antes daba el array hardcodeado SEDES.
+const compararSedes = (a, b) => (b.principal === true) - (a.principal === true) || a.nombre.localeCompare(b.nombre);
 
-export const sedesActivas = (catalogo) => SEDES.filter((s) => catalogo.sedes[s.id]?.activo);
+export const todasLasSedes = (catalogo) =>
+  Object.entries(catalogo.sedes)
+    .filter(([, s]) => !s.eliminada)
+    .map(([id, s]) => ({ id, ...s }))
+    .sort(compararSedes);
+
+export const sedesArchivadas = (catalogo) =>
+  Object.entries(catalogo.sedes)
+    .filter(([, s]) => s.eliminada)
+    .map(([id, s]) => ({ id, ...s }))
+    .sort(compararSedes);
+
+export const sedesActivas = (catalogo) => todasLasSedes(catalogo).filter((s) => s.activo);
+
+export const idsSedesActivas = (catalogo) => sedesActivas(catalogo).map((s) => s.id);
 
 export const puntoReorden = (catalogo, sedeId, farmId) =>
   catalogo.sedes[sedeId]?.puntosReorden?.[farmId] ?? 2;
