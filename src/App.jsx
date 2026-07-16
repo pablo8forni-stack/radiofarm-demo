@@ -22,7 +22,7 @@
  * (DNDA), República Argentina. Ley 11.723.
  */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useAuth } from "./hooks/useAuth.js";
 import { useCatalogo } from "./hooks/useCatalogo.js";
 import { CatalogoProvider } from "./context/CatalogoContext.jsx";
@@ -35,7 +35,7 @@ import { VistaConfiguracion } from "./views/configuracion/VistaConfiguracion.jsx
 import { Badge } from "./components/ui/Badge.jsx";
 import { Btn } from "./components/ui/Btn.jsx";
 import { Toast } from "./components/ui/Toast.jsx";
-import { signOutUser } from "./services/auth.js";
+import { signOutUser, listenSolicitudes } from "./services/auth.js";
 import { totStock, farmsDeSede, sedesActivas, idsSedesActivas, puntoReorden } from "./helpers/stock.js";
 
 export default function App() {
@@ -57,6 +57,14 @@ function AppAutenticada({ usuario }) {
   const [vista, setVista] = useState("inventario");
   const [toast, setToast] = useState(null);
   const esAdmin = usuario.rol === "admin";
+  const [countSolicitudes, setCountSolicitudes] = useState(0);
+
+  // Sólo admin puede leer la colección completa de solicitudes (reglas de
+  // Firestore) -- un técnico consultándola entera daría permission-denied.
+  useEffect(() => {
+    if (!esAdmin) return;
+    return listenSolicitudes((s) => setCountSolicitudes(s.length));
+  }, [esAdmin]);
 
   if (catalogo.cargando) return <PantallaCargando />;
 
@@ -100,6 +108,11 @@ function AppAutenticada({ usuario }) {
                 <span className="w-2 h-2 bg-red-500 rounded-full animate-pulse" />{countPedirTotal} para pedir
               </button>
             )}
+            {esAdmin && countSolicitudes > 0 && (
+              <button onClick={() => setVista("configuracion")} className="flex items-center gap-1.5 bg-red-50 border border-red-200 text-red-600 text-xs font-bold px-3 py-1.5 rounded-full hover:bg-red-100 transition">
+                <span className="w-2 h-2 bg-red-500 rounded-full animate-pulse" />{countSolicitudes} solicitud{countSolicitudes > 1 ? "es" : ""}
+              </button>
+            )}
             <div className="flex items-center gap-2 pl-2 border-l border-gray-100">
               <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold text-white ${esAdmin ? "bg-purple-500" : "bg-blue-500"}`}>{usuario.initial}</div>
               <div className="hidden sm:block">
@@ -126,20 +139,21 @@ function AppAutenticada({ usuario }) {
               </svg>
               <span className="hidden sm:inline">{item.label}</span>
               {item.id === "pedidos" && countPedirTotal > 0 && <span className="bg-red-500 text-white text-xs rounded-full w-4 h-4 flex items-center justify-center">{countPedirTotal}</span>}
+              {item.id === "configuracion" && countSolicitudes > 0 && <span className="bg-red-500 text-white text-xs rounded-full w-4 h-4 flex items-center justify-center">{countSolicitudes}</span>}
             </button>
           ))}
         </div>
       </nav>
 
       <main className="max-w-5xl mx-auto px-4 py-6">
-        {vista === "inventario" && <VistaInventario catalogo={catalogo} usuario={usuario} esAdmin={esAdmin} onToast={(m, t) => setToast({ m, t })} />}
-        {vista === "pedidos" && <VistaPedidos catalogo={catalogo} esAdmin={esAdmin} onToast={(m, t) => setToast({ m, t })} />}
-        {vista === "historial" && <VistaHistorial catalogo={catalogo} usuario={usuario} esAdmin={esAdmin} onToast={(m, t) => setToast({ m, t })} />}
-        {vista === "administracion" && <VistaAdministracion catalogo={catalogo} usuario={usuario} esAdmin={esAdmin} onToast={(m, t) => setToast({ m, t })} />}
-        {vista === "configuracion" && esAdmin && <VistaConfiguracion catalogo={catalogo} usuario={usuario} onToast={(m, t) => setToast({ m, t })} />}
+        {vista === "inventario" && <VistaInventario catalogo={catalogo} usuario={usuario} esAdmin={esAdmin} onToast={(m, t, d) => setToast({ m, t, d })} />}
+        {vista === "pedidos" && <VistaPedidos catalogo={catalogo} esAdmin={esAdmin} onToast={(m, t, d) => setToast({ m, t, d })} />}
+        {vista === "historial" && <VistaHistorial catalogo={catalogo} usuario={usuario} esAdmin={esAdmin} onToast={(m, t, d) => setToast({ m, t, d })} />}
+        {vista === "administracion" && <VistaAdministracion catalogo={catalogo} usuario={usuario} esAdmin={esAdmin} onToast={(m, t, d) => setToast({ m, t, d })} />}
+        {vista === "configuracion" && esAdmin && <VistaConfiguracion catalogo={catalogo} usuario={usuario} onToast={(m, t, d) => setToast({ m, t, d })} />}
       </main>
 
-      {toast && <Toast msg={toast.m} type={toast.t || "success"} onDone={() => setToast(null)} />}
+      {toast && <Toast msg={toast.m} type={toast.t || "success"} duracion={toast.d} onDone={() => setToast(null)} />}
     </div>
   );
 }

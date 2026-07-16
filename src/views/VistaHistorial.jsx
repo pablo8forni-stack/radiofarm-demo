@@ -36,10 +36,10 @@ export function VistaHistorial({ catalogo, usuario, esAdmin, onToast }) {
     try {
       if (esTransferencia) {
         await anularTransferenciaTransaction(mov, observacion, usuario, motivoLabel);
-        onToast("Transferencia anulada (ambas puntas)", "info");
+        onToast("Transferencia anulada (ambas puntas)", "info", 6000);
       } else {
         await anularMovimientoTransaction(mov, observacion, usuario, motivoLabel);
-        onToast("Movimiento anulado", "info");
+        onToast("Movimiento anulado", "info", 6000);
       }
       setMAnular(null);
     } catch (e) {

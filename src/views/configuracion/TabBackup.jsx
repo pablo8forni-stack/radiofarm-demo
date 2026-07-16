@@ -4,6 +4,7 @@ import { Input } from "../../components/ui/Input.jsx";
 import { Modal } from "../../components/ui/Modal.jsx";
 import { exportarBackup, importarBackup } from "../../services/firestore/backup.js";
 import { sembrarCatalogoInicial } from "../../services/firestore/seed.js";
+import { reautenticarConGoogle } from "../../services/auth.js";
 
 const PALABRA_CONFIRMACION = "RESTAURAR";
 
@@ -59,6 +60,12 @@ export function TabBackup({ catalogo, onToast }) {
   async function confirmarRestauracion() {
     setRestaurando(true);
     try {
+      try {
+        await reautenticarConGoogle();
+      } catch {
+        onToast("No se pudo verificar tu identidad con Google. Restauración cancelada.", "error");
+        return;
+      }
       await importarBackup(archivoPendiente);
       onToast("Backup restaurado correctamente");
       setArchivoPendiente(null);
@@ -103,13 +110,13 @@ export function TabBackup({ catalogo, onToast }) {
       <Modal open={!!archivoPendiente} title="Confirmar restauración" onClose={() => setArchivoPendiente(null)} size="sm">
         <div className="flex flex-col gap-4">
           <div className="bg-red-50 border border-red-100 rounded-xl px-4 py-3 text-xs text-red-700">
-            Esto va a reemplazar el catálogo, las sedes y todo el stock actual por lo que hay en el archivo. No se puede deshacer.
+            Esto va a reemplazar el catálogo, las sedes y todo el stock actual por lo que hay en el archivo. No se puede deshacer. Antes de aplicarlo te vamos a pedir que confirmes tu identidad con Google.
           </div>
           <Input label={`Escribí "${PALABRA_CONFIRMACION}" para confirmar`} value={confirmacion} onChange={(e) => setConfirmacion(e.target.value)} />
           <div className="flex gap-2 justify-end">
             <Btn variant="outline" onClick={() => setArchivoPendiente(null)}>Cancelar</Btn>
             <Btn variant="danger" onClick={confirmarRestauracion} disabled={confirmacion !== PALABRA_CONFIRMACION || restaurando}>
-              {restaurando ? "Restaurando..." : "Restaurar"}
+              {restaurando ? "Verificando y restaurando..." : "Restaurar"}
             </Btn>
           </div>
         </div>

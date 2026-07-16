@@ -25,7 +25,7 @@ export function TablaInventario({ sedeId, catalogo, usuario, esAdmin, onToast })
     const farm = mEgreso;
     try {
       await egresoTransaction({ sedeId, sedeNombre, farm, loteId, cantidad, motivo, observacion, usuario });
-      onToast(`Egreso: ${cantidad} vial${cantidad > 1 ? "es" : ""} de ${farm.nombre}`);
+      onToast(`Egreso: ${cantidad} vial${cantidad > 1 ? "es" : ""} de ${farm.nombre}`, "success", 6000);
       setMEgreso(null);
     } catch (e) {
       onToast(e.message, "error");
@@ -54,7 +54,7 @@ export function TablaInventario({ sedeId, catalogo, usuario, esAdmin, onToast })
         sedeOrigenId: sedeId, sedeOrigenNombre: sedeNombre, sedeDestinoId: sedeDestino, sedeDestinoNombre: sedeDestNombre,
         farm, loteId, cantidad, observacion, usuario,
       });
-      onToast(`Transferencia: ${cantidad} vial${cantidad > 1 ? "es" : ""} → ${sedeDestNombre}`, "info");
+      onToast(`Transferencia: ${cantidad} vial${cantidad > 1 ? "es" : ""} → ${sedeDestNombre}`, "info", 6000);
       setMTransf(null);
     } catch (e) {
       onToast(e.message, "error");

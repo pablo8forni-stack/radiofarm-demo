@@ -2,6 +2,7 @@ import {
   signInWithPopup,
   signOut,
   onAuthStateChanged,
+  reauthenticateWithPopup,
 } from "firebase/auth";
 import {
   doc,
@@ -28,6 +29,13 @@ export function signInWithGoogle() {
 
 export function signOutUser() {
   return signOut(auth);
+}
+
+// Repite el login con Google contra la sesión ya activa, sin cerrarla --
+// paso obligatorio inmediatamente antes de restaurar un backup (operación
+// destructiva), para confirmar identidad además del texto de confirmación.
+export function reautenticarConGoogle() {
+  return reauthenticateWithPopup(auth.currentUser, googleProvider);
 }
 
 export function listenAuthState(callback) {
