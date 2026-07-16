@@ -43,7 +43,9 @@ async function seed() {
   }
 
   for (const prov of PROVEEDORES_DEFAULT) {
-    batch.set(db.collection("proveedores").doc(prov.id), { nombre: prov.nombre, contacto: prov.contacto, principal: !!prov.principal });
+    batch.set(db.collection("proveedores").doc(prov.id), {
+      nombre: prov.nombre, contactoTelefono: prov.contactoTelefono || "", principal: !!prov.principal,
+    });
   }
 
   await batch.commit();

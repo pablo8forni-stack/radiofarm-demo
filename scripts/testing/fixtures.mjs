@@ -173,7 +173,9 @@ export async function prepararFixturesGlobales() {
   }, { merge: true });
 
   const prov = PROVEEDORES_DEFAULT[0];
-  await setDoc(doc(db, "proveedores", prov.id), { nombre: prov.nombre, contacto: prov.contacto, principal: !!prov.principal }, { merge: true });
+  await setDoc(doc(db, "proveedores", prov.id), {
+    nombre: prov.nombre, contactoTelefono: prov.contactoTelefono || "", principal: !!prov.principal,
+  }, { merge: true });
 
   await setRol(PERSONAS.tecnicoA.email, { nombre: PERSONAS.tecnicoA.nombre, rol: "tecnico", sede: SEDE_A });
   await setRol(PERSONAS.tecnicoB.email, { nombre: PERSONAS.tecnicoB.nombre, rol: "tecnico", sede: SEDE_B });

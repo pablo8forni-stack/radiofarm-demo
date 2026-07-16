@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { TabCatalogo } from "./TabCatalogo.jsx";
+import { TabProveedores } from "./TabProveedores.jsx";
 import { TabSedes } from "./TabSedes.jsx";
 import { TabSedesActivas } from "./TabSedesActivas.jsx";
 import { TabUsuarios } from "./TabUsuarios.jsx";
@@ -8,6 +9,7 @@ import { listenRoles, listenSolicitudes } from "../../services/auth.js";
 
 const TABS = [
   { id: "catalogo", label: "Catálogo" },
+  { id: "proveedores", label: "Proveedores" },
   { id: "sedes", label: "Asignación por sede" },
   { id: "activas", label: "Sedes activas" },
   { id: "usuarios", label: "Usuarios" },
@@ -36,6 +38,7 @@ export function VistaConfiguracion({ catalogo, usuario, onToast }) {
         ))}
       </div>
       {tab === "catalogo" && <TabCatalogo catalogo={catalogo} onToast={onToast} />}
+      {tab === "proveedores" && <TabProveedores catalogo={catalogo} onToast={onToast} />}
       {tab === "sedes" && <TabSedes catalogo={catalogo} onToast={onToast} />}
       {tab === "activas" && <TabSedesActivas catalogo={catalogo} roles={roles} onToast={onToast} />}
       {tab === "usuarios" && <TabUsuarios catalogo={catalogo} roles={roles} solicitudes={solicitudes} usuarioActual={usuario} onToast={onToast} />}

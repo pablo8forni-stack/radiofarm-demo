@@ -7,7 +7,7 @@ import { ModalIngreso } from "../../components/movimientos/ModalIngreso.jsx";
 import { ModalTransferencia } from "../../components/movimientos/ModalTransferencia.jsx";
 import { ReordenForm } from "../../components/movimientos/ReordenForm.jsx";
 import { fmtF, diasV } from "../../helpers/formato.js";
-import { totStock, proxVenc, farmsDeSede, puntoReorden } from "../../helpers/stock.js";
+import { totStock, proxVenc, farmsDeSede, puntoReorden, proveedoresOrdenados } from "../../helpers/stock.js";
 import { egresoTransaction, ingresoBatch, transferenciaTransaction } from "../../services/firestore/stock.js";
 import { setPuntoReorden } from "../../services/firestore/sedes.js";
 
@@ -180,7 +180,7 @@ export function TablaInventario({ sedeId, catalogo, usuario, esAdmin, onToast })
       </Modal>
 
       {mEgreso && <ModalEgreso open farm={mEgreso} lotes={catalogo.stock[sedeId]?.[mEgreso.id] || []} usuario={usuario} onConfirm={handleEgreso} onClose={() => setMEgreso(null)} />}
-      {mIngreso && esAdmin && <ModalIngreso open farm={mIngreso} proveedores={catalogo.proveedores} onConfirm={handleIngreso} onClose={() => setMIngreso(null)} />}
+      {mIngreso && esAdmin && <ModalIngreso open farm={mIngreso} proveedores={proveedoresOrdenados(catalogo)} onConfirm={handleIngreso} onClose={() => setMIngreso(null)} />}
       {mTransf && esAdmin && <ModalTransferencia open farm={mTransf} sedeOrigenId={sedeId} catalogo={catalogo} usuario={usuario} onConfirm={handleTransferencia} onClose={() => setMTransf(null)} />}
       {mReorden && (
         <Modal open title={`Stock mínimo — ${mReorden?.nombre}`} onClose={() => setMReorden(null)} size="sm">

@@ -29,7 +29,9 @@ export function sembrarCatalogoInicial() {
   });
 
   PROVEEDORES_DEFAULT.forEach((prov) => {
-    batch.set(doc(db, "proveedores", prov.id), { nombre: prov.nombre, contacto: prov.contacto, principal: !!prov.principal });
+    batch.set(doc(db, "proveedores", prov.id), {
+      nombre: prov.nombre, contactoTelefono: prov.contactoTelefono || "", principal: !!prov.principal,
+    });
   });
 
   return batch.commit();

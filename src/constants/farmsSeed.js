@@ -22,5 +22,5 @@ export const SEDE_FARMS_DEFAULT = {
 };
 
 export const PROVEEDORES_DEFAULT = [
-  { id: "principal", nombre: "Proveedor Principal", contacto: "0800-555-0001", principal: true },
+  { id: "principal", nombre: "Proveedor Principal", contactoTelefono: "0800-555-0001", principal: true },
 ];
