@@ -1,6 +1,8 @@
 import {
   collection,
   doc,
+  getDoc,
+  getDocs,
   onSnapshot,
   orderBy,
   limit,
@@ -28,37 +30,48 @@ export function listenMovimientos(sedeId, callback) {
   });
 }
 
-// Anula un movimiento revirtiendo su efecto sobre el stock. La comprobación
-// de "no anulado todavía" se hace dentro de la misma transacción vía una
-// query transaccional (tx.get(query)) sobre anulaId, para que dos anulaciones
-// simultáneas del mismo movimiento no puedan colarse las dos.
+// Anula un movimiento revirtiendo su efecto sobre el stock.
+//
+// tx.get() sobre una Query rompe con un error interno del SDK cliente de
+// Firebase ("Cannot read properties of undefined (reading 'path')"), tanto
+// en Node como en el browser real (ver misma nota en transferenciaTransaction
+// de stock.js). Por eso:
+//   - la comprobación de "no anulado todavía" usa un docId determinístico
+//     (`anula_${mov.id}`) en vez de una query por el campo anulaId -- así el
+//     chequeo es un tx.get(docRef) simple y sigue protegiendo contra dos
+//     anulaciones simultáneas: si ambas transacciones leen ese doc como
+//     inexistente y una gana la carrera, Firestore reintenta la otra sola al
+//     detectar que el doc leído cambió, y en el reintento sí lo va a ver.
+//   - la búsqueda del lote por número (cuando no hay loteId o no se encuentra)
+//     se resuelve ANTES de abrir la transacción, y adentro se relee ese docId
+//     conocido con tx.get(docRef).
 export function anularMovimientoTransaction(mov, observacion, usuario, motivoLabel) {
   if (mov.tipo === "transferencia_salida" || mov.tipo === "transferencia_entrada") {
     throw new Error("Esta es una transferencia: usá 'Anular transferencia' para anular ambas puntas juntas.");
   }
-  return conMensajeDeContingencia(() =>
-    runTransaction(db, async (tx) => {
-      const yaAnuladoSnap = await tx.get(query(movimientosCol, where("anulaId", "==", mov.id)));
-      if (!yaAnuladoSnap.empty) throw new Error("Este movimiento ya fue anulado.");
+  const sid = mov.sedeId, fid = mov.farmId;
+  const anulacionRef = doc(movimientosCol, `anula_${mov.id}`);
 
-      const sid = mov.sedeId, fid = mov.farmId;
+  return conMensajeDeContingencia(async () => {
+    let loteRef = mov.loteId ? doc(db, "sedes", sid, "lotes", mov.loteId) : null;
+    if (loteRef) {
+      const snap = await getDoc(loteRef);
+      if (!snap.exists()) loteRef = null;
+    }
+    if (!loteRef) {
+      // Lote no encontrado por id (p. ej. se creó en otra sede en una transferencia
+      // vieja) -> buscar por número de lote, igual que la demo original.
+      const porLote = await getDocs(query(collection(db, "sedes", sid, "lotes"), where("lote", "==", mov.lote), where("farmId", "==", fid)));
+      loteRef = porLote.empty ? null : porLote.docs[0].ref;
+    }
+
+    return runTransaction(db, async (tx) => {
+      const yaAnuladoSnap = await tx.get(anulacionRef);
+      if (yaAnuladoSnap.exists()) throw new Error("Este movimiento ya fue anulado.");
+
       const esEntrada = mov.tipo === "ingreso" || mov.tipo === "transferencia_entrada";
-      let loteRef = null, loteData = null;
-
-      if (mov.loteId) {
-        loteRef = doc(db, "sedes", sid, "lotes", mov.loteId);
-        const snap = await tx.get(loteRef);
-        if (snap.exists()) loteData = snap.data();
-      }
-      if (!loteData) {
-        // Lote no encontrado por id (p. ej. se creó en otra sede en una transferencia
-        // vieja) -> buscar por número de lote, igual que la demo original.
-        const porLote = await tx.get(query(collection(db, "sedes", sid, "lotes"), where("lote", "==", mov.lote), where("farmId", "==", fid)));
-        if (!porLote.empty) {
-          loteRef = porLote.docs[0].ref;
-          loteData = porLote.docs[0].data();
-        }
-      }
+      const loteSnap = loteRef ? await tx.get(loteRef) : null;
+      const loteData = loteSnap?.exists() ? loteSnap.data() : null;
 
       if (loteData) {
         const delta = esEntrada ? -mov.cantidad : mov.cantidad;
@@ -70,73 +83,89 @@ export function anularMovimientoTransaction(mov, observacion, usuario, motivoLab
         });
       }
 
-      tx.set(doc(movimientosCol), {
+      tx.set(anulacionRef, {
         fecha: serverTimestamp(), tipo: "anulacion", anulaId: mov.id,
         sedeId: sid, sedeNombre: mov.sedeNombre, farmId: fid, farmNombre: mov.farmNombre,
         cantidad: mov.cantidad, lote: mov.lote,
         motivo: motivoLabel || `Anula movimiento ${mov.id}`, observacion,
         usuarioNombre: usuario.nombre, usuarioEmail: usuario.email,
       });
-    })
-  );
+    });
+  });
 }
 
 // Anula una transferencia completa (ambas puntas) en una sola transacción.
 // Recibe cualquiera de los dos movimientos vinculados (salida o entrada) y
-// busca el par por grupoId dentro de la propia transacción -- así no depende
-// de qué sede esté filtrada en el Historial ni de cuál de las dos filas se
-// haya clickeado. Revierte el stock de origen y destino juntos, y crea los
-// dos movimientos de anulación (uno por cada punta) o ninguno.
+// busca el par por grupoId -- así no depende de qué sede esté filtrada en el
+// Historial ni de cuál de las dos filas se haya clickeado. Revierte el stock
+// de origen y destino juntos, y crea los dos movimientos de anulación (uno
+// por cada punta) o ninguno.
+//
+// Mismo problema que anularMovimientoTransaction con tx.get(query): acá hay
+// tres búsquedas por campo (el par por grupoId, y el lote de cada punta por
+// número) que se resuelven ANTES de abrir la transacción, y el chequeo de
+// "ya anulada" usa los mismos docId determinísticos `anula_${id}` que usa
+// anularMovimientoTransaction, así que también queda como tx.get(docRef)
+// simple. La transacción relee todo por docId conocido adentro, así que
+// sigue reintentando sola si algo cambió entre la búsqueda y el commit.
 export function anularTransferenciaTransaction(mov, observacion, usuario, motivoLabel) {
-  return conMensajeDeContingencia(() =>
-    runTransaction(db, async (tx) => {
-      const parSnap = await tx.get(query(movimientosCol, where("grupoId", "==", mov.grupoId)));
-      const par = parSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
-      const movSalida = par.find((m) => m.tipo === "transferencia_salida");
-      const movEntrada = par.find((m) => m.tipo === "transferencia_entrada");
-      if (!movSalida || !movEntrada) throw new Error("No se encontró el par completo de esta transferencia.");
+  return conMensajeDeContingencia(async () => {
+    const parSnap = await getDocs(query(movimientosCol, where("grupoId", "==", mov.grupoId)));
+    const par = parSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    const movSalida = par.find((m) => m.tipo === "transferencia_salida");
+    const movEntrada = par.find((m) => m.tipo === "transferencia_entrada");
+    if (!movSalida || !movEntrada) throw new Error("No se encontró el par completo de esta transferencia.");
 
-      const yaAnuladaSnap = await tx.get(query(movimientosCol, where("anulaId", "in", [movSalida.id, movEntrada.id])));
-      if (!yaAnuladaSnap.empty) throw new Error("Esta transferencia ya fue anulada.");
+    const anulaSalidaRef = doc(movimientosCol, `anula_${movSalida.id}`);
+    const anulaEntradaRef = doc(movimientosCol, `anula_${movEntrada.id}`);
 
-      async function ubicarLote(m) {
-        const porLote = await tx.get(query(collection(db, "sedes", m.sedeId, "lotes"), where("lote", "==", m.lote), where("farmId", "==", m.farmId)));
-        return porLote.empty ? null : { ref: porLote.docs[0].ref, data: porLote.docs[0].data() };
-      }
+    async function buscarLoteRef(m) {
+      const porLote = await getDocs(query(collection(db, "sedes", m.sedeId, "lotes"), where("lote", "==", m.lote), where("farmId", "==", m.farmId)));
+      return porLote.empty ? null : porLote.docs[0].ref;
+    }
+    const origenLoteRef = await buscarLoteRef(movSalida);
+    const destinoLoteRef = await buscarLoteRef(movEntrada);
 
-      const origen = await ubicarLote(movSalida);
-      const destino = await ubicarLote(movEntrada);
+    return runTransaction(db, async (tx) => {
+      const [yaSalida, yaEntrada] = await Promise.all([tx.get(anulaSalidaRef), tx.get(anulaEntradaRef)]);
+      if (yaSalida.exists() || yaEntrada.exists()) throw new Error("Esta transferencia ya fue anulada.");
 
+      const destinoSnap = destinoLoteRef ? await tx.get(destinoLoteRef) : null;
       // El destino sí tiene que existir y tener stock suficiente: si no,
       // revertir a ciegas dejaría cantidades negativas o crearía stock de la
       // nada -- se corta la anulación entera en vez de hacerla a medias.
-      if (!destino) throw new Error("El lote de destino ya no existe; no se puede revertir automáticamente.");
-      const cantidadDestino = destino.data.cantidad - movEntrada.cantidad;
+      if (!destinoSnap?.exists()) throw new Error("El lote de destino ya no existe; no se puede revertir automáticamente.");
+      const cantidadDestino = destinoSnap.data().cantidad - movEntrada.cantidad;
       if (cantidadDestino < 0) throw new Error("El lote de destino ya no tiene suficiente stock para revertir la transferencia.");
-      tx.update(destino.ref, { cantidad: cantidadDestino });
 
-      if (origen) {
-        tx.update(origen.ref, { cantidad: origen.data.cantidad + movSalida.cantidad });
+      // Firestore exige que todas las lecturas de la transacción pasen ANTES
+      // que cualquier escritura -- por eso este get() va acá, antes del primer
+      // tx.update(), y no más abajo junto al resto de la lógica de origen.
+      const origenSnap = origenLoteRef ? await tx.get(origenLoteRef) : null;
+
+      tx.update(destinoLoteRef, { cantidad: cantidadDestino });
+      if (origenSnap?.exists()) {
+        tx.update(origenLoteRef, { cantidad: origenSnap.data().cantidad + movSalida.cantidad });
       } else {
         tx.set(doc(collection(db, "sedes", movSalida.sedeId, "lotes")), {
           farmId: movSalida.farmId, lote: movSalida.lote, vencimiento: "", cantidad: movSalida.cantidad, proveedorNombre: "", creadoEn: serverTimestamp(),
         });
       }
 
-      tx.set(doc(movimientosCol), {
+      tx.set(anulaSalidaRef, {
         fecha: serverTimestamp(), tipo: "anulacion", anulaId: movSalida.id,
         sedeId: movSalida.sedeId, sedeNombre: movSalida.sedeNombre, farmId: movSalida.farmId, farmNombre: movSalida.farmNombre,
         cantidad: movSalida.cantidad, lote: movSalida.lote,
         motivo: motivoLabel || `Anula transferencia ${mov.grupoId}`, observacion,
         usuarioNombre: usuario.nombre, usuarioEmail: usuario.email,
       });
-      tx.set(doc(movimientosCol), {
+      tx.set(anulaEntradaRef, {
         fecha: serverTimestamp(), tipo: "anulacion", anulaId: movEntrada.id,
         sedeId: movEntrada.sedeId, sedeNombre: movEntrada.sedeNombre, farmId: movEntrada.farmId, farmNombre: movEntrada.farmNombre,
         cantidad: movEntrada.cantidad, lote: movEntrada.lote,
         motivo: motivoLabel || `Anula transferencia ${mov.grupoId}`, observacion,
         usuarioNombre: usuario.nombre, usuarioEmail: usuario.email,
       });
-    })
-  );
+    });
+  });
 }

@@ -23,7 +23,7 @@ export function TabMarcacion({ catalogo, usuario, esAdmin, onToast }) {
   const lotesDisp = (catalogo.stock[sedeId]?.[farmId] || []).filter((l) => l.cantidad > 0);
 
   function guardar() {
-    if (!farmId || !mciMarcacion) return;
+    if (!farmId || !lote || !mciMarcacion) return;
     const farm = catalogo.farms.find((f) => f.id === farmId);
     addActaMarcacion({
       sedeId, sedeNombre: catalogo.sedes[sedeId]?.nombre,
@@ -49,7 +49,7 @@ export function TabMarcacion({ catalogo, usuario, esAdmin, onToast }) {
           a.sedeNombre, a.farmNombre, a.lote || "—", a.mciMarcacion, a.usuarioNombre, a.observacion || "—"];
       }),
     ];
-    const csv = filas.map((r) => r.map((x) => `"${x}"`).join(",")).join("\n");
+    const csv = "sep=;\n" + filas.map((r) => r.map((x) => `"${x}"`).join(";")).join("\n");
     descargarArchivo(csv, `libro1_marcacion_${filtroFecha || hoy()}.csv`, "text/csv;charset=utf-8");
     onToast("Libro 1 exportado");
   }
@@ -99,7 +99,7 @@ export function TabMarcacion({ catalogo, usuario, esAdmin, onToast }) {
           </div>
           <div className="flex gap-2 justify-end mt-4">
             <Btn variant="outline" onClick={() => setMostrarForm(false)}>Cancelar</Btn>
-            <Btn onClick={guardar} disabled={!farmId || !mciMarcacion}>Guardar marcación</Btn>
+            <Btn onClick={guardar} disabled={!farmId || !lote || !mciMarcacion}>Guardar marcación</Btn>
           </div>
         </div>
       )}

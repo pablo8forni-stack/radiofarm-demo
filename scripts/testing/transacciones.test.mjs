@@ -18,15 +18,6 @@ const NOMBRE_SEDE = { [SEDE_A]: "FUESMEN Central", [SEDE_B]: "C. Gamma Hospital 
 before(async () => { await prepararFixturesGlobales(); });
 after(cerrarConexiones);
 
-// transferenciaTransaction usa tx.get(query(...)) (busca el lote existente en
-// destino) dentro de la transacción -- eso rompe con un error interno del
-// SDK cliente de Firebase ("Cannot read properties of undefined (reading
-// 'path')") apenas se ejecuta en Node, tanto contra staging real como contra
-// el emulador (confirmado con ambos). Es un bug del SDK, no de la app: en el
-// browser (la app real) esta misma función funciona en producción. Hasta que
-// el SDK lo resuelva, estos dos casos se validan manualmente en el browser.
-const SKIP_TRANSFERENCIA = "tx.get(query(...)) dentro de una transacción rompe en el SDK de Firebase para Node (bug de terceros, ver comentario arriba) -- validar en el browser";
-
 test("ingreso: crea lote nuevo con la cantidad indicada y su movimiento", async () => {
   await loguearComo(PERSONAS.admin);
   const loteNum = loteDePrueba();
@@ -92,7 +83,7 @@ test("egreso: conflicto -- dos egresos simultáneos sobre el mismo lote cuya sum
   await borrarLote(SEDE_A, loteId);
 });
 
-test("transferencia: descuenta en origen y acredita en destino, vinculados por grupoId", { skip: SKIP_TRANSFERENCIA }, async () => {
+test("transferencia: descuenta en origen y acredita en destino, vinculados por grupoId", async () => {
   await loguearComo(PERSONAS.admin);
   const { loteId } = await crearLoteDirecto(SEDE_A, FARM_ID, 8);
 
@@ -122,7 +113,7 @@ test("transferencia: descuenta en origen y acredita en destino, vinculados por g
   await borrarLote(SEDE_B, destinoLote.id);
 });
 
-test("transferencia: conflicto -- dos transferencias simultáneas desde el mismo lote cuya suma excede el stock", { skip: SKIP_TRANSFERENCIA }, async () => {
+test("transferencia: conflicto -- dos transferencias simultáneas desde el mismo lote cuya suma excede el stock", async () => {
   await loguearComo(PERSONAS.admin);
   const { loteId } = await crearLoteDirecto(SEDE_A, FARM_ID, 5);
 

@@ -47,7 +47,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
   }
 
   function guardar() {
-    if (!nombre.trim() || !dni.trim() || !mci || !estudio) return;
+    if (!nombre.trim() || !dni.trim() || !mci || !estudio || !farmId || !lote) return;
     const farm = catalogo.farms.find((f) => f.id === farmId);
     addActaPaciente({
       sedeId, sedeNombre: catalogo.sedes[sedeId]?.nombre,
@@ -77,7 +77,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
           a.mciAdministrados, a.usuarioNombre, a.observacion || "—"];
       }),
     ];
-    const csv = filas.map((r) => r.map((x) => `"${x}"`).join(",")).join("\n");
+    const csv = "sep=;\n" + filas.map((r) => r.map((x) => `"${x}"`).join(";")).join("\n");
     descargarArchivo(csv, `libro2_pacientes_${filtroFecha || hoy()}.csv`, "text/csv;charset=utf-8");
     onToast("Libro 2 exportado");
   }
@@ -145,7 +145,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
           </div>
           <div className="flex gap-2 justify-end mt-4">
             <Btn variant="outline" onClick={() => { setMostrarForm(false); limpiarForm(); }}>Cancelar</Btn>
-            <Btn onClick={guardar} disabled={!nombre.trim() || !dni.trim() || !mci || !estudio}>Guardar registro</Btn>
+            <Btn onClick={guardar} disabled={!nombre.trim() || !dni.trim() || !mci || !estudio || !farmId || !lote}>Guardar registro</Btn>
           </div>
         </div>
       )}

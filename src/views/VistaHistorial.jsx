@@ -55,7 +55,7 @@ export function VistaHistorial({ catalogo, usuario, esAdmin, onToast }) {
         m.motivo || "—", m.observacion || "—", m.usuarioNombre || "—", anulados.has(m.id) ? "SÍ" : "—",
       ]),
     ];
-    const csv = filas.map((r) => r.map((c) => `"${c}"`).join(",")).join("\n");
+    const csv = "sep=;\n" + filas.map((r) => r.map((c) => `"${c}"`).join(";")).join("\n");
     descargarArchivo(csv, `historial_${hoy()}.csv`, "text/csv;charset=utf-8");
   }
 

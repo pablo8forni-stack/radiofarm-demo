@@ -19,16 +19,6 @@ const NOMBRE_SEDE = { [SEDE_A]: "FUESMEN Central", [SEDE_B]: "C. Gamma Hospital 
 before(async () => { await prepararFixturesGlobales(); });
 after(cerrarConexiones);
 
-// transferenciaTransaction (para armar el fixture) y anularTransferenciaTransaction
-// (la función bajo prueba) usan tx.get(query(...)) dentro de una transacción --
-// eso rompe con un error interno del SDK cliente de Firebase ("Cannot read
-// properties of undefined (reading 'path')") apenas se ejecuta en Node, tanto
-// contra staging real como contra el emulador (confirmado con ambos). Es un
-// bug del SDK, no de la app: en el browser (la app real) esta misma función
-// funciona en producción. Hasta que el SDK lo resuelva, los 4 casos de esta
-// área se validan manualmente en el browser.
-const SKIP_ANULACION = "tx.get(query(...)) dentro de una transacción rompe en el SDK de Firebase para Node (bug de terceros, ver comentario arriba) -- validar en el browser";
-
 async function crearTransferenciaDePrueba(cantidadInicial, cantidadTransferida) {
   await loguearComo(PERSONAS.admin);
   const { loteId } = await crearLoteDirecto(SEDE_A, FARM_ID, cantidadInicial);
@@ -46,7 +36,7 @@ async function crearTransferenciaDePrueba(cantidadInicial, cantidadTransferida) 
   return { loteId, loteNum, movSalida, movEntrada, destinoLoteId: destinoLote.id };
 }
 
-test("anular transferencia (desde la punta de salida): revierte stock en origen y destino, crea 2 anulaciones", { skip: SKIP_ANULACION }, async () => {
+test("anular transferencia (desde la punta de salida): revierte stock en origen y destino, crea 2 anulaciones", async () => {
   const { loteId, loteNum, movSalida, movEntrada, destinoLoteId } = await crearTransferenciaDePrueba(8, 3);
 
   await anularTransferenciaTransaction(movSalida, "Test anulación", PERSONAS.admin, "Anula transferencia de prueba");
@@ -66,7 +56,7 @@ test("anular transferencia (desde la punta de salida): revierte stock en origen 
   await borrarLote(SEDE_B, destinoLoteId);
 });
 
-test("anular transferencia (desde la punta de entrada): funciona igual que desde la de salida", { skip: SKIP_ANULACION }, async () => {
+test("anular transferencia (desde la punta de entrada): funciona igual que desde la de salida", async () => {
   const { loteId, movEntrada, destinoLoteId } = await crearTransferenciaDePrueba(6, 2);
 
   await anularTransferenciaTransaction(movEntrada, "Test anulación", PERSONAS.admin, "Anula transferencia de prueba");
@@ -80,7 +70,7 @@ test("anular transferencia (desde la punta de entrada): funciona igual que desde
   await borrarLote(SEDE_B, destinoLoteId);
 });
 
-test("anular transferencia: rechaza si ya fue anulada", { skip: SKIP_ANULACION }, async () => {
+test("anular transferencia: rechaza si ya fue anulada", async () => {
   const { loteId, movSalida, destinoLoteId } = await crearTransferenciaDePrueba(5, 2);
 
   await anularTransferenciaTransaction(movSalida, "Primera anulación", PERSONAS.admin, "motivo");
@@ -93,7 +83,7 @@ test("anular transferencia: rechaza si ya fue anulada", { skip: SKIP_ANULACION }
   await borrarLote(SEDE_B, destinoLoteId);
 });
 
-test("anular transferencia: conflicto -- dos anulaciones simultáneas de la misma transferencia, una sola se aplica", { skip: SKIP_ANULACION }, async () => {
+test("anular transferencia: conflicto -- dos anulaciones simultáneas de la misma transferencia, una sola se aplica", async () => {
   const { loteId, movSalida, destinoLoteId } = await crearTransferenciaDePrueba(9, 4);
 
   const intento = () => anularTransferenciaTransaction(movSalida, "concurrente", PERSONAS.admin, "motivo");

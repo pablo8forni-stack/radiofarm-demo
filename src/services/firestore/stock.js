@@ -2,9 +2,13 @@ import {
   collection,
   collectionGroup,
   doc,
+  getDoc,
+  getDocs,
   onSnapshot,
+  query,
   runTransaction,
   serverTimestamp,
+  where,
   writeBatch,
 } from "firebase/firestore";
 import { db } from "../../firebase.js";
@@ -67,24 +71,39 @@ export function egresoTransaction({ sedeId, sedeNombre, farm, loteId, cantidad, 
 // Transferencia: lee y escribe lotes de dos sedes distintas en una sola
 // transacción (Firestore no limita las transacciones a un solo documento),
 // y crea los dos movimientos vinculados por grupoId.
+//
+// tx.get() sobre una Query (no un DocumentReference) rompe con un error
+// interno del SDK cliente de Firebase ("Cannot read properties of undefined
+// (reading 'path')"), tanto en Node como en el browser real -- confirmado
+// contra staging y en uso real de la app. Por eso la búsqueda del lote
+// existente en destino se resuelve ANTES de abrir la transacción (con
+// getDocs normal) y adentro sólo se hace tx.get(docRef) sobre el id ya
+// conocido. Esto no debilita la protección contra condiciones de carrera:
+// si ese documento cambia entre la búsqueda y el commit, Firestore reintenta
+// toda la transacción sola porque el doc fue leído con tx.get() adentro.
 export function transferenciaTransaction({ sedeOrigenId, sedeOrigenNombre, sedeDestinoId, sedeDestinoNombre, farm, loteId, cantidad, observacion, usuario }) {
-  return conMensajeDeContingencia(() =>
-    runTransaction(db, async (tx) => {
-      const origenRef = lotesRef(sedeOrigenId, loteId);
+  const origenRef = lotesRef(sedeOrigenId, loteId);
+  return conMensajeDeContingencia(async () => {
+    const origenPrevio = await getDoc(origenRef);
+    if (!origenPrevio.exists()) throw new Error("El lote ya no existe.");
+    const { lote, vencimiento } = origenPrevio.data();
+
+    const candidatosSnap = await getDocs(
+      query(collection(db, "sedes", sedeDestinoId, "lotes"), where("farmId", "==", farm.id), where("lote", "==", lote), where("vencimiento", "==", vencimiento))
+    );
+    const destinoExistenteRef = candidatosSnap.empty ? null : candidatosSnap.docs[0].ref;
+
+    return runTransaction(db, async (tx) => {
       const origenSnapshot = await tx.get(origenRef);
       if (!origenSnapshot.exists()) throw new Error("El lote ya no existe.");
       const origenData = origenSnapshot.data();
       if (origenData.cantidad < cantidad) throw new Error("Stock insuficiente para transferir.");
 
-      // Busca en destino un lote con mismo número de lote y vencimiento para acreditar ahí.
-      const destinoLotesSnap = await tx.get(collection(db, "sedes", sedeDestinoId, "lotes"));
-      const existente = destinoLotesSnap.docs.find(
-        (d) => d.data().farmId === farm.id && d.data().lote === origenData.lote && d.data().vencimiento === origenData.vencimiento
-      );
+      const existenteSnap = destinoExistenteRef ? await tx.get(destinoExistenteRef) : null;
 
       tx.update(origenRef, { cantidad: origenData.cantidad - cantidad });
-      if (existente) {
-        tx.update(existente.ref, { cantidad: existente.data().cantidad + cantidad });
+      if (existenteSnap?.exists()) {
+        tx.update(destinoExistenteRef, { cantidad: existenteSnap.data().cantidad + cantidad });
       } else {
         tx.set(doc(collection(db, "sedes", sedeDestinoId, "lotes")), {
           farmId: farm.id, lote: origenData.lote, vencimiento: origenData.vencimiento,
@@ -107,6 +126,6 @@ export function transferenciaTransaction({ sedeOrigenId, sedeOrigenNombre, sedeD
         motivo: `Transferencia desde ${sedeOrigenNombre}`, observacion,
         usuarioNombre: usuario.nombre, usuarioEmail: usuario.email,
       });
-    })
-  );
+    });
+  });
 }
