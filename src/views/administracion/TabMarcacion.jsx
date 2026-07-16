@@ -49,7 +49,7 @@ export function TabMarcacion({ catalogo, usuario, esAdmin, onToast }) {
           a.sedeNombre, a.farmNombre, a.lote || "—", a.mciMarcacion, a.usuarioNombre, a.observacion || "—"];
       }),
     ];
-    const csv = "sep=;\n" + filas.map((r) => r.map((x) => `"${x}"`).join(";")).join("\n");
+    const csv = filas.map((r) => r.map((x) => String(x).replace(/[\t\r\n]/g, " ")).join("\t")).join("\r\n");
     descargarArchivo(csv, `libro1_marcacion_${filtroFecha || hoy()}.csv`, "text/csv;charset=utf-8");
     onToast("Libro 1 exportado");
   }
