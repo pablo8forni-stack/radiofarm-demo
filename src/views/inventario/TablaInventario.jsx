@@ -1,25 +1,47 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Badge } from "../../components/ui/Badge.jsx";
 import { Btn } from "../../components/ui/Btn.jsx";
 import { Modal } from "../../components/ui/Modal.jsx";
 import { ModalEgreso } from "../../components/movimientos/ModalEgreso.jsx";
 import { ModalIngreso } from "../../components/movimientos/ModalIngreso.jsx";
 import { ModalTransferencia } from "../../components/movimientos/ModalTransferencia.jsx";
+import { BarraCarritoIngresos, CarritoIngresos } from "../../components/movimientos/CarritoIngresos.jsx";
 import { ReordenForm } from "../../components/movimientos/ReordenForm.jsx";
 import { fmtF, diasV } from "../../helpers/formato.js";
 import { totStock, proxVenc, farmsDeSede, puntoReorden, proveedoresOrdenados } from "../../helpers/stock.js";
 import { egresoTransaction, ingresoBatch, transferenciaTransaction } from "../../services/firestore/stock.js";
 import { setPuntoReorden } from "../../services/firestore/sedes.js";
+import { uid } from "../../helpers/id.js";
 
 export function TablaInventario({ sedeId, catalogo, usuario, esAdmin, onToast }) {
   const [mEgreso, setMEgreso] = useState(null);
   const [mIngreso, setMIngreso] = useState(null);
+  const [itemEditando, setItemEditando] = useState(null);
+  const [carrito, setCarrito] = useState([]);
+  const [mostrarCarrito, setMostrarCarrito] = useState(false);
   const [mReorden, setMReorden] = useState(null);
   const [mDetalle, setMDetalle] = useState(null);
   const [mTransf, setMTransf] = useState(null);
   const [busq, setBusq] = useState("");
   const sedeNombre = catalogo.sedes[sedeId]?.nombre;
   const farms = farmsDeSede(catalogo, sedeId).filter((f) => f.nombre.toLowerCase().includes(busq.toLowerCase()));
+
+  // Avisa antes de cerrar/recargar si hay ingresos cargados en la lista pero
+  // todavía no confirmados -- no persisten en ningún lado hasta "Cargar
+  // Ingresos", así que un F5 accidental los perdería sin este aviso.
+  useEffect(() => {
+    if (!carrito.length) return;
+    const onBeforeUnload = (e) => { e.preventDefault(); e.returnValue = ""; };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [carrito.length]);
+
+  // Cierra el resumen solo cuando ya no queda nada por revisar (todos
+  // cargados/encolados y sacados de la lista) -- si quedó algún error, se
+  // mantiene abierto para reintentar o quitar.
+  useEffect(() => {
+    if (mostrarCarrito && carrito.length === 0) setMostrarCarrito(false);
+  }, [carrito.length]);
 
   async function handleEgreso({ loteId, cantidad, motivo, observacion }) {
     const farm = mEgreso;
@@ -32,18 +54,62 @@ export function TablaInventario({ sedeId, catalogo, usuario, esAdmin, onToast })
     }
   }
 
-  // Ingreso: no depende de una lectura previa (siempre crea lote nuevo), por
-  // lo tanto queda encolado offline y se sincroniza solo. No esperamos a que
-  // el servidor confirme para cerrar/avisar -- con persistencia offline esa
-  // promesa no resuelve hasta reconectar. Errores reales (no de conectividad)
-  // se avisan aparte cuando lleguen.
-  function handleIngreso({ lote, vencimiento, cantidad, kits, proveedorNombre, observacion }) {
+  function abrirNuevoIngreso(f) { setItemEditando(null); setMIngreso(f); }
+  function abrirEditarIngreso(item) { setItemEditando(item); setMIngreso(item.farm); }
+  function cerrarModalIngreso() { setMIngreso(null); setItemEditando(null); }
+
+  // Ingreso: en vez de escribir directo, se agrega (o reemplaza, si se está
+  // editando) a una lista local -- nada se guarda en Firestore hasta que se
+  // confirme el carrito entero desde CarritoIngresos.
+  function confirmarModalIngreso({ lote, vencimiento, cantidad, kits, proveedorNombre, observacion }) {
     const farm = mIngreso;
-    ingresoBatch({ sedeId, sedeNombre, farm, lote, vencimiento, cantidad, kits, proveedorNombre, observacion, usuario }).catch((e) =>
-      onToast(e.message || "No se pudo registrar el ingreso", "error")
-    );
-    onToast(`Ingreso: ${cantidad} viales de ${farm.nombre}`);
-    setMIngreso(null);
+    if (itemEditando) {
+      setCarrito((c) => c.map((it) => (it.id === itemEditando.id ? { ...it, lote, vencimiento, cantidad, kits, proveedorNombre, observacion, farm, estado: "pendiente", errorMsg: null } : it)));
+      onToast(`Ítem actualizado: ${cantidad} viales de ${farm.nombre}`);
+      setMostrarCarrito(true);
+    } else {
+      setCarrito((c) => [...c, { id: uid(), sedeId, sedeNombre, farm, lote, vencimiento, cantidad, kits, proveedorNombre, observacion, estado: "pendiente", errorMsg: null }]);
+      onToast(`Agregado al carrito: ${cantidad} viales de ${farm.nombre}`);
+    }
+    cerrarModalIngreso();
+  }
+
+  function quitarDelCarrito(id) {
+    setCarrito((c) => c.filter((it) => it.id !== id));
+  }
+
+  // Cada ítem se envía como su propio ingresoBatch (no todos juntos en un
+  // solo batch): así uno con problema no tumba a los demás. Sin conexión,
+  // ingresoBatch no rechaza -- con persistencia offline la promesa no
+  // resuelve hasta reconectar -- así que ese caso se detecta con
+  // navigator.onLine y el ítem se da por encolado/enviado de inmediato: si
+  // se lo dejara reintentable mientras la promesa sigue pendiente, un
+  // reintento accidental duplicaría el ingreso cuando vuelva la señal.
+  function enviarItem(item) {
+    const sinConexionAlEnviar = typeof navigator !== "undefined" && navigator.onLine === false;
+    setCarrito((c) => c.map((it) => (it.id === item.id ? { ...it, estado: "enviando", errorMsg: null } : it)));
+    ingresoBatch({
+      sedeId: item.sedeId, sedeNombre: item.sedeNombre, farm: item.farm,
+      lote: item.lote, vencimiento: item.vencimiento, cantidad: item.cantidad, kits: item.kits,
+      proveedorNombre: item.proveedorNombre, observacion: item.observacion, usuario,
+    })
+      .then(() => {
+        setCarrito((c) => c.filter((it) => it.id !== item.id));
+        onToast(`Ingreso cargado: ${item.cantidad} viales de ${item.farm.nombre}`, "success");
+      })
+      .catch((e) => {
+        const msg = e.message || "No se pudo cargar el ingreso";
+        setCarrito((c) => (c.some((it) => it.id === item.id) ? c.map((it) => (it.id === item.id ? { ...it, estado: "error", errorMsg: msg } : it)) : c));
+        onToast(`${item.farm.nombre}: ${msg}`, "error", 6000);
+      });
+    if (sinConexionAlEnviar) {
+      setCarrito((c) => c.filter((it) => it.id !== item.id));
+      onToast(`Sin conexión: ${item.cantidad} viales de ${item.farm.nombre} quedaron encolados y se van a cargar solos`, "info", 6000);
+    }
+  }
+
+  function confirmarCarrito() {
+    carrito.filter((it) => it.estado !== "enviando").forEach(enviarItem);
   }
 
   async function handleTransferencia({ loteId, cantidad, sedeDestino, observacion }) {
@@ -82,6 +148,7 @@ export function TablaInventario({ sedeId, catalogo, usuario, esAdmin, onToast })
             placeholder="Buscar..." value={busq} onChange={(e) => setBusq(e.target.value)} />
         </div>
       </div>
+      <BarraCarritoIngresos cantidad={carrito.length} onAbrir={() => setMostrarCarrito(true)} />
       <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-x-auto">
         <table className="w-full text-sm min-w-[540px]">
           <thead>
@@ -101,11 +168,15 @@ export function TablaInventario({ sedeId, catalogo, usuario, esAdmin, onToast })
               const pedir = tot <= mn;
               const vencido = dias !== null && dias < 0;
               const pronto = dias !== null && dias >= 0 && dias <= 30;
+              const pendientesFarm = carrito.filter((it) => it.farm.id === f.id && it.sedeId === sedeId).length;
               return (
                 <tr key={f.id} className={`border-b border-gray-50 last:border-0 hover:bg-gray-50/40 transition ${pedir ? "bg-red-50/20" : ""}`}>
                   <td className="px-4 py-3">
                     <button onClick={() => setMDetalle({ f, sedeId })} className="text-left group">
-                      <div className="font-semibold text-gray-800 group-hover:text-blue-600 transition text-sm">{f.nombre}</div>
+                      <div className="font-semibold text-gray-800 group-hover:text-blue-600 transition text-sm flex items-center gap-1.5">
+                        {f.nombre}
+                        {pendientesFarm > 0 && <Badge color="green">🛒 {pendientesFarm} pendiente{pendientesFarm > 1 ? "s" : ""}</Badge>}
+                      </div>
                       <div className="text-xs text-gray-400">
                         Mín: {mn} vial{mn !== 1 ? "es" : ""}
                         {f.viales_x_kit > 1 && <span className="ml-2 text-blue-400">· kit {f.viales_x_kit}u</span>}
@@ -129,7 +200,7 @@ export function TablaInventario({ sedeId, catalogo, usuario, esAdmin, onToast })
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex gap-1.5 justify-end flex-wrap">
-                      {esAdmin && <Btn size="sm" variant="success" onClick={() => setMIngreso(f)}>+ Ingreso</Btn>}
+                      {esAdmin && <Btn size="sm" variant="success" onClick={() => abrirNuevoIngreso(f)}>+ Ingreso</Btn>}
                       <Btn size="sm" variant="ghost" onClick={() => setMEgreso(f)} disabled={tot === 0}>− Egreso</Btn>
                       {esAdmin && <Btn size="sm" variant="teal" onClick={() => setMTransf(f)} disabled={tot === 0} title="Transferir a otra sede">⇄ Transf.</Btn>}
                       {esAdmin && (
@@ -180,7 +251,18 @@ export function TablaInventario({ sedeId, catalogo, usuario, esAdmin, onToast })
       </Modal>
 
       {mEgreso && <ModalEgreso open farm={mEgreso} lotes={catalogo.stock[sedeId]?.[mEgreso.id] || []} usuario={usuario} onConfirm={handleEgreso} onClose={() => setMEgreso(null)} />}
-      {mIngreso && esAdmin && <ModalIngreso open farm={mIngreso} proveedores={proveedoresOrdenados(catalogo)} onConfirm={handleIngreso} onClose={() => setMIngreso(null)} />}
+      {mIngreso && esAdmin && (
+        <ModalIngreso open farm={mIngreso} proveedores={proveedoresOrdenados(catalogo)} itemEditando={itemEditando} onConfirm={confirmarModalIngreso} onClose={cerrarModalIngreso} />
+      )}
+      <CarritoIngresos
+        open={mostrarCarrito}
+        items={carrito}
+        onEditar={(item) => { setMostrarCarrito(false); abrirEditarIngreso(item); }}
+        onQuitar={quitarDelCarrito}
+        onReintentar={enviarItem}
+        onConfirmarTodo={confirmarCarrito}
+        onCerrar={() => setMostrarCarrito(false)}
+      />
       {mTransf && esAdmin && <ModalTransferencia open farm={mTransf} sedeOrigenId={sedeId} catalogo={catalogo} usuario={usuario} onConfirm={handleTransferencia} onClose={() => setMTransf(null)} />}
       {mReorden && (
         <Modal open title={`Stock mínimo — ${mReorden?.nombre}`} onClose={() => setMReorden(null)} size="sm">

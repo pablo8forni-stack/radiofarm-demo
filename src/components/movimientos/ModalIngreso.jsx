@@ -5,7 +5,10 @@ import { Input } from "../ui/Input.jsx";
 import { Sel } from "../ui/Sel.jsx";
 import { hoy } from "../../helpers/formato.js";
 
-export function ModalIngreso({ open, farm, proveedores, onConfirm, onClose }) {
+// itemEditando: cuando se pasa, precarga el formulario con un ítem ya
+// agregado al carrito (para corregirlo sin tener que recargarlo de cero) en
+// vez de arrancar en blanco para uno nuevo.
+export function ModalIngreso({ open, farm, proveedores, itemEditando, onConfirm, onClose }) {
   const [lote, setLote] = useState("");
   const [venc, setVenc] = useState("");
   const [cant, setCant] = useState(1);
@@ -13,7 +16,15 @@ export function ModalIngreso({ open, farm, proveedores, onConfirm, onClose }) {
   const [obs, setObs] = useState("");
 
   useEffect(() => {
-    setLote(""); setVenc(""); setCant(1); setProvId(proveedores[0]?.id || ""); setObs("");
+    if (itemEditando) {
+      setLote(itemEditando.lote);
+      setVenc(itemEditando.vencimiento);
+      setCant(itemEditando.kits || itemEditando.cantidad);
+      setProvId(proveedores.find((p) => p.nombre === itemEditando.proveedorNombre)?.id || proveedores[0]?.id || "");
+      setObs(itemEditando.observacion);
+    } else {
+      setLote(""); setVenc(""); setCant(1); setProvId(proveedores[0]?.id || ""); setObs("");
+    }
   }, [open]);
 
   const prov = proveedores.find((p) => p.id === provId);
@@ -22,7 +33,7 @@ export function ModalIngreso({ open, farm, proveedores, onConfirm, onClose }) {
   const totalViales = cant * vxk;
 
   return (
-    <Modal open={open} title={`Ingreso — ${farm?.nombre}`} onClose={onClose} size="sm">
+    <Modal open={open} title={`${itemEditando ? "Editar ingreso" : "Ingreso"} — ${farm?.nombre}`} onClose={onClose} size="sm">
       <div className="flex flex-col gap-4">
         <Input label="N° de lote" value={lote} onChange={(e) => setLote(e.target.value)} placeholder="Ej: ARN-2025-050" />
         <Input label="Fecha de vencimiento" type="date" value={venc} onChange={(e) => setVenc(e.target.value)} min={hoy()} />
@@ -45,7 +56,7 @@ export function ModalIngreso({ open, farm, proveedores, onConfirm, onClose }) {
             onClick={() => onConfirm({ lote, vencimiento: venc, cantidad: totalViales, kits: enKit ? cant : null, proveedorNombre: prov?.nombre, observacion: obs.trim() })}
             disabled={!lote || !venc}
           >
-            Registrar ingreso
+            {itemEditando ? "Guardar cambios" : "Agregar a la lista"}
           </Btn>
         </div>
       </div>
