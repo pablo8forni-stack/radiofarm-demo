@@ -4,6 +4,7 @@ import { Btn } from "../ui/Btn.jsx";
 import { Input } from "../ui/Input.jsx";
 import { Sel } from "../ui/Sel.jsx";
 import { fmtF } from "../../helpers/formato.js";
+import { uid } from "../../helpers/id.js";
 
 export function ModalEgreso({ open, farm, lotes, usuario, onConfirm, onClose }) {
   const [loteId, setLoteId] = useState("");
@@ -11,14 +12,21 @@ export function ModalEgreso({ open, farm, lotes, usuario, onConfirm, onClose }) 
   const [motivo, setMotivo] = useState("Estudio");
   const [obs, setObs] = useState("");
   const [enviando, setEnviando] = useState(false);
+  const [operacionId, setOperacionId] = useState(() => uid());
   const disp = (lotes || []).filter((l) => l.cantidad > 0);
 
+  // operacionId se genera una vez por apertura del modal (no en cada click de
+  // "Confirmar"): si el egreso falla y el técnico reintenta sin cerrar el
+  // modal, reusa el mismo id -- egresoTransaction lo usa como id
+  // determinístico del movimiento, así el reintento no duplica el descuento
+  // de stock si el intento anterior sí había llegado a aplicarse.
   useEffect(() => {
     if (disp.length) setLoteId(disp[0].id);
     setCantidad(1);
     setMotivo("Estudio");
     setObs("");
     setEnviando(false);
+    setOperacionId(uid());
   }, [open, farm?.id]);
 
   const lote = disp.find((l) => l.id === loteId);
@@ -26,7 +34,7 @@ export function ModalEgreso({ open, farm, lotes, usuario, onConfirm, onClose }) 
   async function confirmar() {
     setEnviando(true);
     try {
-      await onConfirm({ loteId, cantidad, motivo, observacion: obs.trim() });
+      await onConfirm({ loteId, cantidad, motivo, observacion: obs.trim(), operacionId });
     } finally {
       setEnviando(false);
     }

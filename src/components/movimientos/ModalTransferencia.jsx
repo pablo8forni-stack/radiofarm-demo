@@ -5,6 +5,7 @@ import { Input } from "../ui/Input.jsx";
 import { Sel } from "../ui/Sel.jsx";
 import { fmtF } from "../../helpers/formato.js";
 import { sedesActivas } from "../../helpers/stock.js";
+import { uid } from "../../helpers/id.js";
 
 export function ModalTransferencia({ open, farm, sedeOrigenId, catalogo, usuario, onConfirm, onClose }) {
   const [loteId, setLoteId] = useState("");
@@ -12,16 +13,20 @@ export function ModalTransferencia({ open, farm, sedeOrigenId, catalogo, usuario
   const [destino, setDestino] = useState("");
   const [obs, setObs] = useState("");
   const [enviando, setEnviando] = useState(false);
+  const [operacionId, setOperacionId] = useState(() => uid());
 
   const disp = (catalogo.stock[sedeOrigenId]?.[farm?.id] || []).filter((l) => l.cantidad > 0);
   const destinos = sedesActivas(catalogo).filter((s) => s.id !== sedeOrigenId && (catalogo.sedes[s.id]?.farmIds || []).includes(farm?.id));
 
+  // operacionId se genera una vez por apertura del modal, no en cada click de
+  // "Confirmar" -- ver mismo criterio en ModalEgreso.jsx.
   useEffect(() => {
     if (disp.length) setLoteId(disp[0].id);
     setCantidad(1);
     setDestino(destinos[0]?.id || "");
     setObs("");
     setEnviando(false);
+    setOperacionId(uid());
   }, [open, farm?.id]);
 
   const lote = disp.find((l) => l.id === loteId);
@@ -29,7 +34,7 @@ export function ModalTransferencia({ open, farm, sedeOrigenId, catalogo, usuario
   async function confirmar() {
     setEnviando(true);
     try {
-      await onConfirm({ loteId, cantidad, sedeDestino: destino, observacion: obs.trim() });
+      await onConfirm({ loteId, cantidad, sedeDestino: destino, observacion: obs.trim(), operacionId });
     } finally {
       setEnviando(false);
     }

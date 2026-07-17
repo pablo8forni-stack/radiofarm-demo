@@ -12,7 +12,6 @@ import {
   writeBatch,
 } from "firebase/firestore";
 import { db } from "../../firebase.js";
-import { uid } from "../../helpers/id.js";
 import { conMensajeDeContingencia } from "../../helpers/erroresRed.js";
 
 const lotesRef = (sedeId, loteId) => doc(db, "sedes", sedeId, "lotes", loteId);
@@ -51,15 +50,26 @@ export function ingresoBatch({ sedeId, sedeNombre, farm, lote, vencimiento, cant
 }
 
 // Egreso: requiere leer el stock real del lote antes de descontar -> runTransaction.
-export function egresoTransaction({ sedeId, sedeNombre, farm, loteId, cantidad, motivo, observacion, usuario }) {
+//
+// operacionId lo genera el llamador (ver ModalEgreso.jsx) una sola vez por
+// apertura del modal, no en cada click de "Confirmar" -- así un reintento
+// tras un error dudoso (¿se aplicó o no?) reusa el mismo id. Se usa como el
+// id determinístico del movimiento: si ya existe, esta llamada es un no-op
+// (el efecto ya se aplicó en un intento anterior), en vez de descontar el
+// stock una segunda vez. No hace falta un campo nuevo -- el id del propio
+// documento ya es la clave de idempotencia.
+export function egresoTransaction({ sedeId, sedeNombre, farm, loteId, cantidad, motivo, observacion, usuario, operacionId }) {
+  const movimientoRef = doc(movimientosCol, operacionId);
   return conMensajeDeContingencia(() =>
     runTransaction(db, async (tx) => {
+      const yaAplicadoSnap = await tx.get(movimientoRef);
       const loteSnapshot = await tx.get(lotesRef(sedeId, loteId));
+      if (yaAplicadoSnap.exists()) return;
       if (!loteSnapshot.exists()) throw new Error("El lote ya no existe.");
       const loteData = loteSnapshot.data();
       if (loteData.cantidad < cantidad) throw new Error("Stock insuficiente para este egreso.");
       tx.update(lotesRef(sedeId, loteId), { cantidad: loteData.cantidad - cantidad });
-      tx.set(doc(movimientosCol), {
+      tx.set(movimientoRef, {
         fecha: serverTimestamp(), tipo: "egreso", sedeId, sedeNombre,
         farmId: farm.id, farmNombre: farm.nombre, cantidad, lote: loteData.lote, loteId,
         motivo, observacion, usuarioNombre: usuario.nombre, usuarioEmail: usuario.email,
@@ -81,8 +91,16 @@ export function egresoTransaction({ sedeId, sedeNombre, farm, loteId, cantidad, 
 // conocido. Esto no debilita la protección contra condiciones de carrera:
 // si ese documento cambia entre la búsqueda y el commit, Firestore reintenta
 // toda la transacción sola porque el doc fue leído con tx.get() adentro.
-export function transferenciaTransaction({ sedeOrigenId, sedeOrigenNombre, sedeDestinoId, sedeDestinoNombre, farm, loteId, cantidad, observacion, usuario }) {
+//
+// operacionId (generado en ModalTransferencia.jsx, una vez por apertura del
+// modal, reusado entre reintentos) pasa a ser directamente el grupoId que
+// vincula las dos puntas, y de ahí se derivan los ids determinísticos de
+// ambos movimientos -- mismo mecanismo de idempotencia que egresoTransaction:
+// si la punta de salida ya existe, el reintento es un no-op.
+export function transferenciaTransaction({ sedeOrigenId, sedeOrigenNombre, sedeDestinoId, sedeDestinoNombre, farm, loteId, cantidad, observacion, usuario, operacionId }) {
   const origenRef = lotesRef(sedeOrigenId, loteId);
+  const salidaRef = doc(movimientosCol, `${operacionId}_salida`);
+  const entradaRef = doc(movimientosCol, `${operacionId}_entrada`);
   return conMensajeDeContingencia(async () => {
     const origenPrevio = await getDoc(origenRef);
     if (!origenPrevio.exists()) throw new Error("El lote ya no existe.");
@@ -94,12 +112,14 @@ export function transferenciaTransaction({ sedeOrigenId, sedeOrigenNombre, sedeD
     const destinoExistenteRef = candidatosSnap.empty ? null : candidatosSnap.docs[0].ref;
 
     return runTransaction(db, async (tx) => {
+      const yaAplicadoSnap = await tx.get(salidaRef);
       const origenSnapshot = await tx.get(origenRef);
+      const existenteSnap = destinoExistenteRef ? await tx.get(destinoExistenteRef) : null;
+
+      if (yaAplicadoSnap.exists()) return;
       if (!origenSnapshot.exists()) throw new Error("El lote ya no existe.");
       const origenData = origenSnapshot.data();
       if (origenData.cantidad < cantidad) throw new Error("Stock insuficiente para transferir.");
-
-      const existenteSnap = destinoExistenteRef ? await tx.get(destinoExistenteRef) : null;
 
       tx.update(origenRef, { cantidad: origenData.cantidad - cantidad });
       if (existenteSnap?.exists()) {
@@ -111,16 +131,15 @@ export function transferenciaTransaction({ sedeOrigenId, sedeOrigenNombre, sedeD
         });
       }
 
-      const grupoId = uid();
-      tx.set(doc(movimientosCol), {
-        fecha: serverTimestamp(), tipo: "transferencia_salida", grupoId,
+      tx.set(salidaRef, {
+        fecha: serverTimestamp(), tipo: "transferencia_salida", grupoId: operacionId,
         sedeId: sedeOrigenId, sedeNombre: sedeOrigenNombre, sedeRelacionada: sedeDestinoNombre,
         farmId: farm.id, farmNombre: farm.nombre, cantidad, lote: origenData.lote,
         motivo: `Transferencia a ${sedeDestinoNombre}`, observacion,
         usuarioNombre: usuario.nombre, usuarioEmail: usuario.email,
       });
-      tx.set(doc(movimientosCol), {
-        fecha: serverTimestamp(), tipo: "transferencia_entrada", grupoId,
+      tx.set(entradaRef, {
+        fecha: serverTimestamp(), tipo: "transferencia_entrada", grupoId: operacionId,
         sedeId: sedeDestinoId, sedeNombre: sedeDestinoNombre, sedeRelacionada: sedeOrigenNombre,
         farmId: farm.id, farmNombre: farm.nombre, cantidad, lote: origenData.lote,
         motivo: `Transferencia desde ${sedeOrigenNombre}`, observacion,

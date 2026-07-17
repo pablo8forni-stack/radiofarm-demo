@@ -11,6 +11,7 @@ import {
 } from "./fixtures.mjs";
 import { egresoTransaction, ingresoBatch, transferenciaTransaction } from "../../src/services/firestore/stock.js";
 import { FARMS_DEFAULT } from "../../src/constants/farmsSeed.js";
+import { uid } from "../../src/helpers/id.js";
 
 const FARM = FARMS_DEFAULT.find((f) => f.id === FARM_ID);
 const NOMBRE_SEDE = { [SEDE_A]: "FUESMEN Central", [SEDE_B]: "C. Gamma Hospital Italiano" };
@@ -49,7 +50,7 @@ test("egreso: descuenta stock del lote en la propia sede del técnico", async ()
   await loguearComo(PERSONAS.tecnicoA);
   await egresoTransaction({
     sedeId: SEDE_A, sedeNombre: NOMBRE_SEDE[SEDE_A], farm: FARM, loteId,
-    cantidad: 2, motivo: "Estudio", observacion: "", usuario: PERSONAS.tecnicoA,
+    cantidad: 2, motivo: "Estudio", observacion: "", usuario: PERSONAS.tecnicoA, operacionId: uid(),
   });
 
   const snap = await getDoc(doc(db, "sedes", SEDE_A, "lotes", loteId));
@@ -64,9 +65,13 @@ test("egreso: conflicto -- dos egresos simultáneos sobre el mismo lote cuya sum
   const { loteId } = await crearLoteDirecto(SEDE_A, FARM_ID, 5);
 
   await loguearComo(PERSONAS.tecnicoA);
+  // Cada intento con su propio operacionId: son dos operaciones concurrentes
+  // distintas (dos técnicos casi al mismo tiempo), no un reintento de la
+  // misma -- si compartieran operacionId, la idempotencia haría que el
+  // segundo sea un no-op silencioso en vez de rechazar por stock insuficiente.
   const intento = () => egresoTransaction({
     sedeId: SEDE_A, sedeNombre: NOMBRE_SEDE[SEDE_A], farm: FARM, loteId,
-    cantidad: 3, motivo: "Estudio", observacion: "", usuario: PERSONAS.tecnicoA,
+    cantidad: 3, motivo: "Estudio", observacion: "", usuario: PERSONAS.tecnicoA, operacionId: uid(),
   });
 
   const resultados = await Promise.allSettled([intento(), intento()]);
@@ -90,7 +95,7 @@ test("transferencia: descuenta en origen y acredita en destino, vinculados por g
   await transferenciaTransaction({
     sedeOrigenId: SEDE_A, sedeOrigenNombre: NOMBRE_SEDE[SEDE_A],
     sedeDestinoId: SEDE_B, sedeDestinoNombre: NOMBRE_SEDE[SEDE_B],
-    farm: FARM, loteId, cantidad: 3, observacion: "", usuario: PERSONAS.admin,
+    farm: FARM, loteId, cantidad: 3, observacion: "", usuario: PERSONAS.admin, operacionId: uid(),
   });
 
   const origenSnap = await getDoc(doc(db, "sedes", SEDE_A, "lotes", loteId));
@@ -117,10 +122,12 @@ test("transferencia: conflicto -- dos transferencias simultáneas desde el mismo
   await loguearComo(PERSONAS.admin);
   const { loteId } = await crearLoteDirecto(SEDE_A, FARM_ID, 5);
 
+  // Mismo motivo que en el conflicto de egreso: operacionId distinto por
+  // intento, porque son dos operaciones concurrentes, no un reintento.
   const intento = () => transferenciaTransaction({
     sedeOrigenId: SEDE_A, sedeOrigenNombre: NOMBRE_SEDE[SEDE_A],
     sedeDestinoId: SEDE_B, sedeDestinoNombre: NOMBRE_SEDE[SEDE_B],
-    farm: FARM, loteId, cantidad: 3, observacion: "", usuario: PERSONAS.admin,
+    farm: FARM, loteId, cantidad: 3, observacion: "", usuario: PERSONAS.admin, operacionId: uid(),
   });
 
   const resultados = await Promise.allSettled([intento(), intento()]);

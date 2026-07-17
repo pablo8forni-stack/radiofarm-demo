@@ -12,6 +12,7 @@ import {
 import { transferenciaTransaction } from "../../src/services/firestore/stock.js";
 import { anularTransferenciaTransaction } from "../../src/services/firestore/movimientos.js";
 import { FARMS_DEFAULT } from "../../src/constants/farmsSeed.js";
+import { uid } from "../../src/helpers/id.js";
 
 const FARM = FARMS_DEFAULT.find((f) => f.id === FARM_ID);
 const NOMBRE_SEDE = { [SEDE_A]: "FUESMEN Central", [SEDE_B]: "C. Gamma Hospital Italiano" };
@@ -25,7 +26,7 @@ async function crearTransferenciaDePrueba(cantidadInicial, cantidadTransferida) 
   await transferenciaTransaction({
     sedeOrigenId: SEDE_A, sedeOrigenNombre: NOMBRE_SEDE[SEDE_A],
     sedeDestinoId: SEDE_B, sedeDestinoNombre: NOMBRE_SEDE[SEDE_B],
-    farm: FARM, loteId, cantidad: cantidadTransferida, observacion: "", usuario: PERSONAS.admin,
+    farm: FARM, loteId, cantidad: cantidadTransferida, observacion: "", usuario: PERSONAS.admin, operacionId: uid(),
   });
   const origenSnap = await getDoc(doc(db, "sedes", SEDE_A, "lotes", loteId));
   const loteNum = origenSnap.data().lote;

@@ -37,6 +37,7 @@ import { Btn } from "./components/ui/Btn.jsx";
 import { Toast } from "./components/ui/Toast.jsx";
 import { signOutUser, listenSolicitudes } from "./services/auth.js";
 import { totStock, farmsDeSede, sedesActivas, idsSedesActivas, puntoReorden } from "./helpers/stock.js";
+import { hayOperacionCriticaEnCurso } from "./helpers/erroresRed.js";
 
 export default function App() {
   const { usuario, cargando } = useAuth();
@@ -65,6 +66,25 @@ function AppAutenticada({ usuario }) {
     if (!esAdmin) return;
     return listenSolicitudes((s) => setCountSolicitudes(s.length));
   }, [esAdmin]);
+
+  // Egreso/transferencia/anulación no fallan de forma confiable y rápida sin
+  // conexión (ver nota en helpers/erroresRed.js) -- si la señal vuelve
+  // mientras alguna de esas operaciones seguía en curso, no hay forma de
+  // saber desde acá si llegó a aplicarse antes del corte. El id de operación
+  // ya evita que un reintento la duplique; esto es sólo para avisar que
+  // convenga revisar el Historial ante la duda.
+  useEffect(() => {
+    function avisarReconexion() {
+      if (hayOperacionCriticaEnCurso()) {
+        setToast({
+          m: "Se restableció la conexión — revisá el Historial para confirmar que tu última operación se haya registrado.",
+          t: "info", d: 8000,
+        });
+      }
+    }
+    window.addEventListener("online", avisarReconexion);
+    return () => window.removeEventListener("online", avisarReconexion);
+  }, []);
 
   if (catalogo.cargando) return <PantallaCargando />;
 

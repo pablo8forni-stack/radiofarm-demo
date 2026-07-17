@@ -43,10 +43,10 @@ export function TablaInventario({ sedeId, catalogo, usuario, esAdmin, onToast })
     if (mostrarCarrito && carrito.length === 0) setMostrarCarrito(false);
   }, [carrito.length]);
 
-  async function handleEgreso({ loteId, cantidad, motivo, observacion }) {
+  async function handleEgreso({ loteId, cantidad, motivo, observacion, operacionId }) {
     const farm = mEgreso;
     try {
-      await egresoTransaction({ sedeId, sedeNombre, farm, loteId, cantidad, motivo, observacion, usuario });
+      await egresoTransaction({ sedeId, sedeNombre, farm, loteId, cantidad, motivo, observacion, usuario, operacionId });
       onToast(`Egreso: ${cantidad} vial${cantidad > 1 ? "es" : ""} de ${farm.nombre}`, "success", 6000);
       setMEgreso(null);
     } catch (e) {
@@ -112,13 +112,13 @@ export function TablaInventario({ sedeId, catalogo, usuario, esAdmin, onToast })
     carrito.filter((it) => it.estado !== "enviando").forEach(enviarItem);
   }
 
-  async function handleTransferencia({ loteId, cantidad, sedeDestino, observacion }) {
+  async function handleTransferencia({ loteId, cantidad, sedeDestino, observacion, operacionId }) {
     const farm = mTransf;
     const sedeDestNombre = catalogo.sedes[sedeDestino]?.nombre;
     try {
       await transferenciaTransaction({
         sedeOrigenId: sedeId, sedeOrigenNombre: sedeNombre, sedeDestinoId: sedeDestino, sedeDestinoNombre: sedeDestNombre,
-        farm, loteId, cantidad, observacion, usuario,
+        farm, loteId, cantidad, observacion, usuario, operacionId,
       });
       onToast(`Transferencia: ${cantidad} vial${cantidad > 1 ? "es" : ""} → ${sedeDestNombre}`, "info", 6000);
       setMTransf(null);
