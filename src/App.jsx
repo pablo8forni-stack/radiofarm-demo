@@ -59,6 +59,15 @@ function AppAutenticada({ usuario }) {
   const [toast, setToast] = useState(null);
   const esAdmin = usuario.rol === "admin";
   const [countSolicitudes, setCountSolicitudes] = useState(0);
+  const [navInventario, setNavInventario] = useState(null);
+
+  // Cambia a la vista Inventario y le pide mostrar una sede puntual --
+  // usado por "Ir a Inventario de X" en el modal de stock pendiente al
+  // archivar una sede (Configuración > Sedes activas).
+  function irAInventario(sedeId) {
+    setNavInventario({ sedeId, token: Date.now() });
+    setVista("inventario");
+  }
 
   // Sólo admin puede leer la colección completa de solicitudes (reglas de
   // Firestore) -- un técnico consultándola entera daría permission-denied.
@@ -166,11 +175,11 @@ function AppAutenticada({ usuario }) {
       </nav>
 
       <main className="max-w-5xl mx-auto px-4 py-6">
-        {vista === "inventario" && <VistaInventario catalogo={catalogo} usuario={usuario} esAdmin={esAdmin} onToast={(m, t, d) => setToast({ m, t, d })} />}
+        {vista === "inventario" && <VistaInventario catalogo={catalogo} usuario={usuario} esAdmin={esAdmin} onToast={(m, t, d) => setToast({ m, t, d })} navInventario={navInventario} />}
         {vista === "pedidos" && <VistaPedidos catalogo={catalogo} esAdmin={esAdmin} onToast={(m, t, d) => setToast({ m, t, d })} />}
         {vista === "historial" && <VistaHistorial catalogo={catalogo} usuario={usuario} esAdmin={esAdmin} onToast={(m, t, d) => setToast({ m, t, d })} />}
         {vista === "administracion" && <VistaAdministracion catalogo={catalogo} usuario={usuario} esAdmin={esAdmin} onToast={(m, t, d) => setToast({ m, t, d })} />}
-        {vista === "configuracion" && esAdmin && <VistaConfiguracion catalogo={catalogo} usuario={usuario} onToast={(m, t, d) => setToast({ m, t, d })} />}
+        {vista === "configuracion" && esAdmin && <VistaConfiguracion catalogo={catalogo} usuario={usuario} onToast={(m, t, d) => setToast({ m, t, d })} onIrAInventario={irAInventario} />}
       </main>
 
       {toast && <Toast msg={toast.m} type={toast.t || "success"} duracion={toast.d} onDone={() => setToast(null)} />}

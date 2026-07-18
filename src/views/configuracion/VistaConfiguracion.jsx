@@ -16,7 +16,7 @@ const TABS = [
   { id: "backup", label: "Backup" },
 ];
 
-export function VistaConfiguracion({ catalogo, usuario, onToast }) {
+export function VistaConfiguracion({ catalogo, usuario, onToast, onIrAInventario }) {
   const [tab, setTab] = useState("catalogo");
   const [roles, setRoles] = useState([]);
   const [solicitudes, setSolicitudes] = useState([]);
@@ -40,7 +40,7 @@ export function VistaConfiguracion({ catalogo, usuario, onToast }) {
       {tab === "catalogo" && <TabCatalogo catalogo={catalogo} onToast={onToast} />}
       {tab === "proveedores" && <TabProveedores catalogo={catalogo} onToast={onToast} />}
       {tab === "sedes" && <TabSedes catalogo={catalogo} onToast={onToast} />}
-      {tab === "activas" && <TabSedesActivas catalogo={catalogo} roles={roles} onToast={onToast} />}
+      {tab === "activas" && <TabSedesActivas catalogo={catalogo} roles={roles} onToast={onToast} onIrAInventario={onIrAInventario} />}
       {tab === "usuarios" && <TabUsuarios catalogo={catalogo} roles={roles} solicitudes={solicitudes} usuarioActual={usuario} onToast={onToast} />}
       {tab === "backup" && <TabBackup catalogo={catalogo} usuario={usuario} onToast={onToast} />}
     </div>

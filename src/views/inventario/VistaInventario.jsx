@@ -1,12 +1,22 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { PanelResumen } from "./PanelResumen.jsx";
 import { TablaInventario } from "./TablaInventario.jsx";
 import { totStock, farmsDeSede, sedesActivas, puntoReorden } from "../../helpers/stock.js";
 
-export function VistaInventario({ catalogo, usuario, esAdmin, onToast }) {
+// navInventario ({sedeId, token}) llega desde App.jsx cuando otra pantalla
+// (p. ej. "Ir a Inventario de X" en el modal de stock pendiente al archivar
+// una sede) pide mostrar una sede puntual acá. El token cambia en cada pedido
+// aunque sedeId se repita, para que el efecto dispare siempre -- si sólo
+// dependiera de sedeId, pedir la misma sede dos veces seguidas (con un
+// cambio de tab manual en el medio) no volvería a aplicarse.
+export function VistaInventario({ catalogo, usuario, esAdmin, onToast, navInventario }) {
   const sedesVisibles = esAdmin ? sedesActivas(catalogo) : sedesActivas(catalogo).filter((s) => s.id === usuario.sede);
   const [sedeActiva, setSedeActiva] = useState(usuario.sede);
   const countPedirSede = (sid) => farmsDeSede(catalogo, sid).filter((f) => totStock(catalogo.stock[sid]?.[f.id] || []) <= puntoReorden(catalogo, sid, f.id)).length;
+
+  useEffect(() => {
+    if (navInventario?.sedeId) setSedeActiva(navInventario.sedeId);
+  }, [navInventario]);
 
   return (
     <div className="flex flex-col gap-4">

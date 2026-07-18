@@ -3,12 +3,13 @@ import { Badge } from "../../components/ui/Badge.jsx";
 import { Btn } from "../../components/ui/Btn.jsx";
 import { Input } from "../../components/ui/Input.jsx";
 import { Modal } from "../../components/ui/Modal.jsx";
-import { idsSedesActivas, todasLasSedes, sedesArchivadas, totStock } from "../../helpers/stock.js";
+import { idsSedesActivas, todasLasSedes, sedesArchivadas, farmsDeSede, totStock } from "../../helpers/stock.js";
 import { toggleSedeActiva, addSede, updateSede, archivarSede, desarchivarSede } from "../../services/firestore/sedes.js";
 
-export function TabSedesActivas({ catalogo, roles, onToast }) {
+export function TabSedesActivas({ catalogo, roles, onToast, onIrAInventario }) {
   const [mNuevo, setMNuevo] = useState(false);
   const [mEditar, setMEditar] = useState(null);
+  const [mStockPendiente, setMStockPendiente] = useState(null);
   const [nombre, setNombre] = useState("");
   const [short, setShort] = useState("");
   const [mostrarArchivadas, setMostrarArchivadas] = useState(false);
@@ -56,7 +57,7 @@ export function TabSedesActivas({ catalogo, roles, onToast }) {
   async function archivar(sede) {
     if (sede.principal) { onToast("No se puede archivar la sede principal", "error"); return; }
     const conStock = (sede.farmIds || []).some((fid) => totStock(catalogo.stock[sede.id]?.[fid] || []) > 0);
-    if (conStock) { onToast("No se puede archivar: tiene stock cargado en esta sede", "error"); return; }
+    if (conStock) { setMStockPendiente(sede); return; }
     try {
       await archivarSede(sede.id);
       onToast(`${sede.short} archivada`);
@@ -64,6 +65,17 @@ export function TabSedesActivas({ catalogo, roles, onToast }) {
       onToast(e.message, "error");
     }
   }
+
+  function irAInventarioDeSede() {
+    onIrAInventario(mStockPendiente.id);
+    setMStockPendiente(null);
+  }
+
+  const farmsConStockPendiente = mStockPendiente
+    ? farmsDeSede(catalogo, mStockPendiente.id)
+        .map((f) => ({ ...f, stock: totStock(catalogo.stock[mStockPendiente.id]?.[f.id] || []) }))
+        .filter((f) => f.stock > 0)
+    : [];
 
   async function reactivar(sede) {
     try {
@@ -78,6 +90,8 @@ export function TabSedesActivas({ catalogo, roles, onToast }) {
     <div className="flex flex-col gap-4">
       <div className="bg-blue-50 border border-blue-100 rounded-xl px-4 py-3 text-xs text-blue-700">
         <span className="font-semibold">Modo piloto:</span> desactivá las sedes que aún no operan con la app. Las sedes desactivadas desaparecen del inventario, pedidos, historial y actas, pero <span className="font-semibold">sus datos se conservan intactos</span> y reaparecen al reactivarlas. La sede principal no se puede desactivar.
+        <br />
+        <span className="font-semibold">El interruptor es una pausa temporal y reversible.</span> Archivar es distinto — es una baja más definitiva que exige stock en cero — no lo uses para pausar una sede.
       </div>
 
       <div className="flex justify-end">
@@ -98,11 +112,21 @@ export function TabSedesActivas({ catalogo, roles, onToast }) {
               </div>
               <div className="flex items-center gap-3">
                 <Btn size="sm" variant="ghost" onClick={() => abrirEditar(s)}>Editar</Btn>
-                {!s.principal && <Btn size="sm" variant="ghost" onClick={() => archivar(s)}>Archivar</Btn>}
+                {!s.principal && (
+                  <Btn size="sm" variant="warning" onClick={() => archivar(s)} title="Baja de la sede — requiere stock en cero, no es lo mismo que desactivar">
+                    <span className="flex items-center gap-1">
+                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 8h14M5 8a2 2 0 01-2-2V5a2 2 0 012-2h14a2 2 0 012 2v1a2 2 0 01-2 2M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-7 4h0" />
+                      </svg>
+                      Archivar
+                    </span>
+                  </Btn>
+                )}
                 {s.principal ? (
                   <Badge color="blue">Siempre activa</Badge>
                 ) : (
-                  <button onClick={() => toggle(s)} className={`relative w-11 h-6 rounded-full transition-colors focus:outline-none ${activa ? "bg-blue-600" : "bg-gray-200"}`}>
+                  <button onClick={() => toggle(s)} title="Pausa temporal — oculta la sede sin perder datos, se puede reactivar en cualquier momento"
+                    className={`relative w-11 h-6 rounded-full transition-colors focus:outline-none ${activa ? "bg-blue-600" : "bg-gray-200"}`}>
                     <span className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform ${activa ? "translate-x-5" : "translate-x-0"}`} />
                   </button>
                 )}
@@ -136,6 +160,26 @@ export function TabSedesActivas({ catalogo, roles, onToast }) {
 
       <Modal open={!!mEditar} title={`Editar — ${mEditar?.nombre}`} onClose={() => setMEditar(null)} size="sm">
         <FormSede nombre={nombre} setNombre={setNombre} short={short} setShort={setShort} onConfirm={guardarEdicion} onCancel={() => setMEditar(null)} confirmLabel="Guardar cambios" />
+      </Modal>
+
+      <Modal open={!!mStockPendiente} title="No se puede archivar — stock pendiente" onClose={() => setMStockPendiente(null)} size="sm">
+        <div className="flex flex-col gap-4">
+          <div className="bg-red-50 border border-red-100 rounded-xl px-4 py-3 text-xs text-red-700">
+            <span className="font-bold">{mStockPendiente?.nombre}</span> todavía tiene stock activo en {farmsConStockPendiente.length} radiofármaco{farmsConStockPendiente.length !== 1 ? "s" : ""}. Antes de archivar la sede hay que dejar el stock en cero: transferí esos viales a otra sede activa (botón ⇄ Transf.) o registrá su egreso correspondiente.
+          </div>
+          <div className="flex flex-col gap-1.5">
+            {farmsConStockPendiente.map((f) => (
+              <div key={f.id} className="flex items-center justify-between px-3 py-2 bg-gray-50 rounded-xl text-sm">
+                <span className="text-gray-700">{f.nombre}</span>
+                <span className="font-bold text-gray-800">{f.stock} vial{f.stock !== 1 ? "es" : ""}</span>
+              </div>
+            ))}
+          </div>
+          <div className="flex gap-2 justify-end">
+            <Btn variant="outline" onClick={() => setMStockPendiente(null)}>Entendido</Btn>
+            <Btn variant="teal" onClick={irAInventarioDeSede}>Ir a Inventario de {mStockPendiente?.short}</Btn>
+          </div>
+        </div>
       </Modal>
     </div>
   );

@@ -7,6 +7,7 @@ export function Btn({ variant = "primary", size = "md", disabled, children, clas
     outline: "border border-gray-300 text-gray-700 hover:bg-gray-50",
     success: "bg-emerald-600 text-white hover:bg-emerald-700 shadow-sm",
     teal: "bg-teal-600 text-white hover:bg-teal-700 shadow-sm",
+    warning: "border border-amber-300 text-amber-700 hover:bg-amber-50",
   };
   const s = { sm: "px-3 py-1.5 text-xs", md: "px-4 py-2 text-sm", lg: "px-5 py-2.5 text-sm" };
   return (
