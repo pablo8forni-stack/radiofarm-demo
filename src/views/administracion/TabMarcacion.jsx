@@ -57,8 +57,11 @@ export function TabMarcacion({ catalogo, usuario, esAdmin, onToast }) {
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap gap-2 items-center justify-between">
-        <div className="flex gap-2 flex-wrap">
-          <Input type="date" value={filtroFecha} onChange={(e) => setFiltroFecha(e.target.value)} />
+        <div className="flex gap-2 flex-wrap items-center">
+          {filtroFecha && <Input type="date" value={filtroFecha} onChange={(e) => setFiltroFecha(e.target.value)} />}
+          <Btn size="sm" variant="outline" onClick={() => setFiltroFecha(filtroFecha ? "" : hoy())}>
+            {filtroFecha ? "Ver todos" : "Ver por fecha"}
+          </Btn>
           {esAdmin && (
             <Sel value={filtroSede} onChange={(e) => setFiltroSede(e.target.value)}>
               <option value="">Todas las sedes</option>
@@ -133,7 +136,11 @@ export function TabMarcacion({ catalogo, usuario, esAdmin, onToast }) {
             ))}
           </tbody>
         </table>
-        {actas.length === 0 && <div className="text-center py-12 text-gray-400 text-sm">No hay marcaciones para la fecha seleccionada.</div>}
+        {actas.length === 0 && (
+          <div className="text-center py-12 text-gray-400 text-sm">
+            {filtroFecha ? "No hay marcaciones para la fecha seleccionada." : "No hay marcaciones registradas."}
+          </div>
+        )}
       </div>
     </div>
   );

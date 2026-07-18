@@ -42,7 +42,7 @@ export function VistaConfiguracion({ catalogo, usuario, onToast }) {
       {tab === "sedes" && <TabSedes catalogo={catalogo} onToast={onToast} />}
       {tab === "activas" && <TabSedesActivas catalogo={catalogo} roles={roles} onToast={onToast} />}
       {tab === "usuarios" && <TabUsuarios catalogo={catalogo} roles={roles} solicitudes={solicitudes} usuarioActual={usuario} onToast={onToast} />}
-      {tab === "backup" && <TabBackup catalogo={catalogo} onToast={onToast} />}
+      {tab === "backup" && <TabBackup catalogo={catalogo} usuario={usuario} onToast={onToast} />}
     </div>
   );
 }

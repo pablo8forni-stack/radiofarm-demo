@@ -8,7 +8,7 @@ import { reautenticarConGoogle } from "../../services/auth.js";
 
 const PALABRA_CONFIRMACION = "RESTAURAR";
 
-export function TabBackup({ catalogo, onToast }) {
+export function TabBackup({ catalogo, usuario, onToast }) {
   const [exportando, setExportando] = useState(false);
   const [archivoPendiente, setArchivoPendiente] = useState(null);
   const [confirmacion, setConfirmacion] = useState("");
@@ -66,7 +66,7 @@ export function TabBackup({ catalogo, onToast }) {
         onToast("No se pudo verificar tu identidad con Google. Restauración cancelada.", "error");
         return;
       }
-      await importarBackup(archivoPendiente);
+      await importarBackup(archivoPendiente, usuario);
       onToast("Backup restaurado correctamente");
       setArchivoPendiente(null);
     } catch (e) {

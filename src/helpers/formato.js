@@ -1,4 +1,13 @@
-export const hoy = () => new Date().toISOString().slice(0, 10);
+// Fecha local del dispositivo en "YYYY-MM-DD" -- toISOString() convierte a
+// UTC antes de recortar, así que en Argentina (UTC-3) cualquier hora desde
+// las 21:00 en adelante ya cae en el día siguiente en UTC y desfasaba el
+// filtro de fecha default de Actas contra fmtFechaISO() de abajo, que sí
+// arma la fecha con componentes locales (getFullYear/getMonth/getDate).
+export const hoy = () => {
+  const d = new Date();
+  const y = d.getFullYear(), m = String(d.getMonth() + 1).padStart(2, "0"), day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+};
 
 export const fmtF = (iso) => {
   if (!iso) return "—";
@@ -35,3 +44,8 @@ export const slugify = (s) =>
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/(^-|-$)/g, "");
+
+// Mayúscula la primera letra de cada palabra (nombre y apellido en un mismo
+// campo) sin tocar el resto de lo tipeado -- no fuerza minúsculas, así no
+// pelea con apellidos que ya traen mayúsculas propias.
+export const capitalizarPalabras = (s) => s.replace(/(^|\s)\S/g, (c) => c.toUpperCase());

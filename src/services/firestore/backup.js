@@ -1,4 +1,4 @@
-import { collection, doc, getDocs, writeBatch } from "firebase/firestore";
+import { collection, doc, getDocs, serverTimestamp, writeBatch } from "firebase/firestore";
 import { db } from "../../firebase.js";
 import { descargarArchivo } from "../../helpers/descargarArchivo.js";
 import { hoy } from "../../helpers/formato.js";
@@ -53,7 +53,14 @@ async function commitEnBloques(operaciones) {
 // -- restaurar roles a ciegas podría dejar sin acceso a la persona que está
 // ejecutando la restauración. Los accesos se administran desde la pestaña
 // Usuarios, no desde el backup.
-export async function importarBackup(backup) {
+//
+// No se registra en `movimientos` -- esa colección es para movimiento físico
+// de viales, no acciones administrativas. En cambio, queda trazada en
+// `auditoria` como la ÚLTIMA operación del array `operaciones`: al ir en el
+// último bloque de commitEnBloques, sólo se escribe si todos los bloques
+// anteriores ya se aplicaron con éxito -- si el restore falla a mitad de
+// camino, el registro de auditoría nunca llega a existir.
+export async function importarBackup(backup, usuario) {
   if (!backup || backup.version !== VERSION) {
     throw new Error("El archivo de backup no es válido o es de una versión incompatible.");
   }
@@ -85,6 +92,24 @@ export async function importarBackup(backup) {
       operaciones.push({ tipo: "set", ref: doc(db, "sedes", sedeId, "lotes", id), data });
     });
   }
+
+  operaciones.push({
+    tipo: "set",
+    ref: doc(collection(db, "auditoria")),
+    data: {
+      fecha: serverTimestamp(),
+      tipo: "restauracion_backup",
+      usuarioNombre: usuario.nombre,
+      usuarioEmail: usuario.email,
+      detalle: {
+        backupExportadoEn: backup.exportadoEn || "",
+        backupVersion: backup.version,
+        farms: (backup.farms || []).length,
+        proveedores: (backup.proveedores || []).length,
+        sedes: Object.keys(backup.sedes || {}).length,
+      },
+    },
+  });
 
   await commitEnBloques(operaciones);
 }

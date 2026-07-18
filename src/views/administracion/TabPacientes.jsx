@@ -5,7 +5,7 @@ import { Input } from "../../components/ui/Input.jsx";
 import { Sel } from "../../components/ui/Sel.jsx";
 import { QRScanner } from "../../components/scanner/QRScanner.jsx";
 import { ESTUDIOS } from "../../constants/estudios.js";
-import { fmtF, fmtTs, fmtFechaISO, hoy } from "../../helpers/formato.js";
+import { fmtF, fmtTs, fmtFechaISO, hoy, capitalizarPalabras } from "../../helpers/formato.js";
 import { descargarArchivo } from "../../helpers/descargarArchivo.js";
 import { parseQR } from "../../helpers/qr.js";
 import { sedesActivas, farmsDeSede } from "../../helpers/stock.js";
@@ -85,8 +85,11 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap gap-2 items-center justify-between">
-        <div className="flex gap-2 flex-wrap">
-          <Input type="date" value={filtroFecha} onChange={(e) => setFiltroFecha(e.target.value)} />
+        <div className="flex gap-2 flex-wrap items-center">
+          {filtroFecha && <Input type="date" value={filtroFecha} onChange={(e) => setFiltroFecha(e.target.value)} />}
+          <Btn size="sm" variant="outline" onClick={() => setFiltroFecha(filtroFecha ? "" : hoy())}>
+            {filtroFecha ? "Ver todos" : "Ver por fecha"}
+          </Btn>
           {esAdmin && (
             <Sel value={filtroSede} onChange={(e) => setFiltroSede(e.target.value)}>
               <option value="">Todas las sedes</option>
@@ -117,7 +120,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
             </button>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <Input label="Apellido y nombre" value={nombre} onChange={(e) => setNombre(e.target.value)} placeholder="García Juan" />
+            <Input label="Apellido y nombre" value={nombre} onChange={(e) => setNombre(capitalizarPalabras(e.target.value))} placeholder="García Juan" />
             <Input label="DNI" value={dni} onChange={(e) => setDni(e.target.value)} placeholder="28456789" />
             <Input label="Peso (kg)" type="number" min={0} value={peso} onChange={(e) => setPeso(e.target.value)} placeholder="78" />
             <Input label="Talla (cm)" type="number" min={0} value={talla} onChange={(e) => setTalla(e.target.value)} placeholder="172" />
@@ -190,7 +193,11 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
             })}
           </tbody>
         </table>
-        {actas.length === 0 && <div className="text-center py-12 text-gray-400 text-sm">No hay registros para la fecha seleccionada.</div>}
+        {actas.length === 0 && (
+          <div className="text-center py-12 text-gray-400 text-sm">
+            {filtroFecha ? "No hay registros para la fecha seleccionada." : "No hay registros."}
+          </div>
+        )}
       </div>
 
       {mostrarQR && <QRScanner onResult={handleQRResult} onClose={() => setMostrarQR(false)} />}

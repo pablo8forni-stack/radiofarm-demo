@@ -131,5 +131,25 @@ service cloud.firestore {
       allow create: if tieneAcceso() && actaValida();
       allow update, delete: if false;
     }
+
+    function tiposAuditoria() {
+      return ['restauracion_backup'];
+    }
+
+    // Trazabilidad de acciones administrativas (hoy sólo restaurar backup)
+    // separada de `movimientos` -- esa colección es movimiento físico de
+    // viales, no acciones de configuración. Sólo un admin la lee o la crea
+    // (misma gente que puede ejecutar la acción que se está auditando);
+    // inmutable, igual que movimientos/actas.
+    function auditoriaValida() {
+      let d = request.resource.data;
+      return d.usuarioEmail == request.auth.token.email && d.tipo in tiposAuditoria();
+    }
+
+    match /auditoria/{id} {
+      allow read: if isAdmin();
+      allow create: if isAdmin() && auditoriaValida();
+      allow update, delete: if false;
+    }
   }
 }
