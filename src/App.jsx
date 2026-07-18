@@ -137,7 +137,7 @@ function AppAutenticada({ usuario }) {
               <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold text-white ${esAdmin ? "bg-purple-500" : "bg-blue-500"}`}>{usuario.initial}</div>
               <div className="hidden sm:block">
                 <div className="text-xs font-semibold text-gray-700 leading-tight">{usuario.nombre}</div>
-                <div className="text-xs leading-tight"><Badge color={esAdmin ? "purple" : "blue"}>{esAdmin ? "Encargada" : "Técnico"}</Badge></div>
+                <div className="text-xs leading-tight"><Badge color={esAdmin ? "purple" : "blue"}>{esAdmin ? "Responsable" : "Técnico"}</Badge></div>
               </div>
               <button onClick={() => signOutUser()} className="text-gray-400 hover:text-red-500 p-1.5 rounded-lg hover:bg-red-50 transition">
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -216,7 +216,7 @@ function PantallaSedeNoHabilitada({ usuario, nombreSede }) {
         </div>
         <h2 className="text-base font-bold text-gray-800 mb-2">Sede no habilitada</h2>
         <p className="text-sm text-gray-500 mb-6">
-          {nombreSede} aún no está operando con RadioFarm. Consultá con la encargada de radiofarmacia.
+          {nombreSede} aún no está operando con RadioFarm. Consultá con el responsable de radiofarmacia.
         </p>
         <Btn variant="outline" onClick={() => signOutUser()}>Volver al inicio</Btn>
       </div>

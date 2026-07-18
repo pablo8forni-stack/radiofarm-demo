@@ -31,7 +31,7 @@ export const MENSAJE_CONTINGENCIA =
   "Sin conexión. Este movimiento no se pudo registrar en el sistema — anotalo en la planilla de papel de contingencia y cargalo en RadioFarm apenas vuelva la conexión.";
 
 export const MENSAJE_PERMISO =
-  "No se pudo registrar: tu usuario no tiene permiso para esta operación. Anotalo en la planilla de papel de contingencia y avisá a la encargada de radiofarmacia.";
+  "No se pudo registrar: tu usuario no tiene permiso para esta operación. Anotalo en la planilla de papel de contingencia y avisá al responsable de radiofarmacia.";
 
 export const MENSAJE_CONTENCION =
   "No se pudo registrar por mucha actividad al mismo tiempo sobre este lote. Esperá unos segundos y probá de nuevo; si vuelve a fallar, anotalo en la planilla de papel de contingencia.";

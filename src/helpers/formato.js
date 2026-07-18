@@ -49,3 +49,19 @@ export const slugify = (s) =>
 // campo) sin tocar el resto de lo tipeado -- no fuerza minúsculas, así no
 // pelea con apellidos que ya traen mayúsculas propias.
 export const capitalizarPalabras = (s) => s.replace(/(^|\s)\S/g, (c) => c.toUpperCase());
+
+// Agrupa una lista YA ordenada (no reordena nada) en bloques por fecha,
+// insertando un separador cada vez que la fecha cambia respecto al item
+// anterior -- pensado para listas que ya vienen ordenadas por fecha desde
+// Firestore (ver listenActas), donde alcanza con detectar el cambio en un
+// solo recorrido en vez de volver a agrupar/ordenar todo.
+export const agruparPorFecha = (items, fechaDe) => {
+  const grupos = [];
+  for (const item of items) {
+    const f = fechaDe(item);
+    const ultimo = grupos[grupos.length - 1];
+    if (!ultimo || ultimo.fecha !== f) grupos.push({ fecha: f, items: [item] });
+    else ultimo.items.push(item);
+  }
+  return grupos;
+};

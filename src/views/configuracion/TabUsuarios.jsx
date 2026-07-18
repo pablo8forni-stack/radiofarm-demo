@@ -115,7 +115,7 @@ export function TabUsuarios({ catalogo, roles, solicitudes, usuarioActual, onToa
               <tr key={r.email} className="border-b border-gray-50 last:border-0 hover:bg-gray-50/30">
                 <td className="px-4 py-3 font-semibold text-gray-800 text-sm">{r.nombre}</td>
                 <td className="px-4 py-3 text-xs text-gray-500 font-mono">{r.email}</td>
-                <td className="px-4 py-3 text-center"><Badge color={r.rol === "admin" ? "purple" : "blue"}>{r.rol === "admin" ? "Encargada" : "Técnico"}</Badge></td>
+                <td className="px-4 py-3 text-center"><Badge color={r.rol === "admin" ? "purple" : "blue"}>{r.rol === "admin" ? "Responsable" : "Técnico"}</Badge></td>
                 <td className="px-4 py-3 text-center text-xs text-gray-600">{catalogo.sedes[r.sede]?.short || r.sede}</td>
                 <td className="px-4 py-3">
                   <div className="flex gap-1.5 justify-end">
@@ -136,7 +136,7 @@ export function TabUsuarios({ catalogo, roles, solicitudes, usuarioActual, onToa
           <Input label="Nombre" value={form.nombre} onChange={(e) => setForm((f) => ({ ...f, nombre: e.target.value }))} placeholder="Carlos T." />
           <Sel label="Rol" value={form.rol} onChange={(e) => setForm((f) => ({ ...f, rol: e.target.value }))}>
             <option value="tecnico">Técnico</option>
-            <option value="admin">Encargada (admin)</option>
+            <option value="admin">Responsable (admin)</option>
           </Sel>
           <Sel label="Sede" value={form.sede} onChange={(e) => setForm((f) => ({ ...f, sede: e.target.value }))}>
             {sedes.map((s) => <option key={s.id} value={s.id}>{s.nombre}</option>)}

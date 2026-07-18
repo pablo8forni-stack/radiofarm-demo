@@ -3,7 +3,7 @@ import { Badge } from "../../components/ui/Badge.jsx";
 import { Btn } from "../../components/ui/Btn.jsx";
 import { Input } from "../../components/ui/Input.jsx";
 import { Sel } from "../../components/ui/Sel.jsx";
-import { fmtF, fmtTs, fmtFechaISO, hoy } from "../../helpers/formato.js";
+import { fmtF, fmtTs, fmtFechaISO, hoy, agruparPorFecha } from "../../helpers/formato.js";
 import { descargarArchivo } from "../../helpers/descargarArchivo.js";
 import { sedesActivas, farmsDeSede } from "../../helpers/stock.js";
 import { listenActas, addActaMarcacion } from "../../services/firestore/actas.js";
@@ -39,6 +39,27 @@ export function TabMarcacion({ catalogo, usuario, esAdmin, onToast }) {
     () => actasTodas.filter((a) => (!filtroFecha || fmtFechaISO(a.fecha) === filtroFecha) && (!filtroSede || a.sedeId === filtroSede)),
     [actasTodas, filtroFecha, filtroSede]
   );
+
+  // Sólo se agrupa por fecha en "Ver todos" -- con un día ya filtrado, todos
+  // los registros mostrados comparten fecha y un separador no aportaría nada.
+  const grupos = useMemo(
+    () => (filtroFecha ? null : agruparPorFecha(actas, (a) => fmtFechaISO(a.fecha))),
+    [actas, filtroFecha]
+  );
+
+  function filaMarcacion(a) {
+    return (
+      <tr key={a.id} className="border-b border-gray-50 last:border-0 hover:bg-gray-50/30">
+        <td className="px-3 py-2.5 text-xs text-gray-500 whitespace-nowrap">{fmtTs(a.fecha).split(" ")[1] || ""}</td>
+        <td className="px-3 py-2.5 text-xs text-gray-600">{catalogo.sedes[a.sedeId]?.short || "—"}</td>
+        <td className="px-3 py-2.5 text-xs font-semibold text-gray-800">{a.farmNombre}</td>
+        <td className="px-3 py-2.5 text-xs font-mono text-gray-500">{a.lote || "—"}</td>
+        <td className="px-3 py-2.5"><span className="font-bold text-blue-700 text-sm">{a.mciMarcacion}</span><span className="text-xs text-gray-400 ml-1">mCi</span></td>
+        <td className="px-3 py-2.5 text-xs text-gray-500">{a.usuarioNombre}</td>
+        <td className="px-3 py-2.5 text-xs text-gray-400 italic">{a.observacion || "—"}</td>
+      </tr>
+    );
+  }
 
   function exportarCSV() {
     const filas = [
@@ -123,17 +144,16 @@ export function TabMarcacion({ catalogo, usuario, esAdmin, onToast }) {
             </tr>
           </thead>
           <tbody>
-            {actas.map((a) => (
-              <tr key={a.id} className="border-b border-gray-50 last:border-0 hover:bg-gray-50/30">
-                <td className="px-3 py-2.5 text-xs text-gray-500 whitespace-nowrap">{fmtTs(a.fecha).split(" ")[1] || ""}</td>
-                <td className="px-3 py-2.5 text-xs text-gray-600">{catalogo.sedes[a.sedeId]?.short || "—"}</td>
-                <td className="px-3 py-2.5 text-xs font-semibold text-gray-800">{a.farmNombre}</td>
-                <td className="px-3 py-2.5 text-xs font-mono text-gray-500">{a.lote || "—"}</td>
-                <td className="px-3 py-2.5"><span className="font-bold text-blue-700 text-sm">{a.mciMarcacion}</span><span className="text-xs text-gray-400 ml-1">mCi</span></td>
-                <td className="px-3 py-2.5 text-xs text-gray-500">{a.usuarioNombre}</td>
-                <td className="px-3 py-2.5 text-xs text-gray-400 italic">{a.observacion || "—"}</td>
-              </tr>
-            ))}
+            {grupos
+              ? grupos.flatMap((g) => [
+                  <tr key={`sep-${g.fecha}`} className="bg-gray-50">
+                    <td colSpan={7} className="px-3 py-2 text-xs font-bold text-gray-600 uppercase tracking-wide">
+                      {fmtF(g.fecha)} <span className="font-normal text-gray-400 normal-case">· {g.items.length} registro{g.items.length !== 1 ? "s" : ""}</span>
+                    </td>
+                  </tr>,
+                  ...g.items.map(filaMarcacion),
+                ])
+              : actas.map(filaMarcacion)}
           </tbody>
         </table>
         {actas.length === 0 && (

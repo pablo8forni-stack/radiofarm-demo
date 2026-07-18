@@ -5,7 +5,7 @@ import { Input } from "../../components/ui/Input.jsx";
 import { Sel } from "../../components/ui/Sel.jsx";
 import { QRScanner } from "../../components/scanner/QRScanner.jsx";
 import { ESTUDIOS } from "../../constants/estudios.js";
-import { fmtF, fmtTs, fmtFechaISO, hoy, capitalizarPalabras } from "../../helpers/formato.js";
+import { fmtF, fmtTs, fmtFechaISO, hoy, capitalizarPalabras, agruparPorFecha } from "../../helpers/formato.js";
 import { descargarArchivo } from "../../helpers/descargarArchivo.js";
 import { parseQR } from "../../helpers/qr.js";
 import { sedesActivas, farmsDeSede } from "../../helpers/stock.js";
@@ -65,7 +65,37 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
     [actasTodas, filtroFecha, filtroSede]
   );
 
+  // Sólo se agrupa por fecha en "Ver todos" -- con un día ya filtrado, todos
+  // los registros mostrados comparten fecha y un separador no aportaría nada.
+  const grupos = useMemo(
+    () => (filtroFecha ? null : agruparPorFecha(actas, (a) => fmtFechaISO(a.fecha))),
+    [actas, filtroFecha]
+  );
+
   const lotesDisp = (catalogo.stock[sedeId]?.[farmId] || []).filter((l) => l.cantidad > 0);
+
+  function filaPaciente(a) {
+    return (
+      <tr key={a.id} className="border-b border-gray-50 last:border-0 hover:bg-gray-50/30">
+        <td className="px-3 py-2.5 text-xs text-gray-500 whitespace-nowrap">{fmtTs(a.fecha).split(" ")[1] || ""}</td>
+        <td className="px-3 py-2.5 font-semibold text-gray-800 text-xs">
+          {a.pacienteNombre}
+          {(a.peso || a.talla) && <div className="text-xs font-normal text-gray-400">{a.peso && `${a.peso}kg`}{a.talla && ` · ${a.talla}cm`}</div>}
+        </td>
+        <td className="px-3 py-2.5 text-xs font-mono text-gray-500">{a.pacienteDni}</td>
+        <td className="px-3 py-2.5 text-xs text-gray-700">{a.estudio}</td>
+        <td className="px-3 py-2.5 text-xs text-gray-700">
+          {a.farmNombre || "—"}
+          {a.lote && <div className="text-xs text-gray-400 font-mono">{a.lote}</div>}
+        </td>
+        <td className="px-3 py-2.5">
+          <span className="font-bold text-blue-700 text-sm">{a.mciAdministrados}</span>
+          <span className="text-xs text-gray-400 ml-1">mCi</span>
+        </td>
+        <td className="px-3 py-2.5 text-xs text-gray-500">{a.usuarioNombre}</td>
+      </tr>
+    );
+  }
 
   function exportarCSV() {
     const filas = [
@@ -169,28 +199,16 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
             </tr>
           </thead>
           <tbody>
-            {actas.map((a) => {
-              return (
-                <tr key={a.id} className="border-b border-gray-50 last:border-0 hover:bg-gray-50/30">
-                  <td className="px-3 py-2.5 text-xs text-gray-500 whitespace-nowrap">{fmtTs(a.fecha).split(" ")[1] || ""}</td>
-                  <td className="px-3 py-2.5 font-semibold text-gray-800 text-xs">
-                    {a.pacienteNombre}
-                    {(a.peso || a.talla) && <div className="text-xs font-normal text-gray-400">{a.peso && `${a.peso}kg`}{a.talla && ` · ${a.talla}cm`}</div>}
-                  </td>
-                  <td className="px-3 py-2.5 text-xs font-mono text-gray-500">{a.pacienteDni}</td>
-                  <td className="px-3 py-2.5 text-xs text-gray-700">{a.estudio}</td>
-                  <td className="px-3 py-2.5 text-xs text-gray-700">
-                    {a.farmNombre || "—"}
-                    {a.lote && <div className="text-xs text-gray-400 font-mono">{a.lote}</div>}
-                  </td>
-                  <td className="px-3 py-2.5">
-                    <span className="font-bold text-blue-700 text-sm">{a.mciAdministrados}</span>
-                    <span className="text-xs text-gray-400 ml-1">mCi</span>
-                  </td>
-                  <td className="px-3 py-2.5 text-xs text-gray-500">{a.usuarioNombre}</td>
-                </tr>
-              );
-            })}
+            {grupos
+              ? grupos.flatMap((g) => [
+                  <tr key={`sep-${g.fecha}`} className="bg-gray-50">
+                    <td colSpan={7} className="px-3 py-2 text-xs font-bold text-gray-600 uppercase tracking-wide">
+                      {fmtF(g.fecha)} <span className="font-normal text-gray-400 normal-case">· {g.items.length} registro{g.items.length !== 1 ? "s" : ""}</span>
+                    </td>
+                  </tr>,
+                  ...g.items.map(filaPaciente),
+                ])
+              : actas.map(filaPaciente)}
           </tbody>
         </table>
         {actas.length === 0 && (
