@@ -9,7 +9,7 @@ import { fmtF, fmtTs, fmtFechaISO, hoy, capitalizarPalabras, agruparPorFecha } f
 import { descargarArchivo } from "../../helpers/descargarArchivo.js";
 import { parseQR } from "../../helpers/qr.js";
 import { sedesActivas, farmsDeSede } from "../../helpers/stock.js";
-import { listenActas, addActaPaciente } from "../../services/firestore/actas.js";
+import { listenActas, addActaPaciente, actasPorRango } from "../../services/firestore/actas.js";
 
 export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
   const [actasTodas, setActasTodas] = useState([]);
@@ -17,6 +17,9 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
   const [mostrarQR, setMostrarQR] = useState(false);
   const [filtroFecha, setFiltroFecha] = useState(hoy());
   const [filtroSede, setFiltroSede] = useState(usuario.sede);
+  const [rangoDesde, setRangoDesde] = useState("");
+  const [rangoHasta, setRangoHasta] = useState("");
+  const [exportandoRango, setExportandoRango] = useState(false);
 
   const [nombre, setNombre] = useState(""); const [dni, setDni] = useState("");
   const [peso, setPeso] = useState(""); const [talla, setTalla] = useState("");
@@ -25,7 +28,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
   const [obs, setObs] = useState("");
   const [sedeId, setSedeId] = useState(usuario.sede);
 
-  useEffect(() => listenActas("paciente", setActasTodas), []);
+  useEffect(() => listenActas("paciente", setActasTodas, { esAdmin, sedeId: usuario.sede }), []);
 
   function handleQRResult(raw) {
     setMostrarQR(false);
@@ -97,19 +100,45 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
     );
   }
 
-  function exportarCSV() {
+  function filaCSV(a) {
+    const d = a.fecha?.toDate ? a.fecha.toDate() : new Date(a.fecha);
+    return [d.toLocaleDateString("es-AR"), d.toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" }),
+      a.sedeNombre, a.pacienteNombre, a.pacienteDni, a.peso, a.talla, a.estudio, a.farmNombre || "—", a.lote || "—",
+      a.mciAdministrados, a.usuarioNombre, a.observacion || "—"];
+  }
+
+  function descargarCSV(lista, nombreArchivo) {
     const filas = [
       ["Fecha", "Hora", "Sede", "Paciente", "DNI", "Peso (kg)", "Talla (cm)", "Estudio", "Radiofármaco", "Lote", "mCi administrados", "Técnico", "Observación"],
-      ...actas.map((a) => {
-        const d = a.fecha?.toDate ? a.fecha.toDate() : new Date(a.fecha);
-        return [d.toLocaleDateString("es-AR"), d.toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" }),
-          a.sedeNombre, a.pacienteNombre, a.pacienteDni, a.peso, a.talla, a.estudio, a.farmNombre || "—", a.lote || "—",
-          a.mciAdministrados, a.usuarioNombre, a.observacion || "—"];
-      }),
+      ...lista.map(filaCSV),
     ];
     const csv = filas.map((r) => r.map((x) => String(x).replace(/[\t\r\n]/g, " ")).join("\t")).join("\r\n");
-    descargarArchivo(csv, `libro2_pacientes_${filtroFecha || hoy()}.csv`, "text/csv;charset=utf-8");
+    descargarArchivo(csv, nombreArchivo, "text/csv;charset=utf-8");
+  }
+
+  function exportarCSV() {
+    descargarCSV(actas, `libro2_pacientes_${filtroFecha || hoy()}.csv`);
     onToast("Libro 2 exportado");
+  }
+
+  // Ver nota equivalente en TabMarcacion.jsx: el listener de pantalla está
+  // limitado a PAGINA (150), insuficiente para una auditoría de un período
+  // largo -- este es un getDocs aparte, sin ese límite, por rango de fechas.
+  async function exportarRango() {
+    if (!rangoDesde || !rangoHasta) return;
+    setExportandoRango(true);
+    try {
+      const registros = await actasPorRango("paciente", {
+        desde: rangoDesde, hasta: rangoHasta, esAdmin, sedeId: esAdmin ? (filtroSede || null) : usuario.sede,
+      });
+      if (!registros.length) { onToast("No hay registros en ese rango", "error"); return; }
+      descargarCSV(registros, `libro2_pacientes_${rangoDesde}_a_${rangoHasta}.csv`);
+      onToast(`Libro 2 exportado: ${registros.length} registro${registros.length !== 1 ? "s" : ""}`);
+    } catch (e) {
+      onToast(e.message || "No se pudo exportar el rango", "error");
+    } finally {
+      setExportandoRango(false);
+    }
   }
 
   return (
@@ -127,8 +156,19 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
             </Sel>
           )}
         </div>
-        <div className="flex gap-2">
-          {actas.length > 0 && <Btn size="sm" variant="outline" onClick={exportarCSV}>↓ CSV</Btn>}
+        <div className="flex gap-2 flex-wrap items-center">
+          {filtroFecha ? (
+            actas.length > 0 && <Btn size="sm" variant="outline" onClick={exportarCSV}>↓ CSV</Btn>
+          ) : (
+            <>
+              <Input type="date" value={rangoDesde} onChange={(e) => setRangoDesde(e.target.value)} />
+              <span className="text-xs text-gray-400">a</span>
+              <Input type="date" value={rangoHasta} onChange={(e) => setRangoHasta(e.target.value)} />
+              <Btn size="sm" variant="outline" onClick={exportarRango} disabled={!rangoDesde || !rangoHasta || exportandoRango}>
+                {exportandoRango ? "Exportando..." : "↓ CSV por rango"}
+              </Btn>
+            </>
+          )}
           <Btn size="sm" variant="primary" onClick={() => setMostrarQR(true)}>
             <span className="flex items-center gap-1.5">
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">

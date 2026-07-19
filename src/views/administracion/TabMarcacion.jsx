@@ -6,19 +6,22 @@ import { Sel } from "../../components/ui/Sel.jsx";
 import { fmtF, fmtTs, fmtFechaISO, hoy, agruparPorFecha } from "../../helpers/formato.js";
 import { descargarArchivo } from "../../helpers/descargarArchivo.js";
 import { sedesActivas, farmsDeSede } from "../../helpers/stock.js";
-import { listenActas, addActaMarcacion } from "../../services/firestore/actas.js";
+import { listenActas, addActaMarcacion, actasPorRango } from "../../services/firestore/actas.js";
 
 export function TabMarcacion({ catalogo, usuario, esAdmin, onToast }) {
   const [actasTodas, setActasTodas] = useState([]);
   const [mostrarForm, setMostrarForm] = useState(false);
   const [filtroFecha, setFiltroFecha] = useState(hoy());
   const [filtroSede, setFiltroSede] = useState(usuario.sede);
+  const [rangoDesde, setRangoDesde] = useState("");
+  const [rangoHasta, setRangoHasta] = useState("");
+  const [exportandoRango, setExportandoRango] = useState(false);
 
   const [farmId, setFarmId] = useState(""); const [lote, setLote] = useState("");
   const [mciMarcacion, setMciMarcacion] = useState(""); const [obs, setObs] = useState("");
   const [sedeId, setSedeId] = useState(usuario.sede);
 
-  useEffect(() => listenActas("marcacion", setActasTodas), []);
+  useEffect(() => listenActas("marcacion", setActasTodas, { esAdmin, sedeId: usuario.sede }), []);
 
   const lotesDisp = (catalogo.stock[sedeId]?.[farmId] || []).filter((l) => l.cantidad > 0);
 
@@ -61,18 +64,42 @@ export function TabMarcacion({ catalogo, usuario, esAdmin, onToast }) {
     );
   }
 
-  function exportarCSV() {
-    const filas = [
-      ["Fecha", "Hora", "Sede", "Radiofármaco", "Lote", "mCi marcación", "Técnico", "Observación"],
-      ...actas.map((a) => {
-        const d = a.fecha?.toDate ? a.fecha.toDate() : new Date(a.fecha);
-        return [d.toLocaleDateString("es-AR"), d.toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" }),
-          a.sedeNombre, a.farmNombre, a.lote || "—", a.mciMarcacion, a.usuarioNombre, a.observacion || "—"];
-      }),
-    ];
+  function filaCSV(a) {
+    const d = a.fecha?.toDate ? a.fecha.toDate() : new Date(a.fecha);
+    return [d.toLocaleDateString("es-AR"), d.toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" }),
+      a.sedeNombre, a.farmNombre, a.lote || "—", a.mciMarcacion, a.usuarioNombre, a.observacion || "—"];
+  }
+
+  function descargarCSV(lista, nombreArchivo) {
+    const filas = [["Fecha", "Hora", "Sede", "Radiofármaco", "Lote", "mCi marcación", "Técnico", "Observación"], ...lista.map(filaCSV)];
     const csv = filas.map((r) => r.map((x) => String(x).replace(/[\t\r\n]/g, " ")).join("\t")).join("\r\n");
-    descargarArchivo(csv, `libro1_marcacion_${filtroFecha || hoy()}.csv`, "text/csv;charset=utf-8");
+    descargarArchivo(csv, nombreArchivo, "text/csv;charset=utf-8");
+  }
+
+  function exportarCSV() {
+    descargarCSV(actas, `libro1_marcacion_${filtroFecha || hoy()}.csv`);
     onToast("Libro 1 exportado");
+  }
+
+  // Sólo disponible en "Ver todos": el listener de pantalla está limitado a
+  // PAGINA (150) para no cargar la vista, insuficiente para una auditoría ARN
+  // de un período largo -- esto hace una consulta aparte, sin ese límite,
+  // acotada al rango de fechas elegido.
+  async function exportarRango() {
+    if (!rangoDesde || !rangoHasta) return;
+    setExportandoRango(true);
+    try {
+      const registros = await actasPorRango("marcacion", {
+        desde: rangoDesde, hasta: rangoHasta, esAdmin, sedeId: esAdmin ? (filtroSede || null) : usuario.sede,
+      });
+      if (!registros.length) { onToast("No hay marcaciones en ese rango", "error"); return; }
+      descargarCSV(registros, `libro1_marcacion_${rangoDesde}_a_${rangoHasta}.csv`);
+      onToast(`Libro 1 exportado: ${registros.length} registro${registros.length !== 1 ? "s" : ""}`);
+    } catch (e) {
+      onToast(e.message || "No se pudo exportar el rango", "error");
+    } finally {
+      setExportandoRango(false);
+    }
   }
 
   return (
@@ -90,8 +117,19 @@ export function TabMarcacion({ catalogo, usuario, esAdmin, onToast }) {
             </Sel>
           )}
         </div>
-        <div className="flex gap-2">
-          {actas.length > 0 && <Btn size="sm" variant="outline" onClick={exportarCSV}>↓ CSV</Btn>}
+        <div className="flex gap-2 flex-wrap items-center">
+          {filtroFecha ? (
+            actas.length > 0 && <Btn size="sm" variant="outline" onClick={exportarCSV}>↓ CSV</Btn>
+          ) : (
+            <>
+              <Input type="date" value={rangoDesde} onChange={(e) => setRangoDesde(e.target.value)} />
+              <span className="text-xs text-gray-400">a</span>
+              <Input type="date" value={rangoHasta} onChange={(e) => setRangoHasta(e.target.value)} />
+              <Btn size="sm" variant="outline" onClick={exportarRango} disabled={!rangoDesde || !rangoHasta || exportandoRango}>
+                {exportandoRango ? "Exportando..." : "↓ CSV por rango"}
+              </Btn>
+            </>
+          )}
           <Btn size="sm" variant="primary" onClick={() => setMostrarForm(true)}>+ Registrar marcación</Btn>
         </div>
       </div>

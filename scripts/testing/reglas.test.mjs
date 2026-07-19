@@ -5,8 +5,11 @@
 // restrictiva de lo debido.
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { collection, addDoc, serverTimestamp } from "firebase/firestore";
-import { PERSONAS, SEDE_A, SEDE_B, FARM_ID, db, loguearComo, prepararFixturesGlobales, loteDePrueba, cerrarConexiones } from "./fixtures.mjs";
+import { collection, addDoc, doc, getDoc, updateDoc, serverTimestamp } from "firebase/firestore";
+import {
+  PERSONAS, SEDE_A, SEDE_B, FARM_ID, db, loguearComo, prepararFixturesGlobales, loteDePrueba, cerrarConexiones,
+  crearLoteDirecto, borrarLote,
+} from "./fixtures.mjs";
 
 before(async () => { await prepararFixturesGlobales(); });
 after(cerrarConexiones);
@@ -103,4 +106,85 @@ test("control positivo: admin SÍ puede crear ingreso y anulación directo", asy
   await addDoc(collection(db, "movimientos"), movimientoBase({
     tipo: "anulacion", anulaId: "x", usuarioEmail: PERSONAS.admin.email, usuarioNombre: PERSONAS.admin.nombre,
   }));
+});
+
+// Auditoría de seguridad: la regla de lotes no validaba contenido -- un
+// técnico con su propia sesión (sin pasar por la UI) podía subir `cantidad`
+// (crear stock de la nada) o cambiar lote/vencimiento/farmId de un lote
+// existente. Estos tests ejercitan la regla directo con updateDoc, sin pasar
+// por egresoTransaction, para aislar la regla en sí de la lógica de la app.
+test("técnico NO puede subir la cantidad de un lote directamente", async () => {
+  await loguearComo(PERSONAS.admin);
+  const { loteId, ref } = await crearLoteDirecto(SEDE_A, FARM_ID, 5);
+
+  await loguearComo(PERSONAS.tecnicoA);
+  await assertPermissionDenied(() => updateDoc(ref, { cantidad: 6 }));
+
+  await loguearComo(PERSONAS.admin);
+  await borrarLote(SEDE_A, loteId);
+});
+
+test("técnico NO puede cambiar farmId/lote/vencimiento de un lote (aunque la cantidad baje)", async () => {
+  await loguearComo(PERSONAS.admin);
+  const { loteId, ref } = await crearLoteDirecto(SEDE_A, FARM_ID, 5);
+
+  await loguearComo(PERSONAS.tecnicoA);
+  await assertPermissionDenied(() => updateDoc(ref, { cantidad: 3, lote: "OTRO-LOTE" }));
+  await assertPermissionDenied(() => updateDoc(ref, { vencimiento: "2099-01-01" }));
+
+  await loguearComo(PERSONAS.admin);
+  await borrarLote(SEDE_A, loteId);
+});
+
+test("control positivo: técnico SÍ puede bajar la cantidad de un lote de su sede (egreso directo)", async () => {
+  await loguearComo(PERSONAS.admin);
+  const { loteId, ref } = await crearLoteDirecto(SEDE_A, FARM_ID, 5);
+
+  await loguearComo(PERSONAS.tecnicoA);
+  await updateDoc(ref, { cantidad: 3 });
+  const snap = await getDoc(ref);
+  assert.equal(snap.data().cantidad, 3);
+
+  await loguearComo(PERSONAS.admin);
+  await borrarLote(SEDE_A, loteId);
+});
+
+test("control positivo: admin SÍ puede subir la cantidad de un lote (anulación/transferencia)", async () => {
+  await loguearComo(PERSONAS.admin);
+  const { loteId, ref } = await crearLoteDirecto(SEDE_A, FARM_ID, 5);
+  await updateDoc(ref, { cantidad: 8 });
+  const snap = await getDoc(ref);
+  assert.equal(snap.data().cantidad, 8);
+  await borrarLote(SEDE_A, loteId);
+});
+
+// Auditoría de seguridad: las actas tienen nombre/DNI de pacientes (Libro 2)
+// -- Ley 25.326. Antes cualquier técnico autenticado podía leer actas de
+// CUALQUIER sede con su propia sesión (la regla vieja sólo pedía tieneAcceso()).
+function actaBase(overrides = {}) {
+  return { tipo: "marcacion", fecha: serverTimestamp(), farmId: FARM_ID, lote: loteDePrueba(), mciMarcacion: 10, ...overrides };
+}
+
+test("técnico NO puede leer un acta de otra sede", async () => {
+  await loguearComo(PERSONAS.tecnicoA); // sede central
+  const actaRef = await addDoc(collection(db, "actas"), actaBase({ sedeId: SEDE_A, usuarioEmail: PERSONAS.tecnicoA.email }));
+
+  await loguearComo(PERSONAS.tecnicoB); // sede italiano
+  await assertPermissionDenied(() => getDoc(actaRef));
+});
+
+test("control positivo: técnico SÍ puede leer un acta de su propia sede", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  const actaRef = await addDoc(collection(db, "actas"), actaBase({ sedeId: SEDE_A, usuarioEmail: PERSONAS.tecnicoA.email }));
+  const snap = await getDoc(actaRef);
+  assert.ok(snap.exists());
+});
+
+test("control positivo: admin SÍ puede leer actas de cualquier sede", async () => {
+  await loguearComo(PERSONAS.tecnicoB);
+  const actaRef = await addDoc(collection(db, "actas"), actaBase({ sedeId: SEDE_B, usuarioEmail: PERSONAS.tecnicoB.email }));
+
+  await loguearComo(PERSONAS.admin);
+  const snap = await getDoc(actaRef);
+  assert.ok(snap.exists());
 });

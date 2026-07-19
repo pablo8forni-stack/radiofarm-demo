@@ -52,16 +52,25 @@ service cloud.firestore {
       allow read: if tieneAcceso();
       allow write: if isAdmin();
 
-      // lotes: técnico de esa sede puede actualizar (egreso, siempre resta
-      // cantidad); crear/borrar lotes (ingreso, alta de transferencia) es
-      // sólo admin, igual que en la UI. NOTA: esto no distingue con precisión
-      // "actualizar mi propio lote (egreso)" de "acreditar una transferencia
-      // ajena a mi sede" -- ambas son un `update` sobre un lote existente de
-      // mi propia sede. Suficiente para v1; una distinción más fina
-      // requeriría Cloud Functions.
+      // lotes: técnico de esa sede puede actualizar, pero SÓLO vía egreso --
+      // el único cambio que un egreso hace es restar de `cantidad`, ningún
+      // otro campo. Sin esto, un técnico con su propia sesión (SDK/consola,
+      // sin pasar por la UI) podría subir `cantidad` (crear stock de la
+      // nada, sin movimiento que lo respalde) o cambiar lote/vencimiento/
+      // farmId de un lote existente. Admin queda sin esta restricción:
+      // anulación (puede subir cantidad) y acreditación de transferencia
+      // (crea/actualiza el lote destino) son siempre admin, cubiertas por
+      // el primer `isAdmin()` del OR. Crear/borrar lotes (ingreso, alta de
+      // transferencia) sigue siendo sólo admin, igual que en la UI.
       match /lotes/{loteId} {
         allow read: if tieneAcceso();
-        allow update: if isAdmin() || (miRol().rol == 'tecnico' && miRol().sede == sedeId);
+        allow update: if isAdmin() || (
+          miRol().rol == 'tecnico' && miRol().sede == sedeId &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['cantidad']) &&
+          request.resource.data.cantidad is number &&
+          request.resource.data.cantidad >= 0 &&
+          request.resource.data.cantidad < resource.data.cantidad
+        );
         allow create, delete: if isAdmin();
       }
     }
@@ -113,21 +122,31 @@ service cloud.firestore {
       return ['paciente', 'marcacion'];
     }
 
-    // Sede y tipo, más que la dosis declarada sea > 0. No exige farmId/lote
-    // todavía (hallazgo #5, pendiente junto con el formulario de Actas).
+    // Sede, tipo, farmId/lote no vacíos (el formulario ya los exige del lado
+    // cliente desde que se cerró el hallazgo #5; esto lo respalda del lado
+    // servidor) y que la dosis declarada sea > 0.
     function actaValida() {
       let d = request.resource.data;
       return d.usuarioEmail == request.auth.token.email &&
         d.tipo in tiposActa() &&
         d.sedeId is string && d.sedeId.size() > 0 &&
+        d.farmId is string && d.farmId.size() > 0 &&
+        d.lote is string && d.lote.size() > 0 &&
         (isAdmin() || miRol().sede == d.sedeId) &&
         (d.tipo == 'paciente'
           ? (d.mciAdministrados is number && d.mciAdministrados > 0)
           : (d.mciMarcacion is number && d.mciMarcacion > 0));
     }
 
+    // Las actas tienen nombre y DNI de pacientes (Libro 2) -- Ley 25.326.
+    // Un técnico sólo puede leer las de su propia sede; admin lee todas.
+    // El cliente tiene que reflejar esto en la query (ver listenActas /
+    // actasPorRango): las reglas no filtran resultados, rechazan la consulta
+    // entera si pide más de lo que el técnico puede leer -- por eso un
+    // listener sin where(sedeId==) para un técnico rompería con
+    // permission-denied en vez de traer sólo lo permitido.
     match /actas/{actaId} {
-      allow read: if tieneAcceso();
+      allow read: if isAdmin() || (tieneAcceso() && miRol().sede == resource.data.sedeId);
       allow create: if tieneAcceso() && actaValida();
       allow update, delete: if false;
     }

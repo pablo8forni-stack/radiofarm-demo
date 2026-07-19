@@ -137,7 +137,7 @@ export function VistaHistorial({ catalogo, usuario, esAdmin, onToast }) {
         {filtrados.length === 0 && <div className="text-center py-12 text-gray-400 text-sm">Sin movimientos.</div>}
       </div>
 
-      {mAnular && <ModalAnular mov={mAnular} onConfirm={confirmarAnulacion} onClose={() => setMAnular(null)} />}
+      {mAnular && <ModalAnular mov={mAnular} catalogo={catalogo} onConfirm={confirmarAnulacion} onClose={() => setMAnular(null)} />}
     </div>
   );
 }

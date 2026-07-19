@@ -58,9 +58,23 @@ export function ingresoBatch({ sedeId, sedeNombre, farm, lote, vencimiento, cant
 // (el efecto ya se aplicó en un intento anterior), en vez de descontar el
 // stock una segunda vez. No hace falta un campo nuevo -- el id del propio
 // documento ya es la clave de idempotencia.
+// La regla de lotes (ver firestore.rules) exige que la `cantidad` nueva que
+// escribe un técnico sea ESTRICTAMENTE MENOR que la cantidad ACTUAL del
+// documento en el momento del commit -- no la que esta transacción leyó. Con
+// dos egresos concurrentes sobre el mismo lote, el que pierde la carrera
+// puede terminar calculando el mismo valor (o uno mayor) que el que ya
+// escribió el ganador, y la regla lo rechaza con permission-denied en vez de
+// dejar que Firestore reintente la transacción con datos frescos (Firestore
+// no reintenta solo ante un rechazo de reglas, sólo ante conflictos de
+// versión). Reintentar acá mismo (con el mismo operacionId, así sigue siendo
+// el mismo intento lógico) resuelve solo: la relectura fresca de tx.get() o
+// bien alcanza a descontar, o bien tira "Stock insuficiente" -- el mensaje
+// correcto que la regla le impidió llegar a evaluar.
+const REINTENTOS_EGRESO = 3;
+
 export function egresoTransaction({ sedeId, sedeNombre, farm, loteId, cantidad, motivo, observacion, usuario, operacionId }) {
   const movimientoRef = doc(movimientosCol, operacionId);
-  return conMensajeDeContingencia(() =>
+  const intentar = () =>
     runTransaction(db, async (tx) => {
       const yaAplicadoSnap = await tx.get(movimientoRef);
       const loteSnapshot = await tx.get(lotesRef(sedeId, loteId));
@@ -74,8 +88,17 @@ export function egresoTransaction({ sedeId, sedeNombre, farm, loteId, cantidad, 
         farmId: farm.id, farmNombre: farm.nombre, cantidad, lote: loteData.lote, loteId,
         motivo, observacion, usuarioNombre: usuario.nombre, usuarioEmail: usuario.email,
       });
-    })
-  );
+    });
+
+  return conMensajeDeContingencia(async () => {
+    for (let intento = 1; intento <= REINTENTOS_EGRESO; intento++) {
+      try {
+        return await intentar();
+      } catch (e) {
+        if (e.code !== "permission-denied" || intento === REINTENTOS_EGRESO) throw e;
+      }
+    }
+  });
 }
 
 // Transferencia: lee y escribe lotes de dos sedes distintas en una sola
