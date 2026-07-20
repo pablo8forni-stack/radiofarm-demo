@@ -4,15 +4,18 @@ import { Btn } from "../../components/ui/Btn.jsx";
 import { Input } from "../../components/ui/Input.jsx";
 import { Sel } from "../../components/ui/Sel.jsx";
 import { QRScanner } from "../../components/scanner/QRScanner.jsx";
+import { ModalAnularActa } from "../../components/actas/ModalAnularActa.jsx";
 import { ESTUDIOS } from "../../constants/estudios.js";
 import { fmtF, fmtTs, fmtFechaISO, hoy, capitalizarPalabras, agruparPorFecha } from "../../helpers/formato.js";
 import { descargarArchivo } from "../../helpers/descargarArchivo.js";
 import { parseQR } from "../../helpers/qr.js";
 import { sedesActivas, farmsDeSede } from "../../helpers/stock.js";
-import { listenActas, addActaPaciente, actasPorRango } from "../../services/firestore/actas.js";
+import { listenActas, addActaPaciente, actasPorRango, anularActaTransaction, listenAnulacionesActas } from "../../services/firestore/actas.js";
 
 export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
   const [actasTodas, setActasTodas] = useState([]);
+  const [anulacionesRaw, setAnulacionesRaw] = useState([]);
+  const [mAnular, setMAnular] = useState(null);
   const [mostrarForm, setMostrarForm] = useState(false);
   const [mostrarQR, setMostrarQR] = useState(false);
   const [filtroFecha, setFiltroFecha] = useState(hoy());
@@ -29,6 +32,28 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
   const [sedeId, setSedeId] = useState(usuario.sede);
 
   useEffect(() => listenActas("paciente", setActasTodas, { esAdmin, sedeId: usuario.sede }), []);
+  useEffect(() => listenAnulacionesActas(setAnulacionesRaw, { esAdmin, sedeId: usuario.sede }), []);
+
+  // anulaId -> acta de anulación (motivo, fecha, quién) -- Map en vez de Set
+  // porque el listado necesita mostrar el motivo, no sólo saber que existe.
+  const anulaciones = useMemo(() => new Map(anulacionesRaw.map((a) => [a.anulaId, a])), [anulacionesRaw]);
+
+  async function confirmarAnulacion(acta, motivo) {
+    try {
+      await anularActaTransaction(acta, motivo, usuario);
+      onToast("Registro anulado", "info", 6000);
+      setMAnular(null);
+      // Precarga el formulario con los mismos datos para corregir sólo lo
+      // que estaba mal, en vez de tipear todo de nuevo.
+      setSedeId(acta.sedeId); setNombre(acta.pacienteNombre); setDni(acta.pacienteDni);
+      setPeso(String(acta.peso ?? "")); setTalla(String(acta.talla ?? "")); setEstudio(acta.estudio || "");
+      setFarmId(acta.farmId); setLote(acta.lote); setMci(String(acta.mciAdministrados ?? ""));
+      setObs(acta.observacion || "");
+      setMostrarForm(true);
+    } catch (e) {
+      onToast(e.message, "error");
+    }
+  }
 
   function handleQRResult(raw) {
     setMostrarQR(false);
@@ -78,12 +103,14 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
   const lotesDisp = (catalogo.stock[sedeId]?.[farmId] || []).filter((l) => l.cantidad > 0);
 
   function filaPaciente(a) {
+    const anulacion = anulaciones.get(a.id);
     return (
-      <tr key={a.id} className="border-b border-gray-50 last:border-0 hover:bg-gray-50/30">
+      <tr key={a.id} className={`border-b border-gray-50 last:border-0 hover:bg-gray-50/30 ${anulacion ? "opacity-50" : ""}`}>
         <td className="px-3 py-2.5 text-xs text-gray-500 whitespace-nowrap">{fmtTs(a.fecha).split(" ")[1] || ""}</td>
         <td className="px-3 py-2.5 font-semibold text-gray-800 text-xs">
           {a.pacienteNombre}
           {(a.peso || a.talla) && <div className="text-xs font-normal text-gray-400">{a.peso && `${a.peso}kg`}{a.talla && ` · ${a.talla}cm`}</div>}
+          {anulacion && <div className="text-xs text-orange-500 font-semibold">ANULADO: {anulacion.motivo}</div>}
         </td>
         <td className="px-3 py-2.5 text-xs font-mono text-gray-500">{a.pacienteDni}</td>
         <td className="px-3 py-2.5 text-xs text-gray-700">{a.estudio}</td>
@@ -96,6 +123,13 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
           <span className="text-xs text-gray-400 ml-1">mCi</span>
         </td>
         <td className="px-3 py-2.5 text-xs text-gray-500">{a.usuarioNombre}</td>
+        <td className="px-3 py-2.5 text-right">
+          {esAdmin && !anulacion && (
+            <button onClick={() => setMAnular(a)} className="text-xs text-orange-500 hover:text-orange-700 font-semibold px-2 py-1 rounded-lg hover:bg-orange-50 transition min-h-11 md:min-h-0">
+              Anular
+            </button>
+          )}
+        </td>
       </tr>
     );
   }
@@ -143,41 +177,55 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex flex-wrap gap-2 items-center justify-between">
-        <div className="flex gap-2 flex-wrap items-center">
-          {filtroFecha && <Input type="date" value={filtroFecha} onChange={(e) => setFiltroFecha(e.target.value)} />}
-          <Btn size="sm" variant="outline" onClick={() => setFiltroFecha(filtroFecha ? "" : hoy())}>
-            {filtroFecha ? "Ver todos" : "Ver por fecha"}
-          </Btn>
+      <div className="flex flex-col md:flex-row gap-3 md:items-center md:justify-between">
+        {/* Mobile: fecha+"Ver todos" en una fila, selector de sede en la suya a
+            ancho completo -- en vez de los 3 comprimidos como en desktop. */}
+        <div className="flex flex-col gap-2 md:flex-row md:items-center">
+          <div className="flex gap-2 items-center">
+            {filtroFecha && <Input type="date" value={filtroFecha} onChange={(e) => setFiltroFecha(e.target.value)} />}
+            <Btn size="sm" variant="outline" onClick={() => setFiltroFecha(filtroFecha ? "" : hoy())}>
+              {filtroFecha ? "Ver todos" : "Ver por fecha"}
+            </Btn>
+          </div>
           {esAdmin && (
-            <Sel value={filtroSede} onChange={(e) => setFiltroSede(e.target.value)}>
-              <option value="">Todas las sedes</option>
-              {sedesActivas(catalogo).map((s) => <option key={s.id} value={s.id}>{s.short}</option>)}
-            </Sel>
+            <div className="w-full md:w-auto">
+              <Sel value={filtroSede} onChange={(e) => setFiltroSede(e.target.value)}>
+                <option value="">Todas las sedes</option>
+                {sedesActivas(catalogo).map((s) => <option key={s.id} value={s.id}>{s.short}</option>)}
+              </Sel>
+            </div>
           )}
         </div>
-        <div className="flex gap-2 flex-wrap items-center">
-          {filtroFecha ? (
-            actas.length > 0 && <Btn size="sm" variant="outline" onClick={exportarCSV}>↓ CSV</Btn>
-          ) : (
-            <>
-              <Input type="date" value={rangoDesde} onChange={(e) => setRangoDesde(e.target.value)} />
-              <span className="text-xs text-gray-400">a</span>
-              <Input type="date" value={rangoHasta} onChange={(e) => setRangoHasta(e.target.value)} />
-              <Btn size="sm" variant="outline" onClick={exportarRango} disabled={!rangoDesde || !rangoHasta || exportandoRango}>
-                {exportandoRango ? "Exportando..." : "↓ CSV por rango"}
-              </Btn>
-            </>
-          )}
-          <Btn size="sm" variant="primary" onClick={() => setMostrarQR(true)}>
-            <span className="flex items-center gap-1.5">
+        {/* Mobile: la acción principal (Escanear pulsera) va arriba a ancho
+            completo; CSV/rango + Manual quedan debajo, compartiendo fila --
+            en desktop el wrapper "desaparece" (md:contents) y los 3 botones
+            vuelven al mismo orden plano de siempre (CSV/rango, Escanear, Manual). */}
+        <div className="flex flex-col gap-2 md:flex-row md:items-center">
+          <div className="order-2 md:contents flex flex-wrap gap-2">
+            {filtroFecha ? (
+              actas.length > 0 && <Btn size="sm" variant="outline" onClick={exportarCSV} className="md:order-1">↓ CSV</Btn>
+            ) : (
+              <>
+                <div className="flex gap-2 items-center md:order-1">
+                  <div className="flex-1 md:flex-none"><Input type="date" value={rangoDesde} onChange={(e) => setRangoDesde(e.target.value)} /></div>
+                  <span className="text-xs text-gray-400">a</span>
+                  <div className="flex-1 md:flex-none"><Input type="date" value={rangoHasta} onChange={(e) => setRangoHasta(e.target.value)} /></div>
+                </div>
+                <Btn size="sm" variant="outline" onClick={exportarRango} disabled={!rangoDesde || !rangoHasta || exportandoRango} className="md:order-1">
+                  {exportandoRango ? "Exportando..." : "↓ CSV por rango"}
+                </Btn>
+              </>
+            )}
+            <Btn size="sm" variant="ghost" onClick={() => { limpiarForm(); setMostrarForm(true); }} className="md:order-3">+ Manual</Btn>
+          </div>
+          <Btn size="sm" variant="primary" onClick={() => setMostrarQR(true)} className="order-1 md:order-2 w-full md:w-auto">
+            <span className="flex items-center gap-1.5 justify-center">
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v1m6 11h2m-6 0h-2v4m0-11v3m0 0h.01M12 12h4.01M16 20h4M4 12h4m12 0h.01M5 8h2a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1zm12 0h2a1 1 0 001-1V5a1 1 0 00-1-1h-2a1 1 0 00-1 1v2a1 1 0 001 1zM5 20h2a1 1 0 001-1v-2a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1z" />
               </svg>
               Escanear pulsera
             </span>
           </Btn>
-          <Btn size="sm" variant="ghost" onClick={() => { limpiarForm(); setMostrarForm(true); }}>+ Manual</Btn>
         </div>
       </div>
 
@@ -185,7 +233,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
         <div className="bg-white border border-blue-100 rounded-2xl p-5 shadow-sm">
           <div className="flex items-center justify-between mb-4">
             <h3 className="text-sm font-bold text-gray-800">Nuevo registro de paciente</h3>
-            <button onClick={() => { setMostrarForm(false); limpiarForm(); }} className="text-gray-400 hover:text-gray-600">
+            <button onClick={() => { setMostrarForm(false); limpiarForm(); }} className="text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-100 transition min-w-11 min-h-11 md:min-w-0 md:min-h-0 flex items-center justify-center">
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
             </button>
           </div>
@@ -230,11 +278,11 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
           </span>
           <Badge color="blue">{actas.length} paciente{actas.length !== 1 ? "s" : ""}</Badge>
         </div>
-        <table className="w-full text-sm min-w-[700px]">
+        <table className="w-full text-sm min-w-[760px]">
           <thead>
             <tr className="border-b border-gray-100 bg-gray-50/60">
-              {["Hora", "Paciente", "DNI", "Estudio", "Radiofármaco / Lote", "Dosis (mCi)", "Técnico"].map((h) => (
-                <th key={h} className="px-3 py-3 text-xs font-bold text-gray-500 uppercase tracking-wide text-left">{h}</th>
+              {["Hora", "Paciente", "DNI", "Estudio", "Radiofármaco / Lote", "Dosis (mCi)", "Técnico", ""].map((h, i) => (
+                <th key={i} className="px-3 py-3 text-xs font-bold text-gray-500 uppercase tracking-wide text-left">{h}</th>
               ))}
             </tr>
           </thead>
@@ -242,7 +290,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
             {grupos
               ? grupos.flatMap((g) => [
                   <tr key={`sep-${g.fecha}`} className="bg-gray-50">
-                    <td colSpan={7} className="px-3 py-2 text-xs font-bold text-gray-600 uppercase tracking-wide">
+                    <td colSpan={8} className="px-3 py-2 text-xs font-bold text-gray-600 uppercase tracking-wide">
                       {fmtF(g.fecha)} <span className="font-normal text-gray-400 normal-case">· {g.items.length} registro{g.items.length !== 1 ? "s" : ""}</span>
                     </td>
                   </tr>,
@@ -259,6 +307,15 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
       </div>
 
       {mostrarQR && <QRScanner onResult={handleQRResult} onClose={() => setMostrarQR(false)} />}
+
+      {mAnular && (
+        <ModalAnularActa
+          acta={mAnular}
+          resumen={`${mAnular.pacienteNombre} (DNI ${mAnular.pacienteDni})`}
+          onConfirm={confirmarAnulacion}
+          onClose={() => setMAnular(null)}
+        />
+      )}
     </div>
   );
 }

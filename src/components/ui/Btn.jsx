@@ -1,5 +1,7 @@
 export function Btn({ variant = "primary", size = "md", disabled, children, className = "", ...p }) {
-  const base = "font-semibold rounded-xl transition-all focus:outline-none disabled:opacity-40 disabled:cursor-not-allowed";
+  // min-h-11 (44px) sólo en mobile -- estándar Apple/Google de área de toque
+  // mínima. md:min-h-0 lo revierte en desktop, donde no aplica (mouse, no dedo).
+  const base = "font-semibold rounded-xl transition-all focus:outline-none disabled:opacity-40 disabled:cursor-not-allowed min-h-11 md:min-h-0";
   const v = {
     primary: "bg-blue-600 text-white hover:bg-blue-700 shadow-sm",
     danger: "bg-red-500 text-white hover:bg-red-600 shadow-sm",

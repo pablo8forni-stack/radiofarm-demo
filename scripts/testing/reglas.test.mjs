@@ -188,3 +188,39 @@ test("control positivo: admin SÍ puede leer actas de cualquier sede", async () 
   const snap = await getDoc(actaRef);
   assert.ok(snap.exists());
 });
+
+// Anulación de actas: mismo criterio admin-only que movimientos (nunca update
+// de la original -- actas sigue create-only, la anulación es un acta nueva
+// tipo "anulacion" vinculada por anulaId).
+test("técnico NO puede crear una anulación de acta directo, ni en su propia sede", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  const actaRef = await addDoc(collection(db, "actas"), actaBase({ sedeId: SEDE_A, usuarioEmail: PERSONAS.tecnicoA.email }));
+
+  await assertPermissionDenied(() =>
+    addDoc(collection(db, "actas"), {
+      tipo: "anulacion", fecha: serverTimestamp(), sedeId: SEDE_A,
+      anulaId: actaRef.id, motivo: "Test", usuarioEmail: PERSONAS.tecnicoA.email,
+    })
+  );
+});
+
+test("control positivo: admin SÍ puede crear una anulación de acta", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  const actaRef = await addDoc(collection(db, "actas"), actaBase({ sedeId: SEDE_A, usuarioEmail: PERSONAS.tecnicoA.email }));
+
+  await loguearComo(PERSONAS.admin);
+  await addDoc(collection(db, "actas"), {
+    tipo: "anulacion", fecha: serverTimestamp(), sedeId: SEDE_A,
+    anulaId: actaRef.id, motivo: "Test", usuarioEmail: PERSONAS.admin.email,
+  });
+});
+
+test("anulación de acta sin anulaId es rechazada (incluso siendo admin)", async () => {
+  await loguearComo(PERSONAS.admin);
+  await assertPermissionDenied(() =>
+    addDoc(collection(db, "actas"), {
+      tipo: "anulacion", fecha: serverTimestamp(), sedeId: SEDE_A,
+      motivo: "Test", usuarioEmail: PERSONAS.admin.email,
+    })
+  );
+});

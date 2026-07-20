@@ -119,23 +119,30 @@ service cloud.firestore {
     }
 
     function tiposActa() {
-      return ['paciente', 'marcacion'];
+      return ['paciente', 'marcacion', 'anulacion'];
     }
 
     // Sede, tipo, farmId/lote no vacíos (el formulario ya los exige del lado
     // cliente desde que se cerró el hallazgo #5; esto lo respalda del lado
-    // servidor) y que la dosis declarada sea > 0.
+    // servidor) y que la dosis declarada sea > 0. 'anulacion' es su propio
+    // caso: sólo admin (mismo criterio que movimientos), sin farmId/lote/dosis
+    // -- exige en cambio anulaId, el id del acta original que corrige. Las
+    // actas siguen create-only (ver match de abajo): anular es SIEMPRE un
+    // acta nueva vinculada por anulaId, nunca una edición de la original --
+    // mismo espíritu de inmutabilidad que ya usa `movimientos`.
     function actaValida() {
       let d = request.resource.data;
       return d.usuarioEmail == request.auth.token.email &&
         d.tipo in tiposActa() &&
         d.sedeId is string && d.sedeId.size() > 0 &&
-        d.farmId is string && d.farmId.size() > 0 &&
-        d.lote is string && d.lote.size() > 0 &&
         (isAdmin() || miRol().sede == d.sedeId) &&
-        (d.tipo == 'paciente'
-          ? (d.mciAdministrados is number && d.mciAdministrados > 0)
-          : (d.mciMarcacion is number && d.mciMarcacion > 0));
+        (d.tipo == 'anulacion'
+          ? (isAdmin() && d.anulaId is string && d.anulaId.size() > 0)
+          : (d.farmId is string && d.farmId.size() > 0 &&
+             d.lote is string && d.lote.size() > 0 &&
+             (d.tipo == 'paciente'
+               ? (d.mciAdministrados is number && d.mciAdministrados > 0)
+               : (d.mciMarcacion is number && d.mciMarcacion > 0))));
     }
 
     // Las actas tienen nombre y DNI de pacientes (Libro 2) -- Ley 25.326.

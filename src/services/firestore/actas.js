@@ -1,5 +1,6 @@
-import { collection, doc, getDocs, onSnapshot, orderBy, limit, query, where, serverTimestamp, writeBatch } from "firebase/firestore";
+import { collection, doc, getDocs, onSnapshot, orderBy, limit, query, runTransaction, where, serverTimestamp, writeBatch } from "firebase/firestore";
 import { db } from "../../firebase.js";
+import { conMensajeDeContingencia } from "../../helpers/erroresRed.js";
 
 const actasCol = collection(db, "actas");
 const PAGINA = 150;
@@ -46,4 +47,41 @@ export function addActaMarcacion(data) {
   const batch = writeBatch(db);
   batch.set(doc(actasCol), { ...data, tipo: "marcacion", fecha: serverTimestamp() });
   return batch.commit();
+}
+
+// Anulaciones de actas: mismo espíritu que movimientos (requisito 8,
+// inmutabilidad) -- actas sigue create-only, nunca se edita ni se borra la
+// original. Anular crea un acta nueva, tipo "anulacion", vinculada por
+// anulaId con id determinístico (`anula_${actaId}`): si dos admins anulan la
+// misma acta casi al mismo tiempo, la transacción rechaza al segundo intento
+// en vez de pisar el motivo del primero. No hace falta el mismo mecanismo de
+// operacionId que egreso/transferencia -- acá el id de la propia acta ya es
+// una clave estable, no generada por el cliente en cada click.
+export function anularActaTransaction(acta, motivo, usuario) {
+  const anulacionRef = doc(actasCol, `anula_${acta.id}`);
+  return conMensajeDeContingencia(() =>
+    runTransaction(db, async (tx) => {
+      const yaAnuladaSnap = await tx.get(anulacionRef);
+      if (yaAnuladaSnap.exists()) throw new Error("Esta acta ya fue anulada.");
+      tx.set(anulacionRef, {
+        tipo: "anulacion", anulaId: acta.id, sedeId: acta.sedeId,
+        fecha: serverTimestamp(), motivo,
+        usuarioNombre: usuario.nombre, usuarioEmail: usuario.email,
+      });
+    })
+  );
+}
+
+// Listener chico y compartido (Libro 1 y Libro 2) sólo para saber qué actas
+// están anuladas -- no se mezcla con listenActas porque ese filtra por
+// tipo "paciente"/"marcacion" y las anulaciones son su propio tipo. Sin
+// límite ni orderBy: son poco frecuentes (correcciones, no carga normal), y
+// a diferencia del listener paginado de movimientos, una anulación vieja
+// nunca deja de reflejarse por haber quedado fuera de una página.
+export function listenAnulacionesActas(callback, { esAdmin, sedeId } = {}) {
+  const clausulas = [where("tipo", "==", "anulacion")];
+  if (!esAdmin) clausulas.push(where("sedeId", "==", sedeId));
+  return onSnapshot(query(actasCol, ...clausulas), (snap) => {
+    callback(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+  });
 }

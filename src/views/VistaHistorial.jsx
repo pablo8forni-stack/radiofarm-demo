@@ -63,28 +63,36 @@ export function VistaHistorial({ catalogo, usuario, esAdmin, onToast }) {
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex items-center justify-between flex-wrap gap-3">
-        <div className="flex gap-2 flex-wrap">
+      {/* Mobile: los 3 Sel apilados a ancho completo en vez de comprimidos en
+          una fila, CSV debajo -- en desktop, una sola fila como siempre. */}
+      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+        <div className="flex flex-col gap-2 md:flex-row md:flex-wrap">
           {esAdmin && (
-            <Sel value={filtroSede} onChange={(e) => setFiltroSede(e.target.value)}>
-              <option value="">Todas las sedes</option>
-              {sedesActivas(catalogo).map((s) => <option key={s.id} value={s.id}>{s.short}</option>)}
-            </Sel>
+            <div className="w-full md:w-auto">
+              <Sel value={filtroSede} onChange={(e) => setFiltroSede(e.target.value)}>
+                <option value="">Todas las sedes</option>
+                {sedesActivas(catalogo).map((s) => <option key={s.id} value={s.id}>{s.short}</option>)}
+              </Sel>
+            </div>
           )}
-          <Sel value={filtroF} onChange={(e) => setFiltroF(e.target.value)}>
-            <option value="">Todos los radiofármacos</option>
-            {catalogo.farms.map((f) => <option key={f.id} value={f.id}>{f.nombre}</option>)}
-          </Sel>
-          <Sel value={filtroT} onChange={(e) => setFiltroT(e.target.value)}>
-            <option value="">Todos</option>
-            <option value="ingreso">Ingresos</option>
-            <option value="egreso">Egresos</option>
-            <option value="transferencia_salida">Transf. salida</option>
-            <option value="transferencia_entrada">Transf. entrada</option>
-            <option value="anulacion">Anulaciones</option>
-          </Sel>
+          <div className="w-full md:w-auto">
+            <Sel value={filtroF} onChange={(e) => setFiltroF(e.target.value)}>
+              <option value="">Todos los radiofármacos</option>
+              {catalogo.farms.map((f) => <option key={f.id} value={f.id}>{f.nombre}</option>)}
+            </Sel>
+          </div>
+          <div className="w-full md:w-auto">
+            <Sel value={filtroT} onChange={(e) => setFiltroT(e.target.value)}>
+              <option value="">Todos</option>
+              <option value="ingreso">Ingresos</option>
+              <option value="egreso">Egresos</option>
+              <option value="transferencia_salida">Transf. salida</option>
+              <option value="transferencia_entrada">Transf. entrada</option>
+              <option value="anulacion">Anulaciones</option>
+            </Sel>
+          </div>
         </div>
-        {esAdmin && filtrados.length > 0 && <Btn size="sm" variant="outline" onClick={exportarCSV}>↓ CSV</Btn>}
+        {esAdmin && filtrados.length > 0 && <Btn size="sm" variant="outline" onClick={exportarCSV} className="w-full md:w-auto">↓ CSV</Btn>}
       </div>
 
       {esAdmin && (

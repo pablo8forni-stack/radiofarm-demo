@@ -26,7 +26,7 @@ export function VistaInventario({ catalogo, usuario, esAdmin, onToast, navInvent
           const cp = countPedirSede(sede.id);
           return (
             <button key={sede.id} onClick={() => setSedeActiva(sede.id)}
-              className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-xl transition whitespace-nowrap ${sedeActiva === sede.id ? "bg-white text-gray-800 shadow-sm" : "text-gray-500 hover:text-gray-700"}`}>
+              className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-2 min-h-11 md:min-h-0 text-xs font-semibold rounded-xl transition whitespace-nowrap ${sedeActiva === sede.id ? "bg-white text-gray-800 shadow-sm" : "text-gray-500 hover:text-gray-700"}`}>
               {sede.short}
               {cp > 0 && <span className="bg-red-500 text-white text-xs rounded-full w-4 h-4 flex items-center justify-center">{cp}</span>}
             </button>

@@ -13,7 +13,7 @@ export function Toast({ msg, type, duracion, onDone }) {
   }, []);
   const bg = { success: "bg-emerald-600", error: "bg-red-500", info: "bg-blue-600" };
   return (
-    <div className={`fixed bottom-6 left-1/2 -translate-x-1/2 z-[100] ${bg[type] || bg.success} text-white text-sm font-semibold px-5 py-3 rounded-2xl shadow-xl`}>
+    <div className={`fixed bottom-[calc(4rem+env(safe-area-inset-bottom))] md:bottom-6 left-1/2 -translate-x-1/2 z-[100] ${bg[type] || bg.success} text-white text-sm font-semibold px-5 py-3 rounded-2xl shadow-xl`}>
       {msg}
     </div>
   );

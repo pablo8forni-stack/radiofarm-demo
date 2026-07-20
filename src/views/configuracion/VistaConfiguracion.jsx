@@ -32,7 +32,7 @@ export function VistaConfiguracion({ catalogo, usuario, onToast, onIrAInventario
       </div>
       <div className="flex gap-1 bg-gray-100 p-1 rounded-xl w-fit overflow-x-auto">
         {TABS.map((t) => (
-          <button key={t.id} onClick={() => setTab(t.id)} className={`px-4 py-1.5 text-xs font-semibold rounded-lg transition whitespace-nowrap ${tab === t.id ? "bg-white text-gray-800 shadow-sm" : "text-gray-500 hover:text-gray-700"}`}>
+          <button key={t.id} onClick={() => setTab(t.id)} className={`px-4 py-1.5 min-h-11 md:min-h-0 text-xs font-semibold rounded-lg transition whitespace-nowrap ${tab === t.id ? "bg-white text-gray-800 shadow-sm" : "text-gray-500 hover:text-gray-700"}`}>
             {t.label}
           </button>
         ))}

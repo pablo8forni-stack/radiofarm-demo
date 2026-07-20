@@ -3,13 +3,16 @@ import { Badge } from "../../components/ui/Badge.jsx";
 import { Btn } from "../../components/ui/Btn.jsx";
 import { Input } from "../../components/ui/Input.jsx";
 import { Sel } from "../../components/ui/Sel.jsx";
+import { ModalAnularActa } from "../../components/actas/ModalAnularActa.jsx";
 import { fmtF, fmtTs, fmtFechaISO, hoy, agruparPorFecha } from "../../helpers/formato.js";
 import { descargarArchivo } from "../../helpers/descargarArchivo.js";
 import { sedesActivas, farmsDeSede } from "../../helpers/stock.js";
-import { listenActas, addActaMarcacion, actasPorRango } from "../../services/firestore/actas.js";
+import { listenActas, addActaMarcacion, actasPorRango, anularActaTransaction, listenAnulacionesActas } from "../../services/firestore/actas.js";
 
 export function TabMarcacion({ catalogo, usuario, esAdmin, onToast }) {
   const [actasTodas, setActasTodas] = useState([]);
+  const [anulacionesRaw, setAnulacionesRaw] = useState([]);
+  const [mAnular, setMAnular] = useState(null);
   const [mostrarForm, setMostrarForm] = useState(false);
   const [filtroFecha, setFiltroFecha] = useState(hoy());
   const [filtroSede, setFiltroSede] = useState(usuario.sede);
@@ -22,6 +25,26 @@ export function TabMarcacion({ catalogo, usuario, esAdmin, onToast }) {
   const [sedeId, setSedeId] = useState(usuario.sede);
 
   useEffect(() => listenActas("marcacion", setActasTodas, { esAdmin, sedeId: usuario.sede }), []);
+  useEffect(() => listenAnulacionesActas(setAnulacionesRaw, { esAdmin, sedeId: usuario.sede }), []);
+
+  // anulaId -> acta de anulación (motivo, fecha, quién) -- Map en vez de Set
+  // porque el listado necesita mostrar el motivo, no sólo saber que existe.
+  const anulaciones = useMemo(() => new Map(anulacionesRaw.map((a) => [a.anulaId, a])), [anulacionesRaw]);
+
+  async function confirmarAnulacion(acta, motivo) {
+    try {
+      await anularActaTransaction(acta, motivo, usuario);
+      onToast("Marcación anulada", "info", 6000);
+      setMAnular(null);
+      // Precarga el formulario con los mismos datos para corregir sólo lo
+      // que estaba mal, en vez de tipear todo de nuevo.
+      setSedeId(acta.sedeId); setFarmId(acta.farmId); setLote(acta.lote);
+      setMciMarcacion(String(acta.mciMarcacion ?? "")); setObs(acta.observacion || "");
+      setMostrarForm(true);
+    } catch (e) {
+      onToast(e.message, "error");
+    }
+  }
 
   const lotesDisp = (catalogo.stock[sedeId]?.[farmId] || []).filter((l) => l.cantidad > 0);
 
@@ -51,15 +74,26 @@ export function TabMarcacion({ catalogo, usuario, esAdmin, onToast }) {
   );
 
   function filaMarcacion(a) {
+    const anulacion = anulaciones.get(a.id);
     return (
-      <tr key={a.id} className="border-b border-gray-50 last:border-0 hover:bg-gray-50/30">
+      <tr key={a.id} className={`border-b border-gray-50 last:border-0 hover:bg-gray-50/30 ${anulacion ? "opacity-50" : ""}`}>
         <td className="px-3 py-2.5 text-xs text-gray-500 whitespace-nowrap">{fmtTs(a.fecha).split(" ")[1] || ""}</td>
         <td className="px-3 py-2.5 text-xs text-gray-600">{catalogo.sedes[a.sedeId]?.short || "—"}</td>
         <td className="px-3 py-2.5 text-xs font-semibold text-gray-800">{a.farmNombre}</td>
         <td className="px-3 py-2.5 text-xs font-mono text-gray-500">{a.lote || "—"}</td>
         <td className="px-3 py-2.5"><span className="font-bold text-blue-700 text-sm">{a.mciMarcacion}</span><span className="text-xs text-gray-400 ml-1">mCi</span></td>
         <td className="px-3 py-2.5 text-xs text-gray-500">{a.usuarioNombre}</td>
-        <td className="px-3 py-2.5 text-xs text-gray-400 italic">{a.observacion || "—"}</td>
+        <td className="px-3 py-2.5 text-xs text-gray-400 italic">
+          {a.observacion || "—"}
+          {anulacion && <div className="text-orange-500 font-semibold not-italic mt-0.5">ANULADA: {anulacion.motivo}</div>}
+        </td>
+        <td className="px-3 py-2.5 text-right">
+          {esAdmin && !anulacion && (
+            <button onClick={() => setMAnular(a)} className="text-xs text-orange-500 hover:text-orange-700 font-semibold px-2 py-1 rounded-lg hover:bg-orange-50 transition min-h-11 md:min-h-0">
+              Anular
+            </button>
+          )}
+        </td>
       </tr>
     );
   }
@@ -104,33 +138,46 @@ export function TabMarcacion({ catalogo, usuario, esAdmin, onToast }) {
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex flex-wrap gap-2 items-center justify-between">
-        <div className="flex gap-2 flex-wrap items-center">
-          {filtroFecha && <Input type="date" value={filtroFecha} onChange={(e) => setFiltroFecha(e.target.value)} />}
-          <Btn size="sm" variant="outline" onClick={() => setFiltroFecha(filtroFecha ? "" : hoy())}>
-            {filtroFecha ? "Ver todos" : "Ver por fecha"}
-          </Btn>
+      <div className="flex flex-col md:flex-row gap-3 md:items-center md:justify-between">
+        {/* Mobile: fecha+"Ver todos" en una fila, selector de sede en la suya a
+            ancho completo -- en vez de los 3 comprimidos como en desktop. */}
+        <div className="flex flex-col gap-2 md:flex-row md:items-center">
+          <div className="flex gap-2 items-center">
+            {filtroFecha && <Input type="date" value={filtroFecha} onChange={(e) => setFiltroFecha(e.target.value)} />}
+            <Btn size="sm" variant="outline" onClick={() => setFiltroFecha(filtroFecha ? "" : hoy())}>
+              {filtroFecha ? "Ver todos" : "Ver por fecha"}
+            </Btn>
+          </div>
           {esAdmin && (
-            <Sel value={filtroSede} onChange={(e) => setFiltroSede(e.target.value)}>
-              <option value="">Todas las sedes</option>
-              {sedesActivas(catalogo).map((s) => <option key={s.id} value={s.id}>{s.short}</option>)}
-            </Sel>
+            <div className="w-full md:w-auto">
+              <Sel value={filtroSede} onChange={(e) => setFiltroSede(e.target.value)}>
+                <option value="">Todas las sedes</option>
+                {sedesActivas(catalogo).map((s) => <option key={s.id} value={s.id}>{s.short}</option>)}
+              </Sel>
+            </div>
           )}
         </div>
-        <div className="flex gap-2 flex-wrap items-center">
+        {/* Mobile: la acción principal (+ Registrar) va arriba, a ancho
+            completo; CSV/rango quedan debajo, más chicos -- sólo un cambio de
+            orden visual (order-*), el DOM y el desktop no cambian. */}
+        <div className="flex flex-col gap-2 md:flex-row md:items-center">
           {filtroFecha ? (
-            actas.length > 0 && <Btn size="sm" variant="outline" onClick={exportarCSV}>↓ CSV</Btn>
+            actas.length > 0 && (
+              <Btn size="sm" variant="outline" onClick={exportarCSV} className="order-2 md:order-none">↓ CSV</Btn>
+            )
           ) : (
             <>
-              <Input type="date" value={rangoDesde} onChange={(e) => setRangoDesde(e.target.value)} />
-              <span className="text-xs text-gray-400">a</span>
-              <Input type="date" value={rangoHasta} onChange={(e) => setRangoHasta(e.target.value)} />
-              <Btn size="sm" variant="outline" onClick={exportarRango} disabled={!rangoDesde || !rangoHasta || exportandoRango}>
+              <div className="flex gap-2 items-center order-2 md:order-none">
+                <div className="flex-1 md:flex-none"><Input type="date" value={rangoDesde} onChange={(e) => setRangoDesde(e.target.value)} /></div>
+                <span className="text-xs text-gray-400">a</span>
+                <div className="flex-1 md:flex-none"><Input type="date" value={rangoHasta} onChange={(e) => setRangoHasta(e.target.value)} /></div>
+              </div>
+              <Btn size="sm" variant="outline" onClick={exportarRango} disabled={!rangoDesde || !rangoHasta || exportandoRango} className="order-3 md:order-none">
                 {exportandoRango ? "Exportando..." : "↓ CSV por rango"}
               </Btn>
             </>
           )}
-          <Btn size="sm" variant="primary" onClick={() => setMostrarForm(true)}>+ Registrar marcación</Btn>
+          <Btn size="sm" variant="primary" onClick={() => setMostrarForm(true)} className="w-full md:w-auto order-1 md:order-none">+ Registrar marcación</Btn>
         </div>
       </div>
 
@@ -138,7 +185,7 @@ export function TabMarcacion({ catalogo, usuario, esAdmin, onToast }) {
         <div className="bg-white border border-blue-100 rounded-2xl p-5 shadow-sm">
           <div className="flex items-center justify-between mb-4">
             <h3 className="text-sm font-bold text-gray-800">Nueva marcación</h3>
-            <button onClick={() => setMostrarForm(false)} className="text-gray-400 hover:text-gray-600">
+            <button onClick={() => setMostrarForm(false)} className="text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-100 transition min-w-11 min-h-11 md:min-w-0 md:min-h-0 flex items-center justify-center">
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
             </button>
           </div>
@@ -173,11 +220,11 @@ export function TabMarcacion({ catalogo, usuario, esAdmin, onToast }) {
           </span>
           <Badge color="blue">{actas.length} registro{actas.length !== 1 ? "s" : ""}</Badge>
         </div>
-        <table className="w-full text-sm min-w-[560px]">
+        <table className="w-full text-sm min-w-[620px]">
           <thead>
             <tr className="border-b border-gray-100 bg-gray-50/60">
-              {["Hora", "Sede", "Radiofármaco", "Lote", "mCi marcación", "Técnico", "Observación"].map((h) => (
-                <th key={h} className="px-3 py-3 text-xs font-bold text-gray-500 uppercase tracking-wide text-left">{h}</th>
+              {["Hora", "Sede", "Radiofármaco", "Lote", "mCi marcación", "Técnico", "Observación", ""].map((h, i) => (
+                <th key={i} className="px-3 py-3 text-xs font-bold text-gray-500 uppercase tracking-wide text-left">{h}</th>
               ))}
             </tr>
           </thead>
@@ -185,7 +232,7 @@ export function TabMarcacion({ catalogo, usuario, esAdmin, onToast }) {
             {grupos
               ? grupos.flatMap((g) => [
                   <tr key={`sep-${g.fecha}`} className="bg-gray-50">
-                    <td colSpan={7} className="px-3 py-2 text-xs font-bold text-gray-600 uppercase tracking-wide">
+                    <td colSpan={8} className="px-3 py-2 text-xs font-bold text-gray-600 uppercase tracking-wide">
                       {fmtF(g.fecha)} <span className="font-normal text-gray-400 normal-case">· {g.items.length} registro{g.items.length !== 1 ? "s" : ""}</span>
                     </td>
                   </tr>,
@@ -200,6 +247,15 @@ export function TabMarcacion({ catalogo, usuario, esAdmin, onToast }) {
           </div>
         )}
       </div>
+
+      {mAnular && (
+        <ModalAnularActa
+          acta={mAnular}
+          resumen={`${mAnular.farmNombre} — ${mAnular.mciMarcacion} mCi (${mAnular.sedeNombre || catalogo.sedes[mAnular.sedeId]?.nombre})`}
+          onConfirm={confirmarAnulacion}
+          onClose={() => setMAnular(null)}
+        />
+      )}
     </div>
   );
 }

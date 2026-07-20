@@ -13,7 +13,7 @@ export function VistaAdministracion({ catalogo, usuario, esAdmin, onToast }) {
       <div className="flex gap-1 bg-gray-100 p-1 rounded-xl w-fit">
         {[{ id: "pacientes", label: "Libro 2 — Pacientes" }, { id: "marcacion", label: "Libro 1 — Marcación" }].map((t) => (
           <button key={t.id} onClick={() => setTab(t.id)}
-            className={`px-4 py-1.5 text-xs font-semibold rounded-lg transition ${tab === t.id ? "bg-white text-gray-800 shadow-sm" : "text-gray-500 hover:text-gray-700"}`}>
+            className={`px-4 py-1.5 min-h-11 md:min-h-0 text-xs font-semibold rounded-lg transition ${tab === t.id ? "bg-white text-gray-800 shadow-sm" : "text-gray-500 hover:text-gray-700"}`}>
             {t.label}
           </button>
         ))}

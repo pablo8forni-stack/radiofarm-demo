@@ -112,9 +112,13 @@ function AppAutenticada({ usuario }) {
     { id: "inventario", label: "Inventario", path: "M4 6h16M4 10h16M4 14h16M4 18h16" },
     { id: "pedidos", label: "Pedidos", path: "M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" },
     { id: "historial", label: "Historial", path: "M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" },
-    { id: "administracion", label: "Actas ARN", path: "M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" },
+    { id: "administracion", label: "Actas ARN", labelCorta: "Actas", path: "M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" },
     ...(esAdmin ? [{ id: "configuracion", label: "Config.", path: "M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z M15 12a3 3 0 11-6 0 3 3 0 016 0z" }] : []),
   ];
+
+  // countBadge por id, reusado tanto en el nav de arriba (desktop) como en la
+  // barra inferior (mobile) -- un solo lugar para no repetir la lógica.
+  const countBadge = (id) => (id === "pedidos" ? countPedirTotal : id === "configuracion" ? countSolicitudes : 0);
 
   return (
     <div className="min-h-screen bg-gray-50 font-sans">
@@ -148,7 +152,7 @@ function AppAutenticada({ usuario }) {
                 <div className="text-xs font-semibold text-gray-700 leading-tight">{usuario.nombre}</div>
                 <div className="text-xs leading-tight"><Badge color={esAdmin ? "purple" : "blue"}>{esAdmin ? "Responsable" : "Técnico"}</Badge></div>
               </div>
-              <button onClick={() => signOutUser()} className="text-gray-400 hover:text-red-500 p-1.5 rounded-lg hover:bg-red-50 transition">
+              <button onClick={() => signOutUser()} className="text-gray-400 hover:text-red-500 rounded-lg hover:bg-red-50 transition min-w-11 min-h-11 md:min-w-0 md:min-h-0 flex items-center justify-center">
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
                 </svg>
@@ -158,23 +162,52 @@ function AppAutenticada({ usuario }) {
         </div>
       </header>
 
-      <nav className="bg-white border-b border-gray-100">
+      {/* Nav superior: sólo md hacia arriba -- en mobile la reemplaza la barra inferior fija (más cerca del pulgar). */}
+      <nav className="hidden md:block bg-white border-b border-gray-100">
         <div className="max-w-5xl mx-auto px-4 flex gap-0 overflow-x-auto">
-          {navItems.map((item) => (
-            <button key={item.id} onClick={() => setVista(item.id)}
-              className={`flex items-center gap-2 px-4 py-3 text-sm font-semibold border-b-2 transition whitespace-nowrap ${vista === item.id ? "border-blue-600 text-blue-600" : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-200"}`}>
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={item.path} />
-              </svg>
-              <span className="hidden sm:inline">{item.label}</span>
-              {item.id === "pedidos" && countPedirTotal > 0 && <span className="bg-red-500 text-white text-xs rounded-full w-4 h-4 flex items-center justify-center">{countPedirTotal}</span>}
-              {item.id === "configuracion" && countSolicitudes > 0 && <span className="bg-red-500 text-white text-xs rounded-full w-4 h-4 flex items-center justify-center">{countSolicitudes}</span>}
-            </button>
-          ))}
+          {navItems.map((item) => {
+            const badge = countBadge(item.id);
+            return (
+              <button key={item.id} onClick={() => setVista(item.id)}
+                className={`flex items-center gap-2 px-4 py-3 text-sm font-semibold border-b-2 transition whitespace-nowrap ${vista === item.id ? "border-blue-600 text-blue-600" : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-200"}`}>
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={item.path} />
+                </svg>
+                <span>{item.label}</span>
+                {badge > 0 && <span className="bg-red-500 text-white text-xs rounded-full w-4 h-4 flex items-center justify-center">{badge}</span>}
+              </button>
+            );
+          })}
         </div>
       </nav>
 
-      <main className="max-w-5xl mx-auto px-4 py-6">
+      {/* Barra inferior: sólo debajo de md. Ícono + label apilados, target
+          táctil = toda la columna (flex-1), badge superpuesto en el ícono. */}
+      <nav className="md:hidden fixed bottom-0 inset-x-0 z-40 bg-white border-t border-gray-100 pb-[env(safe-area-inset-bottom)]">
+        <div className="flex">
+          {navItems.map((item) => {
+            const badge = countBadge(item.id);
+            return (
+              <button key={item.id} onClick={() => setVista(item.id)}
+                className={`flex-1 flex flex-col items-center gap-0.5 py-2 text-[10px] font-semibold transition ${vista === item.id ? "text-blue-600" : "text-gray-400"}`}>
+                <span className="relative">
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={item.path} />
+                  </svg>
+                  {badge > 0 && (
+                    <span className="absolute -top-1.5 -right-1.5 bg-red-500 text-white text-[9px] font-bold rounded-full min-w-[16px] h-4 px-1 flex items-center justify-center">
+                      {badge}
+                    </span>
+                  )}
+                </span>
+                {item.labelCorta || item.label}
+              </button>
+            );
+          })}
+        </div>
+      </nav>
+
+      <main className="max-w-5xl mx-auto px-4 pt-6 pb-24 md:py-6">
         {vista === "inventario" && <VistaInventario catalogo={catalogo} usuario={usuario} esAdmin={esAdmin} onToast={(m, t, d) => setToast({ m, t, d })} navInventario={navInventario} />}
         {vista === "pedidos" && <VistaPedidos catalogo={catalogo} esAdmin={esAdmin} onToast={(m, t, d) => setToast({ m, t, d })} />}
         {vista === "historial" && <VistaHistorial catalogo={catalogo} usuario={usuario} esAdmin={esAdmin} onToast={(m, t, d) => setToast({ m, t, d })} />}

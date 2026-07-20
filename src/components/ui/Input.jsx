@@ -10,7 +10,7 @@ export function Input({ label, hint, type, ...p }) {
         // escribir reemplace el valor entero, en cualquier input numérico de
         // la app (cantidad de ingreso/egreso/transferencia, stock mínimo...).
         onFocus={type === "number" ? (e) => e.target.select() : undefined}
-        className="border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 bg-white"
+        className="border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 bg-white min-h-11 md:min-h-0"
         {...p}
       />
       {hint && <span className="text-xs text-gray-400">{hint}</span>}
