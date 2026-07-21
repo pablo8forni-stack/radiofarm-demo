@@ -103,14 +103,14 @@ export function TabSedesActivas({ catalogo, roles, onToast, onIrAInventario }) {
           const activa = activas.includes(s.id);
           const usuariosSede = roles.filter((r) => r.sede === s.id && r.rol !== "admin").length;
           return (
-            <div key={s.id} className={`flex items-center justify-between px-5 py-4 ${i < sedes.length - 1 ? "border-b border-gray-50" : ""} ${!activa ? "bg-gray-50/50" : ""}`}>
+            <div key={s.id} className={`flex flex-col md:flex-row md:items-center md:justify-between gap-3 px-5 py-4 ${i < sedes.length - 1 ? "border-b border-gray-50" : ""} ${!activa ? "bg-gray-50/50" : ""}`}>
               <div>
                 <div className={`font-semibold text-sm ${activa ? "text-gray-800" : "text-gray-400"}`}>{s.nombre}</div>
                 <div className="text-xs text-gray-400 mt-0.5">
                   {s.principal ? "Sede principal — siempre activa" : activa ? `Operativa · ${usuariosSede} técnico${usuariosSede !== 1 ? "s" : ""} asignado${usuariosSede !== 1 ? "s" : ""}` : "Desactivada — datos conservados"}
                 </div>
               </div>
-              <div className="flex items-center gap-3">
+              <div className="flex items-center gap-3 flex-wrap">
                 <Btn size="sm" variant="ghost" onClick={() => abrirEditar(s)}>Editar</Btn>
                 {!s.principal && (
                   <Btn size="sm" variant="warning" onClick={() => archivar(s)} title="Baja de la sede — requiere stock en cero, no es lo mismo que desactivar">

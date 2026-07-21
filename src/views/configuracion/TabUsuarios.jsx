@@ -66,7 +66,7 @@ export function TabUsuarios({ catalogo, roles, solicitudes, usuarioActual, onToa
           <div className="px-4 py-3 bg-amber-50 border-b border-amber-100 text-xs font-bold text-amber-700 uppercase tracking-wide">
             Solicitudes pendientes
           </div>
-          <table className="w-full text-sm">
+          <table className="w-full text-sm hidden md:table">
             <thead>
               <tr className="border-b border-gray-100 bg-gray-50/60">
                 <th className="text-left px-4 py-3 text-xs font-bold text-gray-500 uppercase tracking-wide">Nombre</th>
@@ -91,6 +91,19 @@ export function TabUsuarios({ catalogo, roles, solicitudes, usuarioActual, onToa
               ))}
             </tbody>
           </table>
+          <div className="md:hidden divide-y divide-gray-50">
+            {solicitudes.map((s) => (
+              <div key={s.email} className="p-4 flex flex-col gap-1.5">
+                <div className="font-semibold text-gray-800 text-sm">{s.nombre || "—"}</div>
+                <div className="text-xs text-gray-500 font-mono">{s.email}</div>
+                <div className="text-xs text-gray-500">{formatFecha(s.fecha)}</div>
+                <div className="flex gap-1.5 justify-end mt-1">
+                  <Btn size="sm" variant="ghost" onClick={() => abrirAprobar(s)}>Aprobar</Btn>
+                  <Btn size="sm" variant="ghost" onClick={() => rechazar(s)}>Rechazar</Btn>
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       )}
       <div className="bg-blue-50 border border-blue-100 rounded-xl px-4 py-3 text-xs text-blue-700">
@@ -100,7 +113,7 @@ export function TabUsuarios({ catalogo, roles, solicitudes, usuarioActual, onToa
         <Btn size="sm" onClick={abrirNuevo}>+ Nuevo usuario</Btn>
       </div>
       <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
-        <table className="w-full text-sm">
+        <table className="w-full text-sm hidden md:table">
           <thead>
             <tr className="border-b border-gray-100 bg-gray-50/60">
               <th className="text-left px-4 py-3 text-xs font-bold text-gray-500 uppercase tracking-wide">Nombre</th>
@@ -127,6 +140,24 @@ export function TabUsuarios({ catalogo, roles, solicitudes, usuarioActual, onToa
             ))}
           </tbody>
         </table>
+        <div className="md:hidden divide-y divide-gray-50">
+          {roles.map((r) => (
+            <div key={r.email} className="p-4 flex flex-col gap-2">
+              <div>
+                <div className="font-semibold text-gray-800 text-sm">{r.nombre}</div>
+                <div className="text-xs text-gray-500 font-mono">{r.email}</div>
+              </div>
+              <div className="flex items-center gap-2">
+                <Badge color={r.rol === "admin" ? "purple" : "blue"}>{r.rol === "admin" ? "Responsable" : "Técnico"}</Badge>
+                <span className="text-xs text-gray-600">{catalogo.sedes[r.sede]?.short || r.sede}</span>
+              </div>
+              <div className="flex gap-1.5 justify-end mt-1">
+                <Btn size="sm" variant="ghost" onClick={() => abrirEditar(r)}>Editar</Btn>
+                <Btn size="sm" variant="ghost" onClick={() => eliminar(r)}>Quitar</Btn>
+              </div>
+            </div>
+          ))}
+        </div>
         {roles.length === 0 && <div className="text-center py-12 text-gray-400 text-sm">Sin usuarios dados de alta todavía.</div>}
       </div>
 

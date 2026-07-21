@@ -19,13 +19,13 @@ export function listenFarms(callback) {
   });
 }
 
-export function addFarm({ nombre, viales_x_kit }) {
+export function addFarm({ nombre, viales_x_kit, proveedorHabitualId }) {
   const id = `${slugify(nombre)}-${Date.now().toString().slice(-4)}`;
-  return setDoc(doc(farmsCol, id), { nombre, viales_x_kit: viales_x_kit || 1 });
+  return setDoc(doc(farmsCol, id), { nombre, viales_x_kit: viales_x_kit || 1, proveedorHabitualId: proveedorHabitualId || "" });
 }
 
-export function updateFarm(farmId, { nombre, viales_x_kit }) {
-  return updateDoc(doc(farmsCol, farmId), { nombre, viales_x_kit: viales_x_kit || 1 });
+export function updateFarm(farmId, { nombre, viales_x_kit, proveedorHabitualId }) {
+  return updateDoc(doc(farmsCol, farmId), { nombre, viales_x_kit: viales_x_kit || 1, proveedorHabitualId: proveedorHabitualId || "" });
 }
 
 export function deleteFarm(farmId) {

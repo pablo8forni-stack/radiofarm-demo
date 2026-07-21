@@ -82,7 +82,7 @@ export function TabProveedores({ catalogo, onToast }) {
           const datosBasicos = [p.cuit, p.direccion].filter(Boolean).join(" · ");
           const datosContacto = [p.contactoNombre, p.contactoEmail, p.contactoTelefono].filter(Boolean).join(" · ");
           return (
-            <div key={p.id} className={`flex items-center justify-between px-5 py-4 ${i < proveedores.length - 1 ? "border-b border-gray-50" : ""}`}>
+            <div key={p.id} className={`flex flex-col md:flex-row md:items-center md:justify-between gap-3 px-5 py-4 ${i < proveedores.length - 1 ? "border-b border-gray-50" : ""}`}>
               <div>
                 <div className="flex items-center gap-2">
                   <span className="font-semibold text-sm text-gray-800">{p.nombre}</span>
@@ -91,7 +91,7 @@ export function TabProveedores({ catalogo, onToast }) {
                 <div className="text-xs text-gray-400 mt-0.5">{datosBasicos || "Sin CUIT ni dirección cargados"}</div>
                 <div className="text-xs text-gray-400">{datosContacto || "Sin datos de contacto cargados"}</div>
               </div>
-              <div className="flex items-center gap-1.5">
+              <div className="flex items-center gap-1.5 flex-wrap">
                 <Btn size="sm" variant="ghost" onClick={() => abrirEditar(p)}>Editar</Btn>
                 {!p.principal && <Btn size="sm" variant="ghost" onClick={() => marcarPrincipal(p)}>Marcar principal</Btn>}
                 {proveedores.length > 1 && <Btn size="sm" variant="ghost" onClick={() => setMEliminar(p)}>Quitar</Btn>}

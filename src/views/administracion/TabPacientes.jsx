@@ -134,6 +134,36 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
     );
   }
 
+  function tarjetaPaciente(a) {
+    const anulacion = anulaciones.get(a.id);
+    return (
+      <div key={a.id} className={`p-4 flex flex-col gap-1.5 ${anulacion ? "opacity-50" : ""}`}>
+        <div className="flex items-center justify-between gap-2">
+          <span className="font-semibold text-gray-800 text-sm">{a.pacienteNombre}</span>
+          <span className="text-xs text-gray-500 whitespace-nowrap">{fmtTs(a.fecha).split(" ")[1] || ""}</span>
+        </div>
+        <div className="text-xs text-gray-500">
+          DNI {a.pacienteDni}
+          {(a.peso || a.talla) && <> · {a.peso ? `${a.peso}kg` : ""}{a.talla ? ` ${a.talla}cm` : ""}</>}
+        </div>
+        <div className="text-xs text-gray-700">{a.estudio}</div>
+        <div className="text-xs text-gray-700">
+          {a.farmNombre || "—"}{a.lote && ` · Lote ${a.lote}`} · <span className="font-bold text-blue-700">{a.mciAdministrados} mCi</span>
+        </div>
+        <div className="text-xs text-gray-500">Técnico: {a.usuarioNombre}</div>
+        {a.observacion && <div className="text-xs text-gray-400 italic">{a.observacion}</div>}
+        {anulacion && <div className="text-xs text-orange-500 font-semibold">ANULADO: {anulacion.motivo}</div>}
+        {esAdmin && !anulacion && (
+          <div className="flex justify-end mt-0.5">
+            <button onClick={() => setMAnular(a)} className="text-xs text-orange-500 hover:text-orange-700 font-semibold px-2 py-1 rounded-lg hover:bg-orange-50 transition min-h-11 md:min-h-0">
+              Anular
+            </button>
+          </div>
+        )}
+      </div>
+    );
+  }
+
   function filaCSV(a) {
     const d = a.fecha?.toDate ? a.fecha.toDate() : new Date(a.fecha);
     return [d.toLocaleDateString("es-AR"), d.toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" }),
@@ -271,34 +301,48 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
         </div>
       )}
 
-      <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-x-auto">
+      <div className="bg-white rounded-2xl shadow-sm border border-gray-100">
         <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
           <span className="text-xs font-bold text-gray-500 uppercase tracking-wide">
             {filtroFecha ? `Registros del ${fmtF(filtroFecha)}` : "Todos los registros"}
           </span>
           <Badge color="blue">{actas.length} paciente{actas.length !== 1 ? "s" : ""}</Badge>
         </div>
-        <table className="w-full text-sm min-w-[760px]">
-          <thead>
-            <tr className="border-b border-gray-100 bg-gray-50/60">
-              {["Hora", "Paciente", "DNI", "Estudio", "Radiofármaco / Lote", "Dosis (mCi)", "Técnico", ""].map((h, i) => (
-                <th key={i} className="px-3 py-3 text-xs font-bold text-gray-500 uppercase tracking-wide text-left">{h}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {grupos
-              ? grupos.flatMap((g) => [
-                  <tr key={`sep-${g.fecha}`} className="bg-gray-50">
-                    <td colSpan={8} className="px-3 py-2 text-xs font-bold text-gray-600 uppercase tracking-wide">
-                      {fmtF(g.fecha)} <span className="font-normal text-gray-400 normal-case">· {g.items.length} registro{g.items.length !== 1 ? "s" : ""}</span>
-                    </td>
-                  </tr>,
-                  ...g.items.map(filaPaciente),
-                ])
-              : actas.map(filaPaciente)}
-          </tbody>
-        </table>
+        {/* Desktop: tabla de siempre. */}
+        <div className="hidden md:block overflow-x-auto">
+          <table className="w-full text-sm min-w-[760px]">
+            <thead>
+              <tr className="border-b border-gray-100 bg-gray-50/60">
+                {["Hora", "Paciente", "DNI", "Estudio", "Radiofármaco / Lote", "Dosis (mCi)", "Técnico", ""].map((h, i) => (
+                  <th key={i} className="px-3 py-3 text-xs font-bold text-gray-500 uppercase tracking-wide text-left">{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {grupos
+                ? grupos.flatMap((g) => [
+                    <tr key={`sep-${g.fecha}`} className="bg-gray-50">
+                      <td colSpan={8} className="px-3 py-2 text-xs font-bold text-gray-600 uppercase tracking-wide">
+                        {fmtF(g.fecha)} <span className="font-normal text-gray-400 normal-case">· {g.items.length} registro{g.items.length !== 1 ? "s" : ""}</span>
+                      </td>
+                    </tr>,
+                    ...g.items.map(filaPaciente),
+                  ])
+                : actas.map(filaPaciente)}
+            </tbody>
+          </table>
+        </div>
+        {/* Mobile: tarjeta por paciente en vez de columnas comprimidas. */}
+        <div className="md:hidden divide-y divide-gray-50">
+          {grupos
+            ? grupos.flatMap((g) => [
+                <div key={`sep-${g.fecha}`} className="px-4 py-2 bg-gray-50 text-xs font-bold text-gray-600 uppercase tracking-wide">
+                  {fmtF(g.fecha)} <span className="font-normal text-gray-400 normal-case">· {g.items.length} registro{g.items.length !== 1 ? "s" : ""}</span>
+                </div>,
+                ...g.items.map(tarjetaPaciente),
+              ])
+            : actas.map(tarjetaPaciente)}
+        </div>
         {actas.length === 0 && (
           <div className="text-center py-12 text-gray-400 text-sm">
             {filtroFecha ? "No hay registros para la fecha seleccionada." : "No hay registros."}
