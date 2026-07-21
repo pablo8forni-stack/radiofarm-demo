@@ -137,6 +137,21 @@ export function TablaInventario({ sedeId, catalogo, usuario, esAdmin, onToast })
     }
   }
 
+  // Calculado una sola vez y reusado por la tabla (desktop) y las tarjetas
+  // (mobile) -- mismos datos, sólo cambia el layout que los muestra.
+  const filas = farms.map((f) => {
+    const lotes = catalogo.stock[sedeId]?.[f.id] || [];
+    const tot = totStock(lotes);
+    const mn = puntoReorden(catalogo, sedeId, f.id);
+    const venc = proxVenc(lotes);
+    const dias = diasV(venc);
+    const pedir = tot <= mn;
+    const vencido = dias !== null && dias < 0;
+    const pronto = dias !== null && dias >= 0 && dias <= 30;
+    const pendientesFarm = carrito.filter((it) => it.farm.id === f.id && it.sedeId === sedeId).length;
+    return { f, tot, mn, venc, dias, pedir, vencido, pronto, pendientesFarm };
+  });
+
   return (
     <>
       <div className="mb-3">
@@ -150,7 +165,8 @@ export function TablaInventario({ sedeId, catalogo, usuario, esAdmin, onToast })
       </div>
       <BarraCarritoIngresos cantidad={carrito.length} onAbrir={() => setMostrarCarrito(true)} />
       <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-x-auto">
-        <table className="w-full text-sm min-w-[540px]">
+        {/* Desktop: tabla de siempre. */}
+        <table className="w-full text-sm min-w-[540px] hidden md:table">
           <thead>
             <tr className="border-b border-gray-100 bg-gray-50/60">
               {["Radiofármaco", "Stock", "Próx. Venc.", "Estado", "Acciones"].map((h, i) => (
@@ -159,16 +175,8 @@ export function TablaInventario({ sedeId, catalogo, usuario, esAdmin, onToast })
             </tr>
           </thead>
           <tbody>
-            {farms.map((f) => {
-              const lotes = catalogo.stock[sedeId]?.[f.id] || [];
-              const tot = totStock(lotes);
-              const mn = puntoReorden(catalogo, sedeId, f.id);
-              const venc = proxVenc(lotes);
-              const dias = diasV(venc);
-              const pedir = tot <= mn;
-              const vencido = dias !== null && dias < 0;
-              const pronto = dias !== null && dias >= 0 && dias <= 30;
-              const pendientesFarm = carrito.filter((it) => it.farm.id === f.id && it.sedeId === sedeId).length;
+            {filas.map((row) => {
+              const { f, tot, mn, venc, dias, pedir, vencido, pronto, pendientesFarm } = row;
               return (
                 <tr key={f.id} className={`border-b border-gray-50 last:border-0 hover:bg-gray-50/40 transition ${pedir ? "bg-red-50/20" : ""}`}>
                   <td className="px-4 py-3">
@@ -217,6 +225,56 @@ export function TablaInventario({ sedeId, catalogo, usuario, esAdmin, onToast })
             })}
           </tbody>
         </table>
+        {/* Mobile: tarjeta por radiofármaco -- la columna Acciones quedaba
+            angosta y obligaba a scroll horizontal para ver nombre+acciones
+            juntos. Vencimiento y estado en su propia línea (no junto al
+            stock): en un teléfono chico los "Nd restantes" quedaban cortados
+            si compartían fila con el número de stock. */}
+        <div className="md:hidden divide-y divide-gray-50">
+          {filas.map((row) => {
+            const { f, tot, mn, venc, dias, pedir, vencido, pronto, pendientesFarm } = row;
+            return (
+              <div key={f.id} className={`p-4 flex flex-col gap-3 ${pedir ? "bg-red-50/20" : ""}`}>
+                <button onClick={() => setMDetalle({ f, sedeId })} className="text-left">
+                  <div className="font-semibold text-gray-800 text-sm flex items-center gap-1.5 flex-wrap">
+                    {f.nombre}
+                    {pendientesFarm > 0 && <Badge color="green">🛒 {pendientesFarm} pendiente{pendientesFarm > 1 ? "s" : ""}</Badge>}
+                  </div>
+                  <div className="text-xs text-gray-400">
+                    Mín: {mn} vial{mn !== 1 ? "es" : ""}
+                    {f.viales_x_kit > 1 && <span className="ml-2 text-blue-400">· kit {f.viales_x_kit}u</span>}
+                  </div>
+                </button>
+                <div className="flex flex-col gap-1">
+                  <div>
+                    <span className={`text-xl font-bold ${pedir ? "text-red-600" : "text-gray-800"}`}>{tot}</span>
+                    <span className="text-xs text-gray-400 ml-1">vial{tot !== 1 ? "es" : ""}</span>
+                  </div>
+                  <div className="flex items-center justify-between gap-2">
+                    {venc ? (
+                      <span className={`text-xs font-semibold ${vencido ? "text-red-600" : pronto ? "text-orange-500" : "text-gray-600"}`}>
+                        Venc: {fmtF(venc)} · {vencido ? "VENCIDO" : dias === 0 ? "Hoy" : `${dias}d`}
+                      </span>
+                    ) : <span className="text-gray-300 text-xs">Sin vencimiento</span>}
+                    {vencido ? <Badge color="red">Vencido</Badge> : pedir ? <Badge color="red">PEDIR</Badge> : pronto ? <Badge color="orange">Vence {dias}d</Badge> : <Badge color="green">OK</Badge>}
+                  </div>
+                </div>
+                <div className="flex gap-1.5">
+                  {esAdmin && <Btn size="sm" variant="success" onClick={() => abrirNuevoIngreso(f)} className="flex-1">+ Ingreso</Btn>}
+                  <Btn size="sm" variant="ghost" onClick={() => setMEgreso(f)} disabled={tot === 0} className="flex-1">− Egreso</Btn>
+                  {esAdmin && <Btn size="sm" variant="teal" onClick={() => setMTransf(f)} disabled={tot === 0} className="flex-1">⇄ Transf.</Btn>}
+                  {esAdmin && (
+                    <button onClick={() => setMReorden(f)} className="text-gray-400 hover:text-blue-500 rounded-lg hover:bg-blue-50 transition min-w-11 min-h-11 flex items-center justify-center flex-shrink-0" title="Stock mínimo">
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
+                      </svg>
+                    </button>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
         {farms.length === 0 && <div className="text-center py-12 text-gray-400 text-sm">Sin radiofármacos asignados a esta sede.</div>}
       </div>
 
