@@ -1,8 +1,10 @@
-import { collection, doc, getDocs, onSnapshot, orderBy, limit, query, runTransaction, where, serverTimestamp, writeBatch } from "firebase/firestore";
+import { collection, doc, getDoc, getDocs, onSnapshot, orderBy, limit, query, runTransaction, where, serverTimestamp, writeBatch } from "firebase/firestore";
 import { db } from "../../firebase.js";
 import { conMensajeDeContingencia } from "../../helpers/erroresRed.js";
 
 const actasCol = collection(db, "actas");
+const generadoresCol = collection(db, "generadoresVistos");
+const generadorRef = (sedeId, loteGenerador) => doc(generadoresCol, `${sedeId}_${loteGenerador}`);
 const PAGINA = 150;
 
 // tipo: "paciente" | "marcacion". El filtro de fecha se aplica client-side
@@ -46,6 +48,33 @@ export function addActaPaciente(data) {
 export function addActaMarcacion(data) {
   const batch = writeBatch(db);
   batch.set(doc(actasCol), { ...data, tipo: "marcacion", fecha: serverTimestamp() });
+  return batch.commit();
+}
+
+// Libro 3 (Elución Mo-99/Tc-99m). getDoc directo por id determinístico
+// (sedeId_loteGenerador), no una query -- funciona aunque el lote tenga
+// meses de historial, no depende de estar dentro de los últimos PAGINA
+// registros. Lo usa el formulario para decidir si pedir actividadCalibrada;
+// la regla de Firestore hace el mismo chequeo del lado servidor
+// (loteGeneradorVisto en firestore.rules), así que esto es sólo para la UI.
+export async function loteGeneradorYaRegistrado(sedeId, loteGenerador) {
+  const snap = await getDoc(generadorRef(sedeId, loteGenerador));
+  return snap.exists();
+}
+
+// Mismo writeBatch simple que marcación/paciente (sin lectura previa,
+// offline-safe). Si es la primera elución de este lote/serie en la sede, el
+// mismo batch crea el marcador -- la regla exige actividadCalibrada
+// exactamente cuando ese marcador todavía no existe, así que hay que
+// crearlo en el mismo batch que la propia acta, no después.
+export function addActaElucion(data, esPrimeraVez) {
+  const batch = writeBatch(db);
+  batch.set(doc(actasCol), { ...data, tipo: "elucion", fecha: serverTimestamp() });
+  if (esPrimeraVez) {
+    batch.set(generadorRef(data.sedeId, data.loteGenerador), {
+      sedeId: data.sedeId, loteGenerador: data.loteGenerador, primeraFecha: serverTimestamp(), usuarioEmail: data.usuarioEmail,
+    });
+  }
   return batch.commit();
 }
 

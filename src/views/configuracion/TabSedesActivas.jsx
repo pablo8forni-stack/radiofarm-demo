@@ -4,7 +4,7 @@ import { Btn } from "../../components/ui/Btn.jsx";
 import { Input } from "../../components/ui/Input.jsx";
 import { Modal } from "../../components/ui/Modal.jsx";
 import { idsSedesActivas, todasLasSedes, sedesArchivadas, farmsDeSede, totStock } from "../../helpers/stock.js";
-import { toggleSedeActiva, addSede, updateSede, archivarSede, desarchivarSede } from "../../services/firestore/sedes.js";
+import { toggleSedeActiva, addSede, updateSede, archivarSede, desarchivarSede, toggleSedeEluye } from "../../services/firestore/sedes.js";
 
 export function TabSedesActivas({ catalogo, roles, onToast, onIrAInventario }) {
   const [mNuevo, setMNuevo] = useState(false);
@@ -77,6 +77,15 @@ export function TabSedesActivas({ catalogo, roles, onToast, onIrAInventario }) {
         .filter((f) => f.stock > 0)
     : [];
 
+  async function toggleEluye(sede) {
+    try {
+      await toggleSedeEluye(sede.id, !sede.eluye);
+      onToast(sede.eluye ? `Elución desactivada para ${sede.short}` : `Elución activada para ${sede.short}`);
+    } catch (e) {
+      onToast(e.message, "error");
+    }
+  }
+
   async function reactivar(sede) {
     try {
       await desarchivarSede(sede.id);
@@ -122,6 +131,12 @@ export function TabSedesActivas({ catalogo, roles, onToast, onIrAInventario }) {
                     </span>
                   </Btn>
                 )}
+                <div className="flex items-center gap-1.5" title="Habilita el Libro 3 — Elución (Mo-99/Tc-99m) para esta sede">
+                  <span className="text-xs text-gray-500">Elución</span>
+                  <button onClick={() => toggleEluye(s)} className={`relative w-11 h-6 rounded-full transition-colors focus:outline-none ${s.eluye ? "bg-purple-600" : "bg-gray-200"}`}>
+                    <span className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform ${s.eluye ? "translate-x-5" : "translate-x-0"}`} />
+                  </button>
+                </div>
                 {s.principal ? (
                   <Badge color="blue">Siempre activa</Badge>
                 ) : (

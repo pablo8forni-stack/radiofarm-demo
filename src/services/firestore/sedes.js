@@ -14,14 +14,14 @@ import { slugify } from "../../helpers/formato.js";
 const sedesCol = collection(db, "sedes");
 const sedeRef = (sedeId) => doc(sedesCol, sedeId);
 
-// Emite {sedeId:{nombre,short,activo,principal,eliminada,farmIds,puntosReorden}}
+// Emite {sedeId:{nombre,short,activo,principal,eliminada,eluye,farmIds,puntosReorden}}
 // con todas las sedes del catálogo dinámico.
 export function listenSedes(callback) {
   return onSnapshot(sedesCol, (snap) => {
     const sedes = {};
     snap.docs.forEach((d) => {
       sedes[d.id] = {
-        nombre: "", short: "", farmIds: [], puntosReorden: {}, activo: false, principal: false, eliminada: false,
+        nombre: "", short: "", farmIds: [], puntosReorden: {}, activo: false, principal: false, eliminada: false, eluye: false,
         ...d.data(),
       };
     });
@@ -32,7 +32,7 @@ export function listenSedes(callback) {
 export function addSede({ nombre, short }) {
   const id = `${slugify(nombre)}-${Date.now().toString().slice(-4)}`;
   return setDoc(sedeRef(id), {
-    nombre, short: short || nombre, activo: false, principal: false, eliminada: false, farmIds: [], puntosReorden: {},
+    nombre, short: short || nombre, activo: false, principal: false, eliminada: false, eluye: false, farmIds: [], puntosReorden: {},
   });
 }
 
@@ -45,6 +45,13 @@ export function updateSede(sedeId, { nombre, short }) {
 export function toggleSedeActiva(sedeId, activa, esPrincipal) {
   if (esPrincipal) return Promise.resolve(); // la sede principal siempre está activa
   return updateDoc(sedeRef(sedeId), { activo: activa });
+}
+
+// Hoy sólo Central eluye (las demás reciben el material por delivery), pero
+// nada de la lógica de elución depende de ningún id de sede fijo -- si otra
+// sede vuelve a tener generador propio, se activa acá sin tocar código.
+export function toggleSedeEluye(sedeId, eluye) {
+  return updateDoc(sedeRef(sedeId), { eluye });
 }
 
 export function archivarSede(sedeId) {

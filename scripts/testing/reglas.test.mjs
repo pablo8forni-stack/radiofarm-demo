@@ -5,7 +5,7 @@
 // restrictiva de lo debido.
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { collection, addDoc, doc, getDoc, updateDoc, serverTimestamp } from "firebase/firestore";
+import { collection, addDoc, doc, getDoc, setDoc, updateDoc, serverTimestamp } from "firebase/firestore";
 import {
   PERSONAS, SEDE_A, SEDE_B, FARM_ID, db, loguearComo, prepararFixturesGlobales, loteDePrueba, cerrarConexiones,
   crearLoteDirecto, borrarLote,
@@ -221,6 +221,49 @@ test("anulación de acta sin anulaId es rechazada (incluso siendo admin)", async
     addDoc(collection(db, "actas"), {
       tipo: "anulacion", fecha: serverTimestamp(), sedeId: SEDE_A,
       motivo: "Test", usuarioEmail: PERSONAS.admin.email,
+    })
+  );
+});
+
+// Libro 3 (Elución): actividadCalibrada sólo es obligatoria en la primera
+// elución de cada lote/serie -- lo decide el marcador generadoresVistos (id
+// determinístico sedeId_loteGenerador). Mismo criterio de sede que el resto
+// de actas para crear el marcador.
+function elucionBase(overrides = {}) {
+  return {
+    tipo: "elucion", fecha: serverTimestamp(), sedeId: SEDE_A,
+    loteGenerador: `GEN-${loteDePrueba()}`, actividadEluida: 740, volumen: 10,
+    usuarioEmail: PERSONAS.tecnicoA.email, ...overrides,
+  };
+}
+
+test("elución de un lote nuevo SIN actividadCalibrada es rechazada", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  await assertPermissionDenied(() => addDoc(collection(db, "actas"), elucionBase()));
+});
+
+test("control positivo: elución de un lote nuevo CON actividadCalibrada se acepta", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  await addDoc(collection(db, "actas"), elucionBase({ actividadCalibrada: 1850 }));
+});
+
+test("control positivo: elución de un lote YA visto no necesita actividadCalibrada", async () => {
+  await loguearComo(PERSONAS.admin);
+  const lote = `GEN-${loteDePrueba()}`;
+  await setDoc(doc(db, "generadoresVistos", `${SEDE_A}_${lote}`), {
+    sedeId: SEDE_A, loteGenerador: lote, usuarioEmail: PERSONAS.admin.email,
+  });
+
+  await loguearComo(PERSONAS.tecnicoA);
+  await addDoc(collection(db, "actas"), elucionBase({ loteGenerador: lote }));
+});
+
+test("técnico NO puede crear un marcador generadoresVistos de otra sede", async () => {
+  await loguearComo(PERSONAS.tecnicoA); // sede central
+  const lote = `GEN-${loteDePrueba()}`;
+  await assertPermissionDenied(() =>
+    setDoc(doc(db, "generadoresVistos", `${SEDE_B}_${lote}`), {
+      sedeId: SEDE_B, loteGenerador: lote, usuarioEmail: PERSONAS.tecnicoA.email,
     })
   );
 });
