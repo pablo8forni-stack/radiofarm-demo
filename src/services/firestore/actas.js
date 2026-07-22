@@ -4,7 +4,15 @@ import { conMensajeDeContingencia } from "../../helpers/erroresRed.js";
 
 const actasCol = collection(db, "actas");
 const generadoresCol = collection(db, "generadoresVistos");
-const generadorRef = (sedeId, loteGenerador) => doc(generadoresCol, `${sedeId}_${loteGenerador}`);
+// El id determinístico no puede depender de mayúsculas/espacios tal como los
+// tipeó cada quien -- un teclado de celular autocapitaliza/autocorrige
+// distinto entre dos cargas del "mismo" lote, y eso alcanza para que
+// "Gen2026014" y "gen2026014" construyan ids distintos y el marcador nunca
+// se encuentre. El campo loteGenerador de la propia acta (lo que se ve en
+// listado/CSV) conserva el texto tal cual se tipeó -- esto normaliza sólo
+// para el id interno, no para el dato mostrado.
+export const normalizarLoteGenerador = (lote) => lote.trim().toUpperCase();
+const generadorRef = (sedeId, loteGenerador) => doc(generadoresCol, `${sedeId}_${normalizarLoteGenerador(loteGenerador)}`);
 const PAGINA = 150;
 
 // tipo: "paciente" | "marcacion". El filtro de fecha se aplica client-side

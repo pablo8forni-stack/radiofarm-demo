@@ -250,12 +250,28 @@ test("control positivo: elución de un lote nuevo CON actividadCalibrada se acep
 test("control positivo: elución de un lote YA visto no necesita actividadCalibrada", async () => {
   await loguearComo(PERSONAS.admin);
   const lote = `GEN-${loteDePrueba()}`;
-  await setDoc(doc(db, "generadoresVistos", `${SEDE_A}_${lote}`), {
+  await setDoc(doc(db, "generadoresVistos", `${SEDE_A}_${lote.toUpperCase()}`), {
     sedeId: SEDE_A, loteGenerador: lote, usuarioEmail: PERSONAS.admin.email,
   });
 
   await loguearComo(PERSONAS.tecnicoA);
   await addDoc(collection(db, "actas"), elucionBase({ loteGenerador: lote }));
+});
+
+// Regresión de un bug real: un teclado de celular autocapitalizó/autocorrigió
+// distinto entre dos cargas del "mismo" lote ("Gen2026014" vs "gen2026014"),
+// y como el id determinístico no normalizaba mayúsculas, el marcador de la
+// primera nunca se encontraba en la segunda. El id tiene que ser insensible
+// a mayúsculas/minúsculas.
+test("control positivo: elución de un lote ya visto con otra capitalización tampoco necesita actividadCalibrada", async () => {
+  await loguearComo(PERSONAS.admin);
+  const lote = `Gen${loteDePrueba()}`;
+  await setDoc(doc(db, "generadoresVistos", `${SEDE_A}_${lote.toUpperCase()}`), {
+    sedeId: SEDE_A, loteGenerador: lote, usuarioEmail: PERSONAS.admin.email,
+  });
+
+  await loguearComo(PERSONAS.tecnicoA);
+  await addDoc(collection(db, "actas"), elucionBase({ loteGenerador: lote.toLowerCase() }));
 });
 
 test("técnico NO puede crear un marcador generadoresVistos de otra sede", async () => {

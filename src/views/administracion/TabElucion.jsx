@@ -7,7 +7,7 @@ import { ModalAnularActa } from "../../components/actas/ModalAnularActa.jsx";
 import { fmtF, fmtTs, fmtFechaISO, hoy, agruparPorFecha } from "../../helpers/formato.js";
 import { descargarArchivo } from "../../helpers/descargarArchivo.js";
 import { sedesActivas } from "../../helpers/stock.js";
-import { listenActas, addActaElucion, actasPorRango, anularActaTransaction, listenAnulacionesActas, loteGeneradorYaRegistrado } from "../../services/firestore/actas.js";
+import { listenActas, addActaElucion, actasPorRango, anularActaTransaction, listenAnulacionesActas, loteGeneradorYaRegistrado, normalizarLoteGenerador } from "../../services/firestore/actas.js";
 
 export function TabElucion({ catalogo, usuario, esAdmin, onToast }) {
   const [actasTodas, setActasTodas] = useState([]);
@@ -29,26 +29,43 @@ export function TabElucion({ catalogo, usuario, esAdmin, onToast }) {
   const [actividadEluida, setActividadEluida] = useState("");
   const [volumen, setVolumen] = useState("");
   const [obs, setObs] = useState("");
+  const [guardando, setGuardando] = useState(false);
 
   useEffect(() => listenActas("elucion", setActasTodas, { esAdmin, sedeId: usuario.sede }), []);
   useEffect(() => listenAnulacionesActas(setAnulacionesRaw, { esAdmin, sedeId: usuario.sede }), []);
 
   // Se dispara al perder foco del campo lote (no en cada tecla) y también si
-  // cambia la sede con un lote ya tipeado -- getDoc directo por id
-  // determinístico (services/firestore/actas.js#loteGeneradorYaRegistrado),
-  // no una query, así que no importa cuánto historial tenga el generador. Si
-  // falla la consulta (ej. offline), se pide el dato igual: mejor pedir de
-  // más que perder un dato regulatorio que no se puede recuperar después.
+  // cambia la sede con un lote ya tipeado. Dos pasos:
+  //  1) chequeo local instantáneo contra actasTodas (el listener en tiempo
+  //     real) -- Firestore ya refleja ahí una escritura recién disparada
+  //     aunque el servidor todavía no la confirmó, así que dos eluciones del
+  //     mismo lote cargadas rápido una atrás de la otra no compiten en una
+  //     carrera contra el paso 2.
+  //  2) si no aparece localmente, getDoc directo por id determinístico
+  //     (services/firestore/actas.js#loteGeneradorYaRegistrado), no una
+  //     query -- cubre lotes con historial más viejo que los últimos 150
+  //     registros cargados en pantalla. Si falla (ej. offline), se pide el
+  //     dato igual: mejor pedir de más que perder un dato regulatorio que no
+  //     se puede recuperar después.
   useEffect(() => {
-    if (!loteVerificado.trim()) { setEsPrimeraVez(false); return; }
+    const lote = loteVerificado.trim();
+    if (!lote) { setEsPrimeraVez(false); return; }
+    // Mismo criterio de normalización que el id determinístico del marcador
+    // (services/firestore/actas.js) -- si compara el texto tal cual lo tipeó
+    // cada quien, "Gen2026014" y "gen2026014" nunca matchean entre sí.
+    const loteNormalizado = normalizarLoteGenerador(lote);
+    if (actasTodas.some((a) => a.loteGenerador && normalizarLoteGenerador(a.loteGenerador) === loteNormalizado)) {
+      setEsPrimeraVez(false);
+      return;
+    }
     let cancelado = false;
     setVerificandoLote(true);
-    loteGeneradorYaRegistrado(sedeId, loteVerificado.trim())
+    loteGeneradorYaRegistrado(sedeId, lote)
       .then((yaRegistrado) => { if (!cancelado) setEsPrimeraVez(!yaRegistrado); })
       .catch(() => { if (!cancelado) setEsPrimeraVez(true); })
       .finally(() => { if (!cancelado) setVerificandoLote(false); });
     return () => { cancelado = true; };
-  }, [sedeId, loteVerificado]);
+  }, [sedeId, loteVerificado, actasTodas]);
 
   const anulaciones = useMemo(() => new Map(anulacionesRaw.map((a) => [a.anulaId, a])), [anulacionesRaw]);
 
@@ -74,7 +91,17 @@ export function TabElucion({ catalogo, usuario, esAdmin, onToast }) {
     }
   }
 
-  function guardar() {
+  // A diferencia de ingreso/marcación/paciente (fire-and-forget, offline-safe
+  // porque un rechazo real ahí es prácticamente imposible), la validez de una
+  // elución depende de una condición server-side (loteGeneradorVisto) que el
+  // cliente sólo puede aproximar -- un desfasaje cliente/regla (como el que
+  // pasó con el fix de mayúsculas: cliente ya actualizado, regla de prod
+  // todavía no) puede hacer que el guardado se rechace de verdad. Por eso acá
+  // sí se espera la confirmación real del batch antes de avisar éxito, y si
+  // falla, el error se muestra en el toast y el formulario se queda abierto
+  // (no se limpia ni se cierra) para reintentar -- mismo criterio que ya
+  // usamos en egreso/transferencia/anulación.
+  async function guardar() {
     if (!loteGenerador.trim() || !actividadEluida || !volumen || (esPrimeraVez && !actividadCalibrada)) return;
     if (!catalogo.sedes[sedeId]?.eluye) return;
     const datos = {
@@ -85,10 +112,17 @@ export function TabElucion({ catalogo, usuario, esAdmin, onToast }) {
       usuarioNombre: usuario.nombre, usuarioEmail: usuario.email, observacion: obs.trim(),
     };
     if (esPrimeraVez) datos.actividadCalibrada = parseFloat(actividadCalibrada) || 0;
-    addActaElucion(datos, esPrimeraVez).catch((e) => onToast(e.message || "No se pudo guardar la elución", "error"));
-    onToast("Elución registrada");
-    limpiarForm();
-    setMostrarForm(false);
+    setGuardando(true);
+    try {
+      await addActaElucion(datos, esPrimeraVez);
+      onToast("Elución registrada");
+      limpiarForm();
+      setMostrarForm(false);
+    } catch (e) {
+      onToast(e.message || "No se pudo guardar la elución", "error");
+    } finally {
+      setGuardando(false);
+    }
   }
 
   const actas = useMemo(
@@ -281,9 +315,9 @@ export function TabElucion({ catalogo, usuario, esAdmin, onToast }) {
             <Input label="Observación (opcional)" value={obs} onChange={(e) => setObs(e.target.value)} placeholder="Ej: rendimiento, incidencias..." />
           </div>
           <div className="flex gap-2 justify-end mt-4">
-            <Btn variant="outline" onClick={() => { setMostrarForm(false); limpiarForm(); }}>Cancelar</Btn>
-            <Btn onClick={guardar} disabled={!sedeEluye || !loteGenerador.trim() || !actividadEluida || !volumen || (esPrimeraVez && !actividadCalibrada) || verificandoLote}>
-              Guardar elución
+            <Btn variant="outline" onClick={() => { setMostrarForm(false); limpiarForm(); }} disabled={guardando}>Cancelar</Btn>
+            <Btn onClick={guardar} disabled={!sedeEluye || !loteGenerador.trim() || !actividadEluida || !volumen || (esPrimeraVez && !actividadCalibrada) || verificandoLote || guardando}>
+              {guardando ? "Guardando..." : "Guardar elución"}
             </Btn>
           </div>
         </div>

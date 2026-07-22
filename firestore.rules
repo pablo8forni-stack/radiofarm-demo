@@ -125,14 +125,19 @@ service cloud.firestore {
     // Elución (Libro 3, Mo-99/Tc-99m): la actividad calibrada del generador
     // sólo se carga en la primera elución de cada lote/serie -- generadoresVistos
     // (ver match más abajo) guarda un marcador con id determinístico
-    // sedeId+'_'+loteGenerador, creado junto con esa primera acta. Mientras
-    // no exista el marcador, actividadCalibrada es obligatoria; si ya existe,
-    // no se vuelve a pedir. Esto cierra del lado servidor lo mismo que ya
-    // detecta el cliente para mostrar/ocultar el campo -- sin esto, alguien
-    // saltándose la UI podría omitir un dato regulatorio que no se puede
-    // recuperar después.
+    // sedeId+'_'+loteGenerador (mayúsculas), creado junto con esa primera
+    // acta. Mientras no exista el marcador, actividadCalibrada es
+    // obligatoria; si ya existe, no se vuelve a pedir. Esto cierra del lado
+    // servidor lo mismo que ya detecta el cliente para mostrar/ocultar el
+    // campo -- sin esto, alguien saltándose la UI podría omitir un dato
+    // regulatorio que no se puede recuperar después.
+    // .upper(): el id no puede depender de la capitalización con la que cada
+    // quien tipeó el lote (mismo criterio que normalizarLoteGenerador en
+    // services/firestore/actas.js -- "Gen2026014" y "gen2026014" tienen que
+    // resolver al mismo marcador). El cliente ya garantiza el valor recortado
+    // (.trim()) antes de llegar acá, sólo hace falta normalizar mayúsculas.
     function loteGeneradorVisto(sedeId, lote) {
-      return exists(/databases/$(database)/documents/generadoresVistos/$(sedeId + '_' + lote));
+      return exists(/databases/$(database)/documents/generadoresVistos/$(sedeId + '_' + lote.upper()));
     }
 
     // Sede, tipo, farmId/lote no vacíos (el formulario ya los exige del lado
