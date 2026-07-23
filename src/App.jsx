@@ -125,8 +125,10 @@ function AppAutenticada({ usuario }) {
 
   // Aviso local ante ítems que CRUZAN por debajo del mínimo (no mientras
   // siguen ahí) -- mismo criterio de flanco que solicitudes, ver avisos.js.
+  // Sólo admin: gestionar compras no es responsabilidad de técnico, mismo
+  // criterio que el chip/badge de "para pedir".
   useEffect(() => {
-    if (catalogo.cargando) return;
+    if (catalogo.cargando || !esAdmin) return;
     const clavesBajas = [];
     sedesActivas(catalogo).forEach((sede) =>
       farmsDeSede(catalogo, sede.id).forEach((f) => {
@@ -140,7 +142,7 @@ function AppAutenticada({ usuario }) {
       const farm = catalogo.farms.find((f) => f.id === farmId);
       return { titulo: "Stock por debajo del mínimo", cuerpo: `${farm?.nombre || farmId} — ${catalogo.sedes[sedeId]?.nombre || sedeId}` };
     });
-  }, [catalogo]);
+  }, [catalogo, esAdmin]);
 
   if (catalogo.cargando) return <PantallaCargando />;
 
@@ -165,7 +167,7 @@ function AppAutenticada({ usuario }) {
 
   // countBadge por id, reusado tanto en el nav de arriba (desktop) como en la
   // barra inferior (mobile) -- un solo lugar para no repetir la lógica.
-  const countBadge = (id) => (id === "pedidos" ? countPedirTotal : id === "configuracion" ? countSolicitudes : 0);
+  const countBadge = (id) => (id === "pedidos" ? (esAdmin ? countPedirTotal : 0) : id === "configuracion" ? countSolicitudes : 0);
 
   return (
     <div className="min-h-screen bg-gray-50 font-sans">
@@ -183,7 +185,7 @@ function AppAutenticada({ usuario }) {
             </div>
           </div>
           <div className="flex items-center gap-2">
-            {countPedirTotal > 0 && (
+            {esAdmin && countPedirTotal > 0 && (
               <button onClick={() => setVista("pedidos")} className="flex items-center gap-1.5 bg-red-50 border border-red-200 text-red-600 text-xs font-bold px-3 py-1.5 rounded-full hover:bg-red-100 transition">
                 <span className="w-2 h-2 bg-red-500 rounded-full animate-pulse" />{countPedirTotal} para pedir
               </button>
