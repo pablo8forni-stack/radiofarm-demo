@@ -62,6 +62,7 @@ function AppAutenticada({ usuario }) {
   const [solicitudes, setSolicitudes] = useState([]);
   const countSolicitudes = solicitudes.length;
   const [navInventario, setNavInventario] = useState(null);
+  const [navConfiguracion, setNavConfiguracion] = useState(null);
   const [avisosOn, setAvisosOn] = useState(() => avisosActivados());
 
   // Cambia a la vista Inventario y le pide mostrar una sede puntual --
@@ -70,6 +71,14 @@ function AppAutenticada({ usuario }) {
   function irAInventario(sedeId) {
     setNavInventario({ sedeId, token: Date.now() });
     setVista("inventario");
+  }
+
+  // Mismo patrón que irAInventario -- usado por el chip "N solicitudes" y
+  // por el click en la notificación del sistema, para ir directo a la
+  // pestaña Usuarios en vez de dejar a Configuración en la que estuviera.
+  function irAConfiguracion(tab) {
+    setNavConfiguracion({ tab, token: Date.now() });
+    setVista("configuracion");
   }
 
   async function toggleAvisos() {
@@ -100,7 +109,11 @@ function AppAutenticada({ usuario }) {
     if (!esAdmin) return;
     sincronizarYAvisar(CLAVES_ALMACEN.SOLICITUDES, solicitudes.map((s) => s.email), (email) => {
       const s = solicitudes.find((x) => x.email === email);
-      return { titulo: "Nueva solicitud de acceso", cuerpo: s?.nombre ? `${s.nombre} (${email})` : email };
+      return {
+        titulo: "Nueva solicitud de acceso",
+        cuerpo: s?.nombre ? `${s.nombre} (${email})` : email,
+        onClick: () => irAConfiguracion("usuarios"),
+      };
     });
   }, [esAdmin, solicitudes]);
 
@@ -159,7 +172,7 @@ function AppAutenticada({ usuario }) {
 
   const navItems = [
     { id: "inventario", label: "Inventario", path: "M4 6h16M4 10h16M4 14h16M4 18h16" },
-    { id: "pedidos", label: "Pedidos", path: "M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" },
+    ...(esAdmin ? [{ id: "pedidos", label: "Pedidos", path: "M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" }] : []),
     { id: "historial", label: "Historial", path: "M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" },
     { id: "administracion", label: "Actas ARN", labelCorta: "Actas", path: "M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" },
     ...(esAdmin ? [{ id: "configuracion", label: "Config.", path: "M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z M15 12a3 3 0 11-6 0 3 3 0 016 0z" }] : []),
@@ -191,7 +204,7 @@ function AppAutenticada({ usuario }) {
               </button>
             )}
             {esAdmin && countSolicitudes > 0 && (
-              <button onClick={() => setVista("configuracion")} className="flex items-center gap-1.5 bg-red-50 border border-red-200 text-red-600 text-xs font-bold px-3 py-1.5 rounded-full hover:bg-red-100 transition">
+              <button onClick={() => irAConfiguracion("usuarios")} className="flex items-center gap-1.5 bg-red-50 border border-red-200 text-red-600 text-xs font-bold px-3 py-1.5 rounded-full hover:bg-red-100 transition">
                 <span className="w-2 h-2 bg-red-500 rounded-full animate-pulse" />{countSolicitudes} solicitud{countSolicitudes > 1 ? "es" : ""}
               </button>
             )}
@@ -267,10 +280,10 @@ function AppAutenticada({ usuario }) {
 
       <main className="max-w-5xl mx-auto px-4 pt-6 pb-24 md:py-6">
         {vista === "inventario" && <VistaInventario catalogo={catalogo} usuario={usuario} esAdmin={esAdmin} onToast={(m, t, d) => setToast({ m, t, d })} navInventario={navInventario} />}
-        {vista === "pedidos" && <VistaPedidos catalogo={catalogo} esAdmin={esAdmin} onToast={(m, t, d) => setToast({ m, t, d })} />}
+        {vista === "pedidos" && esAdmin && <VistaPedidos catalogo={catalogo} esAdmin={esAdmin} onToast={(m, t, d) => setToast({ m, t, d })} />}
         {vista === "historial" && <VistaHistorial catalogo={catalogo} usuario={usuario} esAdmin={esAdmin} onToast={(m, t, d) => setToast({ m, t, d })} />}
         {vista === "administracion" && <VistaAdministracion catalogo={catalogo} usuario={usuario} esAdmin={esAdmin} onToast={(m, t, d) => setToast({ m, t, d })} />}
-        {vista === "configuracion" && esAdmin && <VistaConfiguracion catalogo={catalogo} usuario={usuario} onToast={(m, t, d) => setToast({ m, t, d })} onIrAInventario={irAInventario} />}
+        {vista === "configuracion" && esAdmin && <VistaConfiguracion catalogo={catalogo} usuario={usuario} onToast={(m, t, d) => setToast({ m, t, d })} onIrAInventario={irAInventario} navConfiguracion={navConfiguracion} />}
       </main>
 
       {toast && <Toast msg={toast.m} type={toast.t || "success"} duracion={toast.d} onDone={() => setToast(null)} />}

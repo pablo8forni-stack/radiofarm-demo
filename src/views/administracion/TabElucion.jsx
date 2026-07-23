@@ -9,6 +9,17 @@ import { descargarArchivo } from "../../helpers/descargarArchivo.js";
 import { sedesActivas } from "../../helpers/stock.js";
 import { listenActas, addActaElucion, actasPorRango, anularActaTransaction, listenAnulacionesActas, loteGeneradorYaRegistrado, normalizarLoteGenerador } from "../../services/firestore/actas.js";
 
+const TIMEOUT_BUSQUEDA_MS = 20000;
+const MSJ_TIMEOUT_BUSQUEDA = "La consulta tardó demasiado, puede haber un problema de conexión -- intentá cerrar las otras pestañas de RadioFarm que tengas abiertas y reintentá.";
+
+// Sin esto, una consulta que nunca resuelve (ver nota en exportarRango) deja
+// el botón trabado en "Buscando..." para siempre, sin ningún error visible.
+function conTimeout(promesa, ms, mensaje) {
+  let idTimeout;
+  const timeout = new Promise((_, reject) => { idTimeout = setTimeout(() => reject(new Error(mensaje)), ms); });
+  return Promise.race([promesa, timeout]).finally(() => clearTimeout(idTimeout));
+}
+
 export function TabElucion({ catalogo, usuario, esAdmin, onToast }) {
   const [actasTodas, setActasTodas] = useState([]);
   const [anulacionesRaw, setAnulacionesRaw] = useState([]);
@@ -19,6 +30,7 @@ export function TabElucion({ catalogo, usuario, esAdmin, onToast }) {
   const [rangoDesde, setRangoDesde] = useState("");
   const [rangoHasta, setRangoHasta] = useState("");
   const [exportandoRango, setExportandoRango] = useState(false);
+  const [errorRango, setErrorRango] = useState(null);
 
   const [sedeId, setSedeId] = useState(usuario.sede);
   const [loteGenerador, setLoteGenerador] = useState("");
@@ -210,15 +222,17 @@ export function TabElucion({ catalogo, usuario, esAdmin, onToast }) {
   async function exportarRango() {
     if (!rangoDesde || !rangoHasta) return;
     setExportandoRango(true);
+    setErrorRango(null);
     try {
-      const registros = await actasPorRango("elucion", {
-        desde: rangoDesde, hasta: rangoHasta, esAdmin, sedeId: esAdmin ? (filtroSede || null) : usuario.sede,
-      });
+      const registros = await conTimeout(
+        actasPorRango("elucion", { desde: rangoDesde, hasta: rangoHasta, esAdmin, sedeId: esAdmin ? (filtroSede || null) : usuario.sede }),
+        TIMEOUT_BUSQUEDA_MS, MSJ_TIMEOUT_BUSQUEDA
+      );
       if (!registros.length) { onToast("No hay eluciones en ese rango", "error"); return; }
       descargarCSV(registros, `libro3_elucion_${rangoDesde}_a_${rangoHasta}.csv`);
       onToast(`Libro 3 exportado: ${registros.length} registro${registros.length !== 1 ? "s" : ""}`);
     } catch (e) {
-      onToast(e.message || "No se pudo exportar el rango", "error");
+      setErrorRango(e.message || "No se pudo buscar el rango.");
     } finally {
       setExportandoRango(false);
     }
@@ -263,7 +277,7 @@ export function TabElucion({ catalogo, usuario, esAdmin, onToast }) {
                 <div className="flex-1 md:flex-none"><Input label="Hasta" type="date" value={rangoHasta} onChange={(e) => setRangoHasta(e.target.value)} /></div>
               </div>
               <Btn size="sm" variant="outline" onClick={exportarRango} disabled={!rangoDesde || !rangoHasta || exportandoRango} className="order-3 md:order-none">
-                {exportandoRango ? "Exportando..." : "↓ CSV por rango"}
+                {exportandoRango ? "Buscando..." : "Buscar"}
               </Btn>
             </>
           )}
@@ -276,6 +290,10 @@ export function TabElucion({ catalogo, usuario, esAdmin, onToast }) {
           </Btn>
         </div>
       </div>
+
+      {errorRango && (
+        <div className="bg-red-50 border border-red-200 text-red-700 text-xs rounded-xl px-3 py-2">{errorRango}</div>
+      )}
 
       {mostrarForm && (
         <div className="bg-white border border-blue-100 rounded-2xl p-5 shadow-sm">

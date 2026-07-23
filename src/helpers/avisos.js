@@ -92,11 +92,18 @@ function guardarSet(clave, set) {
   }
 }
 
-function mostrarNotificacion(titulo, cuerpo) {
+function mostrarNotificacion(titulo, cuerpo, onClick) {
   reproducirTono();
   if (!avisosActivados()) return;
   try {
-    new Notification(titulo, { body: cuerpo, icon: "/icon-192.png" });
+    const notif = new Notification(titulo, { body: cuerpo, icon: "/icon-192.png" });
+    if (onClick) {
+      notif.onclick = () => {
+        window.focus();
+        onClick();
+        notif.close();
+      };
+    }
   } catch {
     // Puede tirar si el permiso se revocó después de activarlo -- el sonido
     // ya sonó de todos modos, no es una falla completamente silenciosa.
@@ -113,7 +120,8 @@ function mostrarNotificacion(titulo, cuerpo) {
 // avisar (comportamiento de flanco, no de nivel). El seguimiento se actualiza
 // siempre, esté o no activado el aviso -- así, cuando se activa más
 // adelante, no llueven avisos de todo lo que ya estaba pendiente en ese
-// momento.
+// momento. construirAviso puede devolver un `onClick` opcional (p. ej. para
+// navegar a una pantalla puntual al tocar la notificación del sistema).
 export function sincronizarYAvisar(claveAlmacen, clavesActuales, construirAviso) {
   const vistas = leerSet(claveAlmacen);
   const actuales = new Set(clavesActuales);
@@ -121,7 +129,7 @@ export function sincronizarYAvisar(claveAlmacen, clavesActuales, construirAviso)
     for (const clave of actuales) {
       if (!vistas.has(clave)) {
         const aviso = construirAviso(clave);
-        if (aviso) mostrarNotificacion(aviso.titulo, aviso.cuerpo);
+        if (aviso) mostrarNotificacion(aviso.titulo, aviso.cuerpo, aviso.onClick);
       }
     }
   }

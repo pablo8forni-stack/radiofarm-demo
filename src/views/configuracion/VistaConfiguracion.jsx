@@ -17,13 +17,21 @@ const TABS = [
   { id: "backup", label: "Backup" },
 ];
 
-export function VistaConfiguracion({ catalogo, usuario, onToast, onIrAInventario }) {
+// navConfiguracion ({tab, token}) llega desde App.jsx cuando otra pantalla
+// (el chip "N solicitudes" o el click en la notificación del sistema) pide
+// mostrar una pestaña puntual acá -- mismo patrón que navInventario en
+// VistaInventario. El token cambia en cada pedido aunque tab se repita, para
+// que el efecto dispare siempre aunque ya estuvieras en esa misma pestaña.
+export function VistaConfiguracion({ catalogo, usuario, onToast, onIrAInventario, navConfiguracion }) {
   const [tab, setTab] = useState("catalogo");
   const [roles, setRoles] = useState([]);
   const [solicitudes, setSolicitudes] = useState([]);
 
   useEffect(() => listenRoles(setRoles), []);
   useEffect(() => listenSolicitudes(setSolicitudes), []);
+  useEffect(() => {
+    if (navConfiguracion?.tab) setTab(navConfiguracion.tab);
+  }, [navConfiguracion]);
 
   return (
     <div className="flex flex-col gap-4">
