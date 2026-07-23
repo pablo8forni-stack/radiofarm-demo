@@ -38,6 +38,7 @@ import { Toast } from "./components/ui/Toast.jsx";
 import { signOutUser, listenSolicitudes } from "./services/auth.js";
 import { totStock, farmsDeSede, sedesActivas, idsSedesActivas, puntoReorden } from "./helpers/stock.js";
 import { hayOperacionCriticaEnCurso } from "./helpers/erroresRed.js";
+import { avisosSoportados, avisosActivados, activarAvisos, desactivarAvisos, sincronizarYAvisar, CLAVES_ALMACEN } from "./helpers/avisos.js";
 
 export default function App() {
   const { usuario, cargando } = useAuth();
@@ -58,8 +59,10 @@ function AppAutenticada({ usuario }) {
   const [vista, setVista] = useState("inventario");
   const [toast, setToast] = useState(null);
   const esAdmin = usuario.rol === "admin";
-  const [countSolicitudes, setCountSolicitudes] = useState(0);
+  const [solicitudes, setSolicitudes] = useState([]);
+  const countSolicitudes = solicitudes.length;
   const [navInventario, setNavInventario] = useState(null);
+  const [avisosOn, setAvisosOn] = useState(() => avisosActivados());
 
   // Cambia a la vista Inventario y le pide mostrar una sede puntual --
   // usado por "Ir a Inventario de X" en el modal de stock pendiente al
@@ -69,12 +72,37 @@ function AppAutenticada({ usuario }) {
     setVista("inventario");
   }
 
+  async function toggleAvisos() {
+    if (avisosOn) {
+      desactivarAvisos();
+      setAvisosOn(false);
+      setToast({ m: "Avisos con sonido desactivados", t: "info" });
+      return;
+    }
+    const ok = await activarAvisos();
+    setAvisosOn(ok);
+    setToast(ok
+      ? { m: "Avisos con sonido activados — sonará ante nuevas solicitudes o stock bajo mientras la app esté abierta." }
+      : { m: "No se pudo activar: revisá los permisos de notificaciones del navegador para este sitio.", t: "error" });
+  }
+
   // Sólo admin puede leer la colección completa de solicitudes (reglas de
   // Firestore) -- un técnico consultándola entera daría permission-denied.
   useEffect(() => {
     if (!esAdmin) return;
-    return listenSolicitudes((s) => setCountSolicitudes(s.length));
+    return listenSolicitudes(setSolicitudes);
   }, [esAdmin]);
+
+  // Aviso local (sonido + Notification) ante solicitudes de acceso
+  // genuinamente nuevas -- sincronizarYAvisar ya se encarga de no repetir
+  // avisos de solicitudes ya vistas al recargar la página.
+  useEffect(() => {
+    if (!esAdmin) return;
+    sincronizarYAvisar(CLAVES_ALMACEN.SOLICITUDES, solicitudes.map((s) => s.email), (email) => {
+      const s = solicitudes.find((x) => x.email === email);
+      return { titulo: "Nueva solicitud de acceso", cuerpo: s?.nombre ? `${s.nombre} (${email})` : email };
+    });
+  }, [esAdmin, solicitudes]);
 
   // Egreso/transferencia/anulación no fallan de forma confiable y rápida sin
   // conexión (ver nota en helpers/erroresRed.js) -- si la señal vuelve
@@ -94,6 +122,25 @@ function AppAutenticada({ usuario }) {
     window.addEventListener("online", avisarReconexion);
     return () => window.removeEventListener("online", avisarReconexion);
   }, []);
+
+  // Aviso local ante ítems que CRUZAN por debajo del mínimo (no mientras
+  // siguen ahí) -- mismo criterio de flanco que solicitudes, ver avisos.js.
+  useEffect(() => {
+    if (catalogo.cargando) return;
+    const clavesBajas = [];
+    sedesActivas(catalogo).forEach((sede) =>
+      farmsDeSede(catalogo, sede.id).forEach((f) => {
+        if (totStock(catalogo.stock[sede.id]?.[f.id] || []) <= puntoReorden(catalogo, sede.id, f.id)) {
+          clavesBajas.push(`${sede.id}_${f.id}`);
+        }
+      })
+    );
+    sincronizarYAvisar(CLAVES_ALMACEN.STOCK_BAJO, clavesBajas, (clave) => {
+      const [sedeId, farmId] = clave.split("_");
+      const farm = catalogo.farms.find((f) => f.id === farmId);
+      return { titulo: "Stock por debajo del mínimo", cuerpo: `${farm?.nombre || farmId} — ${catalogo.sedes[sedeId]?.nombre || sedeId}` };
+    });
+  }, [catalogo]);
 
   if (catalogo.cargando) return <PantallaCargando />;
 
@@ -147,6 +194,15 @@ function AppAutenticada({ usuario }) {
               </button>
             )}
             <div className="flex items-center gap-2 pl-2 border-l border-gray-100">
+              {avisosSoportados() && (
+                <button onClick={toggleAvisos}
+                  title={avisosOn ? "Avisos con sonido activados — click para desactivar" : "Activar avisos con sonido (solicitudes, stock bajo)"}
+                  className={`rounded-lg transition min-w-11 min-h-11 md:min-w-0 md:min-h-0 flex items-center justify-center ${avisosOn ? "text-blue-600 hover:bg-blue-50" : "text-gray-400 hover:text-gray-600 hover:bg-gray-100"}`}>
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
+                  </svg>
+                </button>
+              )}
               <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold text-white ${esAdmin ? "bg-purple-500" : "bg-blue-500"}`}>{usuario.initial}</div>
               <div className="hidden sm:block">
                 <div className="text-xs font-semibold text-gray-700 leading-tight">{usuario.nombre}</div>

@@ -23,6 +23,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
   const [rangoDesde, setRangoDesde] = useState("");
   const [rangoHasta, setRangoHasta] = useState("");
   const [exportandoRango, setExportandoRango] = useState(false);
+  const [busq, setBusq] = useState("");
 
   const [nombre, setNombre] = useState(""); const [dni, setDni] = useState("");
   const [peso, setPeso] = useState(""); const [talla, setTalla] = useState("");
@@ -88,9 +89,18 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
     onToast("Registro guardado"); limpiarForm(); setMostrarForm(false);
   }
 
+  // Filtro client-side sobre lo que ya está en memoria (dentro de la fecha o
+  // rango elegido) -- no dispara ninguna consulta nueva a Firestore. Como
+  // "actas" también alimenta el CSV, buscar acá filtra lo que se exporta,
+  // igual que ya pasa con el filtro de fecha/sede.
+  const busqNorm = busq.trim().toLowerCase();
   const actas = useMemo(
-    () => actasTodas.filter((a) => (!filtroFecha || fmtFechaISO(a.fecha) === filtroFecha) && (!filtroSede || a.sedeId === filtroSede)),
-    [actasTodas, filtroFecha, filtroSede]
+    () => actasTodas.filter((a) =>
+      (!filtroFecha || fmtFechaISO(a.fecha) === filtroFecha) &&
+      (!filtroSede || a.sedeId === filtroSede) &&
+      (!busqNorm || a.pacienteNombre?.toLowerCase().includes(busqNorm) || a.pacienteDni?.toLowerCase().includes(busqNorm))
+    ),
+    [actasTodas, filtroFecha, filtroSede, busqNorm]
   );
 
   // Sólo se agrupa por fecha en "Ver todos" -- con un día ya filtrado, todos
@@ -237,9 +247,9 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
             ) : (
               <>
                 <div className="flex gap-2 items-center md:order-1">
-                  <div className="flex-1 md:flex-none"><Input type="date" value={rangoDesde} onChange={(e) => setRangoDesde(e.target.value)} /></div>
-                  <span className="text-xs text-gray-400">a</span>
-                  <div className="flex-1 md:flex-none"><Input type="date" value={rangoHasta} onChange={(e) => setRangoHasta(e.target.value)} /></div>
+                  <div className="flex-1 md:flex-none"><Input label="Desde" type="date" value={rangoDesde} onChange={(e) => setRangoDesde(e.target.value)} /></div>
+                  <span className="text-xs text-gray-400 mt-5">a</span>
+                  <div className="flex-1 md:flex-none"><Input label="Hasta" type="date" value={rangoHasta} onChange={(e) => setRangoHasta(e.target.value)} /></div>
                 </div>
                 <Btn size="sm" variant="outline" onClick={exportarRango} disabled={!rangoDesde || !rangoHasta || exportandoRango} className="md:order-1">
                   {exportandoRango ? "Exportando..." : "↓ CSV por rango"}
@@ -257,6 +267,14 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
             </span>
           </Btn>
         </div>
+      </div>
+
+      <div className="relative w-full sm:w-72">
+        <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-4.35-4.35M17 11A6 6 0 1 1 5 11a6 6 0 0 1 12 0z" />
+        </svg>
+        <input className="w-full pl-9 pr-3 py-2 text-sm border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-400"
+          placeholder="Buscar por nombre o DNI..." value={busq} onChange={(e) => setBusq(e.target.value)} />
       </div>
 
       {mostrarForm && (

@@ -193,9 +193,9 @@ export function TabMarcacion({ catalogo, usuario, esAdmin, onToast }) {
           ) : (
             <>
               <div className="flex gap-2 items-center order-2 md:order-none">
-                <div className="flex-1 md:flex-none"><Input type="date" value={rangoDesde} onChange={(e) => setRangoDesde(e.target.value)} /></div>
-                <span className="text-xs text-gray-400">a</span>
-                <div className="flex-1 md:flex-none"><Input type="date" value={rangoHasta} onChange={(e) => setRangoHasta(e.target.value)} /></div>
+                <div className="flex-1 md:flex-none"><Input label="Desde" type="date" value={rangoDesde} onChange={(e) => setRangoDesde(e.target.value)} /></div>
+                <span className="text-xs text-gray-400 mt-5">a</span>
+                <div className="flex-1 md:flex-none"><Input label="Hasta" type="date" value={rangoHasta} onChange={(e) => setRangoHasta(e.target.value)} /></div>
               </div>
               <Btn size="sm" variant="outline" onClick={exportarRango} disabled={!rangoDesde || !rangoHasta || exportandoRango} className="order-3 md:order-none">
                 {exportandoRango ? "Exportando..." : "↓ CSV por rango"}
