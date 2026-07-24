@@ -29,8 +29,15 @@ export function TabMarcacion({ catalogo, usuario, esAdmin, onToast }) {
   const [filtroSede, setFiltroSede] = useState(usuario.sede);
   const [rangoDesde, setRangoDesde] = useState("");
   const [rangoHasta, setRangoHasta] = useState("");
-  const [exportandoRango, setExportandoRango] = useState(false);
+  const [buscandoRango, setBuscandoRango] = useState(false);
   const [errorRango, setErrorRango] = useState(null);
+  // null = todavía no se buscó; array (incluso vacío) = resultado en memoria
+  // de la última búsqueda, listo para descargar sin volver a consultar.
+  const [resultadoRango, setResultadoRango] = useState(null);
+
+  function cambiarRango(setter) {
+    return (e) => { setter(e.target.value); setResultadoRango(null); setErrorRango(null); };
+  }
 
   const [farmId, setFarmId] = useState(""); const [lote, setLote] = useState("");
   const [mciMarcacion, setMciMarcacion] = useState(""); const [obs, setObs] = useState("");
@@ -155,24 +162,33 @@ export function TabMarcacion({ catalogo, usuario, esAdmin, onToast }) {
   // Sólo disponible en "Ver todos": el listener de pantalla está limitado a
   // PAGINA (150) para no cargar la vista, insuficiente para una auditoría ARN
   // de un período largo -- esto hace una consulta aparte, sin ese límite,
-  // acotada al rango de fechas elegido.
-  async function exportarRango() {
+  // acotada al rango de fechas elegido. Buscar y descargar son dos pasos
+  // separados a propósito: "Buscar" sólo consulta y muestra un resumen (nunca
+  // la lista completa, mismo motivo que el límite de pantalla), y "Descargar
+  // CSV" usa esos mismos registros ya en memoria -- ni una descarga sorpresa
+  // al tocar Buscar, ni una segunda consulta a Firestore al descargar.
+  async function buscarRango() {
     if (!rangoDesde || !rangoHasta) return;
-    setExportandoRango(true);
+    setBuscandoRango(true);
     setErrorRango(null);
+    setResultadoRango(null);
     try {
       const registros = await conTimeout(
         actasPorRango("marcacion", { desde: rangoDesde, hasta: rangoHasta, esAdmin, sedeId: esAdmin ? (filtroSede || null) : usuario.sede }),
         TIMEOUT_BUSQUEDA_MS, MSJ_TIMEOUT_BUSQUEDA
       );
-      if (!registros.length) { onToast("No hay marcaciones en ese rango", "error"); return; }
-      descargarCSV(registros, `libro1_marcacion_${rangoDesde}_a_${rangoHasta}.csv`);
-      onToast(`Libro 1 exportado: ${registros.length} registro${registros.length !== 1 ? "s" : ""}`);
+      setResultadoRango(registros);
     } catch (e) {
       setErrorRango(e.message || "No se pudo buscar el rango.");
     } finally {
-      setExportandoRango(false);
+      setBuscandoRango(false);
     }
+  }
+
+  function descargarResultadoRango() {
+    if (!resultadoRango?.length) return;
+    descargarCSV(resultadoRango, `libro1_marcacion_${rangoDesde}_a_${rangoHasta}.csv`);
+    onToast(`Libro 1 exportado: ${resultadoRango.length} registro${resultadoRango.length !== 1 ? "s" : ""}`);
   }
 
   return (
@@ -207,12 +223,12 @@ export function TabMarcacion({ catalogo, usuario, esAdmin, onToast }) {
           ) : (
             <>
               <div className="flex gap-2 items-center order-2 md:order-none">
-                <div className="flex-1 md:flex-none"><Input label="Desde" type="date" value={rangoDesde} onChange={(e) => setRangoDesde(e.target.value)} /></div>
+                <div className="flex-1 md:flex-none"><Input label="Desde" type="date" value={rangoDesde} onChange={cambiarRango(setRangoDesde)} /></div>
                 <span className="text-xs text-gray-400 mt-5">a</span>
-                <div className="flex-1 md:flex-none"><Input label="Hasta" type="date" value={rangoHasta} onChange={(e) => setRangoHasta(e.target.value)} /></div>
+                <div className="flex-1 md:flex-none"><Input label="Hasta" type="date" value={rangoHasta} onChange={cambiarRango(setRangoHasta)} /></div>
               </div>
-              <Btn size="sm" variant="outline" onClick={exportarRango} disabled={!rangoDesde || !rangoHasta || exportandoRango} className="order-3 md:order-none">
-                {exportandoRango ? "Buscando..." : "Buscar"}
+              <Btn size="sm" variant="outline" onClick={buscarRango} disabled={!rangoDesde || !rangoHasta || buscandoRango} className="order-3 md:order-none">
+                {buscandoRango ? "Buscando..." : "Buscar"}
               </Btn>
             </>
           )}
@@ -222,6 +238,19 @@ export function TabMarcacion({ catalogo, usuario, esAdmin, onToast }) {
 
       {errorRango && (
         <div className="bg-red-50 border border-red-200 text-red-700 text-xs rounded-xl px-3 py-2">{errorRango}</div>
+      )}
+
+      {resultadoRango !== null && (
+        resultadoRango.length > 0 ? (
+          <div className="flex flex-col sm:flex-row sm:items-center gap-2 bg-blue-50 border border-blue-100 text-blue-700 text-xs rounded-xl px-3 py-2">
+            <span>Se encontraron {resultadoRango.length} registro{resultadoRango.length !== 1 ? "s" : ""} entre {fmtF(rangoDesde)} y {fmtF(rangoHasta)}.</span>
+            <Btn size="sm" variant="outline" onClick={descargarResultadoRango} className="sm:ml-auto">↓ Descargar CSV</Btn>
+          </div>
+        ) : (
+          <div className="bg-gray-50 border border-gray-200 text-gray-500 text-xs rounded-xl px-3 py-2">
+            No se encontraron registros en ese rango.
+          </div>
+        )
       )}
 
       {mostrarForm && (
