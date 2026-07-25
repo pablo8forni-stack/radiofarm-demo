@@ -3,6 +3,7 @@ import { Sel } from "../../components/ui/Sel.jsx";
 import { TabCatalogo } from "./TabCatalogo.jsx";
 import { TabProveedores } from "./TabProveedores.jsx";
 import { TabRadioisotopos } from "./TabRadioisotopos.jsx";
+import { TabEstudios } from "./TabEstudios.jsx";
 import { TabSedes } from "./TabSedes.jsx";
 import { TabSedesActivas } from "./TabSedesActivas.jsx";
 import { TabUsuarios } from "./TabUsuarios.jsx";
@@ -13,6 +14,7 @@ const TABS = [
   { id: "catalogo", label: "Catálogo" },
   { id: "proveedores", label: "Proveedores" },
   { id: "isotopos", label: "Isótopos" },
+  { id: "estudios", label: "Estudios" },
   { id: "sedes", label: "Asignación por sede" },
   { id: "activas", label: "Sedes activas" },
   { id: "usuarios", label: "Usuarios" },
@@ -59,6 +61,7 @@ export function VistaConfiguracion({ catalogo, usuario, onToast, onIrAInventario
       {tab === "catalogo" && <TabCatalogo catalogo={catalogo} onToast={onToast} />}
       {tab === "proveedores" && <TabProveedores catalogo={catalogo} onToast={onToast} />}
       {tab === "isotopos" && <TabRadioisotopos catalogo={catalogo} onToast={onToast} />}
+      {tab === "estudios" && <TabEstudios catalogo={catalogo} onToast={onToast} />}
       {tab === "sedes" && <TabSedes catalogo={catalogo} onToast={onToast} />}
       {tab === "activas" && <TabSedesActivas catalogo={catalogo} roles={roles} onToast={onToast} onIrAInventario={onIrAInventario} />}
       {tab === "usuarios" && <TabUsuarios catalogo={catalogo} roles={roles} solicitudes={solicitudes} usuarioActual={usuario} onToast={onToast} />}

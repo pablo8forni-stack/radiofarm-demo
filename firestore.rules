@@ -61,6 +61,13 @@ service cloud.firestore {
       allow read: if tieneAcceso();
       allow write: if isAdmin();
     }
+    // Lista dinámica de estudios del selector de Libro 2 -- a diferencia de
+    // radioisotopos, el id acá no tiene ningún significado especial (el acta
+    // guarda el nombre elegido, no el id).
+    match /estudios/{estudioId} {
+      allow read: if tieneAcceso();
+      allow write: if isAdmin();
+    }
 
     // sedes: config (activo/farmIds/puntosReorden) sólo la edita un admin.
     match /sedes/{sedeId} {

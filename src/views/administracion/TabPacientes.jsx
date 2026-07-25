@@ -5,7 +5,6 @@ import { Input } from "../../components/ui/Input.jsx";
 import { Sel } from "../../components/ui/Sel.jsx";
 import { QRScanner } from "../../components/scanner/QRScanner.jsx";
 import { ModalAnularActa } from "../../components/actas/ModalAnularActa.jsx";
-import { ESTUDIOS } from "../../constants/estudios.js";
 import { fmtF, fmtTs, fmtFechaISO, hoy, capitalizarPalabras, agruparPorFecha } from "../../helpers/formato.js";
 import { descargarArchivo } from "../../helpers/descargarArchivo.js";
 import { parseQR } from "../../helpers/qr.js";
@@ -23,8 +22,15 @@ function conTimeout(promesa, ms, mensaje) {
   return Promise.race([promesa, timeout]).finally(() => clearTimeout(idTimeout));
 }
 
+function tsMillis(fecha) {
+  if (!fecha) return 0;
+  const d = typeof fecha?.toDate === "function" ? fecha.toDate() : new Date(fecha);
+  return Number.isNaN(d.getTime()) ? 0 : d.getTime();
+}
+
 export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
-  const [actasTodas, setActasTodas] = useState([]);
+  const [pacientesTodas, setPacientesTodas] = useState([]);
+  const [barridosI131, setBarridosI131] = useState([]);
   const [anulacionesRaw, setAnulacionesRaw] = useState([]);
   const [mAnular, setMAnular] = useState(null);
   const [mostrarForm, setMostrarForm] = useState(false);
@@ -55,6 +61,10 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
   const [nombre, setNombre] = useState(""); const [dni, setDni] = useState("");
   const [peso, setPeso] = useState(""); const [talla, setTalla] = useState("");
   const [estudio, setEstudio] = useState(""); const [mci, setMci] = useState("");
+  // "Otro" no sale de la colección estudios -- es una opción fija de UI que
+  // revela este campo. Lo que se guarda en el acta es el texto tipeado acá,
+  // nunca el literal "Otro".
+  const [estudioOtro, setEstudioOtro] = useState("");
   const [farmId, setFarmId] = useState(""); const [lote, setLote] = useState("");
   const [obs, setObs] = useState("");
   const [sedeId, setSedeId] = useState(usuario.sede);
@@ -68,11 +78,25 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
   const [dosisVinculada, setDosisVinculada] = useState("");
   const [dosisI131, setDosisI131] = useState([]);
 
-  useEffect(() => listenActas("paciente", setActasTodas, { esAdmin, sedeId: usuario.sede }), []);
+  useEffect(() => listenActas("paciente", setPacientesTodas, { esAdmin, sedeId: usuario.sede }), []);
   useEffect(() => listenAnulacionesActas(setAnulacionesRaw, { esAdmin, sedeId: usuario.sede }), []);
-  // Sólo para el picker "Dosis relacionada" del sub-formulario de Barrido --
-  // misma sede/límite que el resto de los listeners de esta pantalla.
+  // dosisI131 sirve doble función: alimenta el picker "Dosis relacionada" del
+  // sub-formulario de Barrido, y se mezcla (junto con barridosI131) en el
+  // listado principal -- el N° de Ficha es un correlativo diario único
+  // compartido por todos los pacientes del servicio, así que el listado de
+  // "Registros del día" tiene que mostrar los 3 tipos intercalados por hora
+  // para no dejar saltos de ficha sin explicación visible. La pestaña
+  // "Terapia I-131" (consulta) sigue siendo el filtro específico de estos
+  // mismos 2 tipos, sin cambios.
   useEffect(() => listenActas("i131_dosis", setDosisI131, { esAdmin, sedeId: usuario.sede }), []);
+  useEffect(() => listenActas("i131_barrido", setBarridosI131, { esAdmin, sedeId: usuario.sede }), []);
+
+  // Cada colección ya viene ordenada desc por fecha desde el listener, así
+  // que sólo hace falta mezclar y volver a ordenar, no reordenar cada una.
+  const actasTodas = useMemo(
+    () => [...pacientesTodas, ...dosisI131, ...barridosI131].sort((a, b) => tsMillis(b.fecha) - tsMillis(a.fecha)),
+    [pacientesTodas, dosisI131, barridosI131]
+  );
 
   // anulaId -> acta de anulación (motivo, fecha, quién) -- Map en vez de Set
   // porque el listado necesita mostrar el motivo, no sólo saber que existe.
@@ -112,7 +136,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
   }
 
   function limpiarForm() {
-    setFichaNro(""); setNombre(""); setDni(""); setPeso(""); setTalla(""); setEstudio(""); setMci(""); setFarmId(""); setLote(""); setObs("");
+    setFichaNro(""); setNombre(""); setDni(""); setPeso(""); setTalla(""); setEstudio(""); setEstudioOtro(""); setMci(""); setFarmId(""); setLote(""); setObs("");
     setMostrarIsotopo(false); setIsotopoId("tc99m"); setMedicoResponsable("");
     setTipoI131("barrido"); setActividadAdministrada(""); setIndicacion(""); setDosisVinculada("");
     setSedeId(usuario.sede);
@@ -164,6 +188,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
       return;
     }
     if (!mci || !estudio || !lote.trim()) return;
+    if (estudio === "Otro" && !estudioOtro.trim()) return;
     if (esLutecio ? !medicoResponsable.trim() : !farmId) return;
     const farm = catalogo.farms.find((f) => f.id === farmId);
     addActaPaciente({
@@ -171,7 +196,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
       pacienteFicha: fichaNro.trim(),
       pacienteNombre: nombre.trim(), pacienteDni: dni.trim(),
       peso: parseFloat(peso) || 0, talla: parseFloat(talla) || 0,
-      estudio, mciAdministrados: parseFloat(mci) || 0,
+      estudio: estudio === "Otro" ? estudioOtro.trim() : estudio, mciAdministrados: parseFloat(mci) || 0,
       isotopoId, lote: lote.trim(),
       // Lutecio-177 no pasa por el catálogo de radiofármacos/stock (dosis
       // puntual por paciente, no stock rotativo) -- mismo criterio que
@@ -213,12 +238,43 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
     return catalogo.radioisotopos?.find((i) => i.id === a.isotopoId)?.nombre || a.isotopoId;
   }
 
+  // Badge de tipo de registro -- mismo criterio que TIPO_INFO en Historial
+  // (helpers/formato no lo exporta, es chico y sólo se usa acá). null = sin
+  // badge (Tc-99m, caso habitual, no aporta nada verlo marcado en cada fila).
+  function tipoInfo(a) {
+    if (a.tipo === "i131_dosis") return { label: "Dosis I-131", color: "orange" };
+    if (a.tipo === "i131_barrido") return { label: "Barrido I-131", color: "teal" };
+    const iso = nombreIsotopo(a);
+    return iso ? { label: iso, color: "purple" } : null;
+  }
+
+  // Detalle: cada tipo usa esta columna/línea para algo distinto (radiofármaco
+  // real para Tc-99m, sólo lote para Lutecio/Dosis I-131, vínculo a la dosis
+  // para Barrido) -- se centraliza acá para no repetir la misma cadena de
+  // condiciones en la fila y en la tarjeta.
+  function detalleRegistro(a) {
+    if (a.tipo === "i131_barrido") return { principal: a.dosisActaId ? "Vinculado a dosis" : "—", sub: null };
+    if (a.tipo === "i131_dosis") return { principal: `Lote: ${a.lote || "—"}`, sub: a.indicacion || null };
+    return { principal: a.isotopoId === "lu177" ? null : (a.farmNombre || "—"), sub: a.lote || null };
+  }
+
+  // Misma magnitud física (actividad administrada, en mCi) para Tc-99m/
+  // Lutecio (mciAdministrados) y Dosis I-131 (actividadAdministrada) -- se
+  // unifica en una sola columna. Barrido corporal no administra nada nuevo.
+  function dosisRegistro(a) {
+    const v = a.mciAdministrados ?? a.actividadAdministrada;
+    return v == null ? null : v;
+  }
+
   function filaPaciente(a) {
     const anulacion = anulaciones.get(a.id);
-    const iso = nombreIsotopo(a);
+    const tipo = tipoInfo(a);
+    const { principal, sub } = detalleRegistro(a);
+    const dosis = dosisRegistro(a);
     return (
       <tr key={a.id} className={`border-b border-gray-50 last:border-0 hover:bg-gray-50/30 ${anulacion ? "opacity-50" : ""}`}>
         <td className="px-3 py-2.5 text-xs text-gray-500 whitespace-nowrap">{fmtTs(a.fecha).split(" ")[1] || ""}</td>
+        <td className="px-3 py-2.5">{tipo && <Badge color={tipo.color}>{tipo.label}</Badge>}</td>
         <td className="px-3 py-2.5 text-xs font-mono text-gray-600">{a.pacienteFicha || "—"}</td>
         <td className="px-3 py-2.5 font-semibold text-gray-800 text-xs">
           {a.pacienteNombre}
@@ -227,18 +283,22 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
           {anulacion && <div className="text-xs text-orange-500 font-semibold">ANULADO: {anulacion.motivo}</div>}
         </td>
         <td className="px-3 py-2.5 text-xs font-mono text-gray-500">{a.pacienteDni}</td>
-        <td className="px-3 py-2.5 text-xs text-gray-700">{a.estudio}</td>
+        <td className="px-3 py-2.5 text-xs text-gray-700">{a.estudio || "—"}</td>
         <td className="px-3 py-2.5 text-xs text-gray-700">
-          {iso ? <Badge color="purple">{iso}</Badge> : (a.farmNombre || "—")}
-          {a.lote && <div className="text-xs text-gray-400 font-mono">{a.lote}</div>}
+          {principal}
+          {sub && <div className="text-xs text-gray-400 font-mono mt-0.5">{sub}</div>}
         </td>
         <td className="px-3 py-2.5">
-          <span className="font-bold text-blue-700 text-sm">{a.mciAdministrados}</span>
-          <span className="text-xs text-gray-400 ml-1">mCi</span>
+          {dosis != null ? (
+            <>
+              <span className="font-bold text-blue-700 text-sm">{dosis}</span>
+              <span className="text-xs text-gray-400 ml-1">mCi</span>
+            </>
+          ) : <span className="text-xs text-gray-300">—</span>}
         </td>
         <td className="px-3 py-2.5 text-xs text-gray-500">{a.usuarioNombre}</td>
         <td className="px-3 py-2.5 text-right">
-          {esAdmin && !anulacion && (
+          {esAdmin && a.tipo === "paciente" && !anulacion && (
             <button onClick={() => setMAnular(a)} className="text-xs text-orange-500 hover:text-orange-700 font-semibold px-2 py-1 rounded-lg hover:bg-orange-50 transition min-h-11 md:min-h-0">
               Anular
             </button>
@@ -250,27 +310,29 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
 
   function tarjetaPaciente(a) {
     const anulacion = anulaciones.get(a.id);
-    const iso = nombreIsotopo(a);
+    const tipo = tipoInfo(a);
+    const { principal, sub } = detalleRegistro(a);
+    const dosis = dosisRegistro(a);
     return (
       <div key={a.id} className={`p-4 flex flex-col gap-1.5 ${anulacion ? "opacity-50" : ""}`}>
         <div className="flex items-center justify-between gap-2">
           <span className="font-semibold text-gray-800 text-sm">{a.pacienteNombre}</span>
           <span className="text-xs text-gray-500 whitespace-nowrap">{fmtTs(a.fecha).split(" ")[1] || ""}</span>
         </div>
-        {iso && <div><Badge color="purple">{iso}</Badge></div>}
+        {tipo && <div><Badge color={tipo.color}>{tipo.label}</Badge></div>}
         <div className="text-xs text-gray-500">
           Ficha {a.pacienteFicha || "—"} · DNI {a.pacienteDni}
           {(a.peso || a.talla) && <> · {a.peso ? `${a.peso}kg` : ""}{a.talla ? ` ${a.talla}cm` : ""}</>}
         </div>
-        <div className="text-xs text-gray-700">{a.estudio}</div>
+        {a.estudio && <div className="text-xs text-gray-700">{a.estudio}</div>}
         <div className="text-xs text-gray-700">
-          {iso ? "" : (a.farmNombre || "—")}{a.lote && ` · Lote ${a.lote}`} · <span className="font-bold text-blue-700">{a.mciAdministrados} mCi</span>
+          {principal}{sub && ` · ${sub}`}{dosis != null && <> · <span className="font-bold text-blue-700">{dosis} mCi</span></>}
         </div>
         {a.medicoResponsable && <div className="text-xs text-gray-500">Médico: {a.medicoResponsable}</div>}
         <div className="text-xs text-gray-500">Técnico: {a.usuarioNombre}</div>
         {a.observacion && <div className="text-xs text-gray-400 italic">{a.observacion}</div>}
         {anulacion && <div className="text-xs text-orange-500 font-semibold">ANULADO: {anulacion.motivo}</div>}
-        {esAdmin && !anulacion && (
+        {esAdmin && a.tipo === "paciente" && !anulacion && (
           <div className="flex justify-end mt-0.5">
             <button onClick={() => setMAnular(a)} className="text-xs text-orange-500 hover:text-orange-700 font-semibold px-2 py-1 rounded-lg hover:bg-orange-50 transition min-h-11 md:min-h-0">
               Anular
@@ -281,17 +343,23 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
     );
   }
 
+  function tipoTextoCSV(a) {
+    if (a.tipo === "i131_dosis") return "Dosis I-131";
+    if (a.tipo === "i131_barrido") return "Barrido I-131";
+    return nombreIsotopo(a) || "Tc-99m";
+  }
+
   function filaCSV(a) {
     const d = a.fecha?.toDate ? a.fecha.toDate() : new Date(a.fecha);
     return [d.toLocaleDateString("es-AR"), d.toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" }),
-      a.sedeNombre, a.pacienteFicha || "—", nombreIsotopo(a) || "Tc-99m", a.pacienteNombre, a.pacienteDni, a.medicoResponsable || "—",
-      a.peso, a.talla, a.estudio, a.farmNombre || "—", a.lote || "—",
-      a.mciAdministrados, a.usuarioNombre, a.observacion || "—"];
+      a.sedeNombre, tipoTextoCSV(a), a.pacienteFicha || "—", a.pacienteNombre, a.pacienteDni, a.medicoResponsable || "—",
+      a.peso ?? "—", a.talla ?? "—", a.estudio || "—", a.farmNombre || "—", a.lote || "—",
+      dosisRegistro(a) ?? "—", a.indicacion || "—", a.dosisActaId || "—", a.usuarioNombre, a.observacion || "—"];
   }
 
   function descargarCSV(lista, nombreArchivo) {
     const filas = [
-      ["Fecha", "Hora", "Sede", "N° Ficha", "Isótopo", "Paciente", "DNI", "Médico responsable", "Peso (kg)", "Talla (cm)", "Estudio", "Radiofármaco", "Lote", "mCi administrados", "Técnico", "Observación"],
+      ["Fecha", "Hora", "Sede", "Tipo de registro", "N° Ficha", "Paciente", "DNI", "Médico responsable", "Peso (kg)", "Talla (cm)", "Estudio", "Radiofármaco", "Lote", "Dosis/Actividad (mCi)", "Indicación", "Dosis vinculada (id)", "Técnico", "Observación"],
       ...lista.map(filaCSV),
     ];
     const csv = filas.map((r) => r.map((x) => String(x).replace(/[\t\r\n]/g, " ")).join("\t")).join("\r\n");
@@ -308,16 +376,21 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
   // largo -- este es un getDocs aparte, sin ese límite, por rango de fechas.
   // Buscar y descargar son dos pasos separados a propósito: ver nota completa
   // en TabMarcacion.jsx#buscarRango.
+  // Trae los 3 tipos por separado (misma sede/rango, tres consultas en
+  // paralelo) y los mezcla, igual que el listado en vivo -- una exportación
+  // de rango tiene que reflejar la misma secuencia de fichas sin huecos.
   async function buscarRango() {
     if (!rangoDesde || !rangoHasta) return;
     setBuscandoRango(true);
     setErrorRango(null);
     setResultadoRango(null);
     try {
-      const registros = await conTimeout(
-        actasPorRango("paciente", { desde: rangoDesde, hasta: rangoHasta, esAdmin, sedeId: esAdmin ? (filtroSede || null) : usuario.sede }),
+      const opts = { desde: rangoDesde, hasta: rangoHasta, esAdmin, sedeId: esAdmin ? (filtroSede || null) : usuario.sede };
+      const [pacientes, dosis, barridos] = await conTimeout(
+        Promise.all([actasPorRango("paciente", opts), actasPorRango("i131_dosis", opts), actasPorRango("i131_barrido", opts)]),
         TIMEOUT_BUSQUEDA_MS, MSJ_TIMEOUT_BUSQUEDA
       );
+      const registros = [...pacientes, ...dosis, ...barridos].sort((a, b) => tsMillis(b.fecha) - tsMillis(a.fecha));
       setResultadoRango(registros);
     } catch (e) {
       setErrorRango(e.message || "No se pudo buscar el rango.");
@@ -428,11 +501,19 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
                 <Input label="Peso (kg)" type="number" min={0} value={peso} onChange={(e) => setPeso(e.target.value)} placeholder="78" />
                 <Input label="Talla (cm)" type="number" min={0} value={talla} onChange={(e) => setTalla(e.target.value)} placeholder="172" />
                 <div className="sm:col-span-2">
-                  <Sel label="Estudio" value={estudio} onChange={(e) => setEstudio(e.target.value)}>
+                  <Sel label="Estudio" value={estudio} onChange={(e) => { setEstudio(e.target.value); setEstudioOtro(""); }}>
                     <option value="">Seleccionar estudio...</option>
-                    {ESTUDIOS.map((e) => <option key={e}>{e}</option>)}
+                    {(catalogo.estudios || []).map((es) => <option key={es.id} value={es.nombre}>{es.nombre}</option>)}
+                    {/* "Otro" no sale de la colección -- opción fija, siempre
+                        última, revela el campo de texto libre de abajo. */}
+                    <option value="Otro">Otro</option>
                   </Sel>
                 </div>
+                {estudio === "Otro" && (
+                  <div className="sm:col-span-2">
+                    <Input label="¿Cuál?" value={estudioOtro} onChange={(e) => setEstudioOtro(e.target.value)} placeholder="Ej: Gammagrafía de paratiroides" />
+                  </div>
+                )}
               </>
             )}
             {esAdmin && (
@@ -520,7 +601,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
               !fichaNro.trim() || !nombre.trim() || !dni.trim() ||
               (esI131
                 ? (!medicoResponsable.trim() || (tipoI131 === "dosis" && (!puedeCargarDosisI131 || !actividadAdministrada || !lote.trim())))
-                : (!mci || !estudio || !lote.trim() || (esLutecio ? !medicoResponsable.trim() : !farmId)))
+                : (!mci || !estudio || (estudio === "Otro" && !estudioOtro.trim()) || !lote.trim() || (esLutecio ? !medicoResponsable.trim() : !farmId)))
             }>Guardar registro</Btn>
           </div>
         </div>
@@ -531,14 +612,14 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
           <span className="text-xs font-bold text-gray-500 uppercase tracking-wide">
             {filtroFecha ? `Registros del ${fmtF(filtroFecha)}` : "Todos los registros"}
           </span>
-          <Badge color="blue">{actas.length} paciente{actas.length !== 1 ? "s" : ""}</Badge>
+          <Badge color="blue">{actas.length} registro{actas.length !== 1 ? "s" : ""}</Badge>
         </div>
         {/* Desktop: tabla de siempre. */}
         <div className="hidden md:block overflow-x-auto">
-          <table className="w-full text-sm min-w-[760px]">
+          <table className="w-full text-sm min-w-[840px]">
             <thead>
               <tr className="border-b border-gray-100 bg-gray-50/60">
-                {["Hora", "N° Ficha", "Paciente", "DNI", "Estudio", "Radiofármaco / Lote", "Dosis (mCi)", "Técnico", ""].map((h, i) => (
+                {["Hora", "Tipo", "N° Ficha", "Paciente", "DNI", "Estudio", "Detalle", "Dosis (mCi)", "Técnico", ""].map((h, i) => (
                   <th key={i} className="px-3 py-3 text-xs font-bold text-gray-500 uppercase tracking-wide text-left">{h}</th>
                 ))}
               </tr>
@@ -547,7 +628,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
               {grupos
                 ? grupos.flatMap((g) => [
                     <tr key={`sep-${g.fecha}`} className="bg-gray-50">
-                      <td colSpan={9} className="px-3 py-2 text-xs font-bold text-gray-600 uppercase tracking-wide">
+                      <td colSpan={10} className="px-3 py-2 text-xs font-bold text-gray-600 uppercase tracking-wide">
                         {fmtF(g.fecha)} <span className="font-normal text-gray-400 normal-case">· {g.items.length} registro{g.items.length !== 1 ? "s" : ""}</span>
                       </td>
                     </tr>,

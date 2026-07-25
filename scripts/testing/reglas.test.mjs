@@ -418,3 +418,19 @@ test("control positivo: admin SÍ puede escribir en radioisotopos", async () => 
   assert.ok(snap.exists());
   await deleteDoc(doc(db, "radioisotopos", "test-iso"));
 });
+
+// estudios: mismo criterio -- lectura para cualquiera con acceso, escritura
+// sólo admin. A diferencia de radioisotopos, el id no tiene significado
+// especial (el acta guarda el nombre, no el id).
+test("técnico NO puede escribir en estudios", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  await assertPermissionDenied(() => setDoc(doc(db, "estudios", "test-estudio"), { nombre: "Test" }));
+});
+
+test("control positivo: admin SÍ puede escribir en estudios", async () => {
+  await loguearComo(PERSONAS.admin);
+  await setDoc(doc(db, "estudios", "test-estudio"), { nombre: "Test" });
+  const snap = await getDoc(doc(db, "estudios", "test-estudio"));
+  assert.ok(snap.exists());
+  await deleteDoc(doc(db, "estudios", "test-estudio"));
+});
