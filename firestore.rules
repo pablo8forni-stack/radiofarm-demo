@@ -165,7 +165,8 @@ service cloud.firestore {
             : (d.farmId is string && d.farmId.size() > 0 &&
                d.lote is string && d.lote.size() > 0 &&
                (d.tipo == 'paciente'
-                 ? (d.mciAdministrados is number && d.mciAdministrados > 0)
+                 ? (d.mciAdministrados is number && d.mciAdministrados > 0 &&
+                    d.pacienteFicha is string && d.pacienteFicha.size() > 0)
                  : (d.mciMarcacion is number && d.mciMarcacion > 0))));
     }
 

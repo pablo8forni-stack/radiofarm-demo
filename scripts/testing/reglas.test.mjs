@@ -78,6 +78,39 @@ test("acta con mciAdministrados 0 es rechazada", async () => {
   );
 });
 
+test("acta de paciente sin N° de ficha es rechazada", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  await assertPermissionDenied(() =>
+    addDoc(collection(db, "actas"), {
+      tipo: "paciente", fecha: serverTimestamp(), sedeId: SEDE_A, farmId: FARM_ID, lote: loteDePrueba(),
+      usuarioEmail: PERSONAS.tecnicoA.email, mciAdministrados: 10,
+      pacienteNombre: "Test", pacienteDni: "1", estudio: "Test",
+    })
+  );
+});
+
+test("acta de paciente con N° de ficha vacío es rechazada", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  await assertPermissionDenied(() =>
+    addDoc(collection(db, "actas"), {
+      tipo: "paciente", fecha: serverTimestamp(), sedeId: SEDE_A, farmId: FARM_ID, lote: loteDePrueba(),
+      usuarioEmail: PERSONAS.tecnicoA.email, mciAdministrados: 10, pacienteFicha: "",
+      pacienteNombre: "Test", pacienteDni: "1", estudio: "Test",
+    })
+  );
+});
+
+test("control positivo: técnico SÍ puede crear un acta de paciente con N° de ficha", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  const ref = await addDoc(collection(db, "actas"), {
+    tipo: "paciente", fecha: serverTimestamp(), sedeId: SEDE_A, farmId: FARM_ID, lote: loteDePrueba(),
+    usuarioEmail: PERSONAS.tecnicoA.email, mciAdministrados: 10, pacienteFicha: "4521",
+    pacienteNombre: "Test", pacienteDni: "1", estudio: "Test",
+  });
+  const snap = await getDoc(ref);
+  assert.ok(snap.exists());
+});
+
 test("acta con mciMarcacion 0 es rechazada", async () => {
   await loguearComo(PERSONAS.tecnicoA);
   await assertPermissionDenied(() =>

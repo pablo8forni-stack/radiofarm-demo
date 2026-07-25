@@ -44,6 +44,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
     return (e) => { setter(e.target.value); setResultadoRango(null); setErrorRango(null); };
   }
 
+  const [fichaNro, setFichaNro] = useState("");
   const [nombre, setNombre] = useState(""); const [dni, setDni] = useState("");
   const [peso, setPeso] = useState(""); const [talla, setTalla] = useState("");
   const [estudio, setEstudio] = useState(""); const [mci, setMci] = useState("");
@@ -65,7 +66,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
       setMAnular(null);
       // Precarga el formulario con los mismos datos para corregir sólo lo
       // que estaba mal, en vez de tipear todo de nuevo.
-      setSedeId(acta.sedeId); setNombre(acta.pacienteNombre); setDni(acta.pacienteDni);
+      setSedeId(acta.sedeId); setFichaNro(acta.pacienteFicha || ""); setNombre(acta.pacienteNombre); setDni(acta.pacienteDni);
       setPeso(String(acta.peso ?? "")); setTalla(String(acta.talla ?? "")); setEstudio(acta.estudio || "");
       setFarmId(acta.farmId); setLote(acta.lote); setMci(String(acta.mciAdministrados ?? ""));
       setObs(acta.observacion || "");
@@ -90,15 +91,16 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
   }
 
   function limpiarForm() {
-    setNombre(""); setDni(""); setPeso(""); setTalla(""); setEstudio(""); setMci(""); setFarmId(""); setLote(""); setObs("");
+    setFichaNro(""); setNombre(""); setDni(""); setPeso(""); setTalla(""); setEstudio(""); setMci(""); setFarmId(""); setLote(""); setObs("");
     setSedeId(usuario.sede);
   }
 
   function guardar() {
-    if (!nombre.trim() || !dni.trim() || !mci || !estudio || !farmId || !lote) return;
+    if (!fichaNro.trim() || !nombre.trim() || !dni.trim() || !mci || !estudio || !farmId || !lote) return;
     const farm = catalogo.farms.find((f) => f.id === farmId);
     addActaPaciente({
       sedeId, sedeNombre: catalogo.sedes[sedeId]?.nombre,
+      pacienteFicha: fichaNro.trim(),
       pacienteNombre: nombre.trim(), pacienteDni: dni.trim(),
       peso: parseFloat(peso) || 0, talla: parseFloat(talla) || 0,
       estudio, mciAdministrados: parseFloat(mci) || 0,
@@ -136,6 +138,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
     return (
       <tr key={a.id} className={`border-b border-gray-50 last:border-0 hover:bg-gray-50/30 ${anulacion ? "opacity-50" : ""}`}>
         <td className="px-3 py-2.5 text-xs text-gray-500 whitespace-nowrap">{fmtTs(a.fecha).split(" ")[1] || ""}</td>
+        <td className="px-3 py-2.5 text-xs font-mono text-gray-600">{a.pacienteFicha || "—"}</td>
         <td className="px-3 py-2.5 font-semibold text-gray-800 text-xs">
           {a.pacienteNombre}
           {(a.peso || a.talla) && <div className="text-xs font-normal text-gray-400">{a.peso && `${a.peso}kg`}{a.talla && ` · ${a.talla}cm`}</div>}
@@ -172,7 +175,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
           <span className="text-xs text-gray-500 whitespace-nowrap">{fmtTs(a.fecha).split(" ")[1] || ""}</span>
         </div>
         <div className="text-xs text-gray-500">
-          DNI {a.pacienteDni}
+          Ficha {a.pacienteFicha || "—"} · DNI {a.pacienteDni}
           {(a.peso || a.talla) && <> · {a.peso ? `${a.peso}kg` : ""}{a.talla ? ` ${a.talla}cm` : ""}</>}
         </div>
         <div className="text-xs text-gray-700">{a.estudio}</div>
@@ -196,13 +199,13 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
   function filaCSV(a) {
     const d = a.fecha?.toDate ? a.fecha.toDate() : new Date(a.fecha);
     return [d.toLocaleDateString("es-AR"), d.toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" }),
-      a.sedeNombre, a.pacienteNombre, a.pacienteDni, a.peso, a.talla, a.estudio, a.farmNombre || "—", a.lote || "—",
+      a.sedeNombre, a.pacienteFicha || "—", a.pacienteNombre, a.pacienteDni, a.peso, a.talla, a.estudio, a.farmNombre || "—", a.lote || "—",
       a.mciAdministrados, a.usuarioNombre, a.observacion || "—"];
   }
 
   function descargarCSV(lista, nombreArchivo) {
     const filas = [
-      ["Fecha", "Hora", "Sede", "Paciente", "DNI", "Peso (kg)", "Talla (cm)", "Estudio", "Radiofármaco", "Lote", "mCi administrados", "Técnico", "Observación"],
+      ["Fecha", "Hora", "Sede", "N° Ficha", "Paciente", "DNI", "Peso (kg)", "Talla (cm)", "Estudio", "Radiofármaco", "Lote", "mCi administrados", "Técnico", "Observación"],
       ...lista.map(filaCSV),
     ];
     const csv = filas.map((r) => r.map((x) => String(x).replace(/[\t\r\n]/g, " ")).join("\t")).join("\r\n");
@@ -331,6 +334,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
             </button>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <Input label="N° de Ficha" value={fichaNro} onChange={(e) => setFichaNro(e.target.value)} placeholder="4521" />
             <Input label="Apellido y nombre" value={nombre} onChange={(e) => setNombre(capitalizarPalabras(e.target.value))} placeholder="García Juan" />
             <Input label="DNI" value={dni} onChange={(e) => setDni(e.target.value)} placeholder="28456789" />
             <Input label="Peso (kg)" type="number" min={0} value={peso} onChange={(e) => setPeso(e.target.value)} placeholder="78" />
@@ -359,7 +363,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
           </div>
           <div className="flex gap-2 justify-end mt-4">
             <Btn variant="outline" onClick={() => { setMostrarForm(false); limpiarForm(); }}>Cancelar</Btn>
-            <Btn onClick={guardar} disabled={!nombre.trim() || !dni.trim() || !mci || !estudio || !farmId || !lote}>Guardar registro</Btn>
+            <Btn onClick={guardar} disabled={!fichaNro.trim() || !nombre.trim() || !dni.trim() || !mci || !estudio || !farmId || !lote}>Guardar registro</Btn>
           </div>
         </div>
       )}
@@ -376,7 +380,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
           <table className="w-full text-sm min-w-[760px]">
             <thead>
               <tr className="border-b border-gray-100 bg-gray-50/60">
-                {["Hora", "Paciente", "DNI", "Estudio", "Radiofármaco / Lote", "Dosis (mCi)", "Técnico", ""].map((h, i) => (
+                {["Hora", "N° Ficha", "Paciente", "DNI", "Estudio", "Radiofármaco / Lote", "Dosis (mCi)", "Técnico", ""].map((h, i) => (
                   <th key={i} className="px-3 py-3 text-xs font-bold text-gray-500 uppercase tracking-wide text-left">{h}</th>
                 ))}
               </tr>
@@ -385,7 +389,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
               {grupos
                 ? grupos.flatMap((g) => [
                     <tr key={`sep-${g.fecha}`} className="bg-gray-50">
-                      <td colSpan={8} className="px-3 py-2 text-xs font-bold text-gray-600 uppercase tracking-wide">
+                      <td colSpan={9} className="px-3 py-2 text-xs font-bold text-gray-600 uppercase tracking-wide">
                         {fmtF(g.fecha)} <span className="font-normal text-gray-400 normal-case">· {g.items.length} registro{g.items.length !== 1 ? "s" : ""}</span>
                       </td>
                     </tr>,
