@@ -59,6 +59,22 @@ export function addActaMarcacion(data) {
   return batch.commit();
 }
 
+// Terapia I-131: dos tipos planos (mismo criterio que transferencia_salida/
+// transferencia_entrada en movimientos, no un campo "subtipo") -- cada uno
+// tiene su propio requisito de campos y de permiso en actaValida(). "Dosis"
+// exige accesoTerapiaI131 (o admin) del lado servidor; "Barrido" no.
+export function addActaI131Dosis(data) {
+  const batch = writeBatch(db);
+  batch.set(doc(actasCol), { ...data, tipo: "i131_dosis", fecha: serverTimestamp() });
+  return batch.commit();
+}
+
+export function addActaI131Barrido(data) {
+  const batch = writeBatch(db);
+  batch.set(doc(actasCol), { ...data, tipo: "i131_barrido", fecha: serverTimestamp() });
+  return batch.commit();
+}
+
 // Libro 3 (Elución Mo-99/Tc-99m). getDoc directo por id determinístico
 // (sedeId_loteGenerador), no una query -- funciona aunque el lote tenga
 // meses de historial, no depende de estar dentro de los últimos PAGINA

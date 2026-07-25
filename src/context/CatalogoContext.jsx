@@ -3,6 +3,7 @@ import { listenFarms } from "../services/firestore/farms.js";
 import { listenSedes } from "../services/firestore/sedes.js";
 import { listenLotes } from "../services/firestore/stock.js";
 import { listenProveedores } from "../services/firestore/proveedores.js";
+import { listenRadioisotopos } from "../services/firestore/radioisotopos.js";
 
 export const CatalogoContext = createContext(null);
 
@@ -16,7 +17,8 @@ export function CatalogoProvider({ children }) {
   const [sedes, setSedes] = useState({});
   const [stock, setStock] = useState({});
   const [proveedores, setProveedores] = useState([]);
-  const [listo, setListo] = useState({ farms: false, sedes: false, stock: false, proveedores: false });
+  const [radioisotopos, setRadioisotopos] = useState([]);
+  const [listo, setListo] = useState({ farms: false, sedes: false, stock: false, proveedores: false, radioisotopos: false });
 
   useEffect(() => {
     const marcarListo = (clave) => setListo((l) => ({ ...l, [clave]: true }));
@@ -25,6 +27,7 @@ export function CatalogoProvider({ children }) {
       listenSedes((v) => { setSedes(v); marcarListo("sedes"); }),
       listenLotes((v) => { setStock(v); marcarListo("stock"); }),
       listenProveedores((v) => { setProveedores(v); marcarListo("proveedores"); }),
+      listenRadioisotopos((v) => { setRadioisotopos(v); marcarListo("radioisotopos"); }),
     ];
     return () => unsubs.forEach((u) => u());
   }, []);
@@ -32,7 +35,7 @@ export function CatalogoProvider({ children }) {
   const cargando = !Object.values(listo).every(Boolean);
 
   return (
-    <CatalogoContext.Provider value={{ farms, sedes, stock, proveedores, cargando }}>
+    <CatalogoContext.Provider value={{ farms, sedes, stock, proveedores, radioisotopos, cargando }}>
       {children}
     </CatalogoContext.Provider>
   );

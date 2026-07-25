@@ -5,7 +5,7 @@
 // restrictiva de lo debido.
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { collection, addDoc, doc, getDoc, setDoc, updateDoc, serverTimestamp } from "firebase/firestore";
+import { collection, addDoc, doc, getDoc, setDoc, updateDoc, deleteDoc, serverTimestamp } from "firebase/firestore";
 import {
   PERSONAS, SEDE_A, SEDE_B, FARM_ID, db, loguearComo, prepararFixturesGlobales, loteDePrueba, cerrarConexiones,
   crearLoteDirecto, borrarLote,
@@ -104,8 +104,41 @@ test("control positivo: técnico SÍ puede crear un acta de paciente con N° de 
   await loguearComo(PERSONAS.tecnicoA);
   const ref = await addDoc(collection(db, "actas"), {
     tipo: "paciente", fecha: serverTimestamp(), sedeId: SEDE_A, farmId: FARM_ID, lote: loteDePrueba(),
-    usuarioEmail: PERSONAS.tecnicoA.email, mciAdministrados: 10, pacienteFicha: "4521",
+    usuarioEmail: PERSONAS.tecnicoA.email, mciAdministrados: 10, pacienteFicha: "4521", isotopoId: "tc99m",
     pacienteNombre: "Test", pacienteDni: "1", estudio: "Test",
+  });
+  const snap = await getDoc(ref);
+  assert.ok(snap.exists());
+});
+
+test("acta de paciente sin isotopoId es rechazada (siempre presente en actas nuevas)", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  await assertPermissionDenied(() =>
+    addDoc(collection(db, "actas"), {
+      tipo: "paciente", fecha: serverTimestamp(), sedeId: SEDE_A, farmId: FARM_ID, lote: loteDePrueba(),
+      usuarioEmail: PERSONAS.tecnicoA.email, mciAdministrados: 10, pacienteFicha: "4521",
+      pacienteNombre: "Test", pacienteDni: "1", estudio: "Test",
+    })
+  );
+});
+
+test("acta de paciente Lutecio-177 sin médico responsable es rechazada", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  await assertPermissionDenied(() =>
+    addDoc(collection(db, "actas"), {
+      tipo: "paciente", fecha: serverTimestamp(), sedeId: SEDE_A, lote: loteDePrueba(),
+      usuarioEmail: PERSONAS.tecnicoA.email, mciAdministrados: 10, pacienteFicha: "4521", isotopoId: "lu177",
+      pacienteNombre: "Test", pacienteDni: "1", estudio: "Test",
+    })
+  );
+});
+
+test("control positivo: acta de paciente Lutecio-177 con médico responsable no necesita farmId", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  const ref = await addDoc(collection(db, "actas"), {
+    tipo: "paciente", fecha: serverTimestamp(), sedeId: SEDE_A, lote: "LU177-TEST",
+    usuarioEmail: PERSONAS.tecnicoA.email, mciAdministrados: 10, pacienteFicha: "4521", isotopoId: "lu177",
+    medicoResponsable: "Dra. Test", pacienteNombre: "Test", pacienteDni: "1", estudio: "Test",
   });
   const snap = await getDoc(ref);
   assert.ok(snap.exists());
@@ -315,4 +348,73 @@ test("técnico NO puede crear un marcador generadoresVistos de otra sede", async
       sedeId: SEDE_B, loteGenerador: lote, usuarioEmail: PERSONAS.tecnicoA.email,
     })
   );
+});
+
+// Terapia I-131: dos tipos planos ('i131_dosis'/'i131_barrido'), no un campo
+// "subtipo" -- ver nota larga en firestore.rules#actaValida. 'i131_dosis'
+// exige tieneAccesoI131() (admin o técnico con el flag accesoTerapiaI131);
+// 'i131_barrido' no, cualquier técnico de la sede puede cargarlo.
+function i131Base(tipo, overrides = {}) {
+  return {
+    tipo, fecha: serverTimestamp(), sedeId: SEDE_A,
+    pacienteFicha: "9001", pacienteNombre: "Test I131", pacienteDni: "2",
+    medicoResponsable: "Dr. Test",
+    ...overrides,
+  };
+}
+
+test("técnico sin accesoTerapiaI131 NO puede crear una Dosis terapéutica de I-131", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  await assertPermissionDenied(() =>
+    addDoc(collection(db, "actas"), i131Base("i131_dosis", {
+      usuarioEmail: PERSONAS.tecnicoA.email, actividadAdministrada: 150, lote: "I131-TEST",
+    }))
+  );
+});
+
+test("control positivo: técnico sin accesoTerapiaI131 SÍ puede crear un Barrido corporal de I-131", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  const ref = await addDoc(collection(db, "actas"), i131Base("i131_barrido", { usuarioEmail: PERSONAS.tecnicoA.email }));
+  const snap = await getDoc(ref);
+  assert.ok(snap.exists());
+});
+
+test("control positivo: técnico CON accesoTerapiaI131 SÍ puede crear una Dosis terapéutica de I-131", async () => {
+  await loguearComo(PERSONAS.admin);
+  await setDoc(doc(db, "roles", PERSONAS.tecnicoA.email), { accesoTerapiaI131: true }, { merge: true });
+
+  await loguearComo(PERSONAS.tecnicoA);
+  const ref = await addDoc(collection(db, "actas"), i131Base("i131_dosis", {
+    usuarioEmail: PERSONAS.tecnicoA.email, actividadAdministrada: 150, lote: "I131-TEST",
+  }));
+  const snap = await getDoc(ref);
+  assert.ok(snap.exists());
+
+  // Deja el flag como estaba para no filtrar estado a otros tests del archivo.
+  await loguearComo(PERSONAS.admin);
+  await setDoc(doc(db, "roles", PERSONAS.tecnicoA.email), { accesoTerapiaI131: false }, { merge: true });
+});
+
+test("control positivo: admin SÍ puede crear una Dosis terapéutica de I-131 sin el flag", async () => {
+  await loguearComo(PERSONAS.admin);
+  const ref = await addDoc(collection(db, "actas"), i131Base("i131_dosis", {
+    sedeId: SEDE_B, usuarioEmail: PERSONAS.admin.email, actividadAdministrada: 150, lote: "I131-TEST",
+  }));
+  const snap = await getDoc(ref);
+  assert.ok(snap.exists());
+});
+
+// radioisotopos: mismo criterio que proveedores -- lectura para cualquiera
+// con acceso, escritura sólo admin.
+test("técnico NO puede escribir en radioisotopos", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  await assertPermissionDenied(() => setDoc(doc(db, "radioisotopos", "test-iso"), { nombre: "Test" }));
+});
+
+test("control positivo: admin SÍ puede escribir en radioisotopos", async () => {
+  await loguearComo(PERSONAS.admin);
+  await setDoc(doc(db, "radioisotopos", "test-iso"), { nombre: "Test" });
+  const snap = await getDoc(doc(db, "radioisotopos", "test-iso"));
+  assert.ok(snap.exists());
+  await deleteDoc(doc(db, "radioisotopos", "test-iso"));
 });

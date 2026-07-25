@@ -19,6 +19,13 @@ service cloud.firestore {
       return request.auth != null && tieneAcceso() && miRol().rol == 'admin';
     }
 
+    // Permiso aparte del rol técnico/admin -- admin siempre puede cargar
+    // Dosis terapéutica de I-131 (no necesita el flag); esto sólo amplía el
+    // permiso a un técnico puntual, asignado desde Configuración > Usuarios.
+    function tieneAccesoI131() {
+      return isAdmin() || miRol().accesoTerapiaI131 == true;
+    }
+
     // roles: cada quien lee su propio doc; sólo admins leen/escriben todo.
     match /roles/{email} {
       allow read: if request.auth != null && (request.auth.token.email == email || isAdmin());
@@ -43,6 +50,14 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
     match /proveedores/{provId} {
+      allow read: if tieneAcceso();
+      allow write: if isAdmin();
+    }
+    // Sólo controla qué nombres aparecen en los selectores de isótopo (Libro
+    // 2, Terapia I-131) -- ver comentario largo en services/firestore/
+    // radioisotopos.js. El comportamiento especial de cada uno sigue atado al
+    // id fijo en el código, no a nada de esta colección.
+    match /radioisotopos/{isotopoId} {
       allow read: if tieneAcceso();
       allow write: if isAdmin();
     }
@@ -119,7 +134,7 @@ service cloud.firestore {
     }
 
     function tiposActa() {
-      return ['paciente', 'marcacion', 'elucion', 'anulacion'];
+      return ['paciente', 'marcacion', 'elucion', 'anulacion', 'i131_dosis', 'i131_barrido'];
     }
 
     // Elución (Libro 3, Mo-99/Tc-99m): la actividad calibrada del generador
@@ -148,6 +163,21 @@ service cloud.firestore {
     // actas siguen create-only (ver match de abajo): anular es SIEMPRE un
     // acta nueva vinculada por anulaId, nunca una edición de la original --
     // mismo espíritu de inmutabilidad que ya usa `movimientos`.
+    //
+    // 'i131_dosis'/'i131_barrido' (Terapia I-131, pestaña propia): dos tipos
+    // planos, mismo criterio que transferencia_salida/transferencia_entrada
+    // en movimientos, no un campo "subtipo". 'i131_dosis' exige
+    // tieneAccesoI131() -- admin o técnico con el flag; 'i131_barrido' no,
+    // cualquier técnico de la sede puede cargarlo. Ninguno de los dos usa
+    // farmId/stock: el lote de la dosis/cápsula es texto libre, igual que
+    // loteGenerador en elución (no son radiofármacos con stock rotativo).
+    //
+    // 'paciente' (Libro 2) ahora siempre trae isotopoId ('tc99m' por
+    // defecto, nunca ausente en actas nuevas -- las viejas sin el campo
+    // siguen leyéndose igual, el cliente las trata como tc99m). Con
+    // isotopoId=='lu177' (Teragnosis) el lote también es texto libre y en
+    // cambio exige medicoResponsable; con cualquier otro valor (tc99m, el
+    // caso de siempre) sigue exigiendo farmId como hasta ahora.
     function actaValida() {
       let d = request.resource.data;
       return d.usuarioEmail == request.auth.token.email &&
@@ -162,12 +192,29 @@ service cloud.firestore {
                d.volumen is number && d.volumen > 0 &&
                (loteGeneradorVisto(d.sedeId, d.loteGenerador) ||
                  (d.actividadCalibrada is number && d.actividadCalibrada > 0)))
-            : (d.farmId is string && d.farmId.size() > 0 &&
-               d.lote is string && d.lote.size() > 0 &&
-               (d.tipo == 'paciente'
-                 ? (d.mciAdministrados is number && d.mciAdministrados > 0 &&
-                    d.pacienteFicha is string && d.pacienteFicha.size() > 0)
-                 : (d.mciMarcacion is number && d.mciMarcacion > 0))));
+            : d.tipo == 'i131_dosis'
+              ? (tieneAccesoI131() &&
+                 d.pacienteFicha is string && d.pacienteFicha.size() > 0 &&
+                 d.pacienteNombre is string && d.pacienteNombre.size() > 0 &&
+                 d.pacienteDni is string && d.pacienteDni.size() > 0 &&
+                 d.medicoResponsable is string && d.medicoResponsable.size() > 0 &&
+                 d.actividadAdministrada is number && d.actividadAdministrada > 0 &&
+                 d.lote is string && d.lote.size() > 0)
+              : d.tipo == 'i131_barrido'
+                ? (d.pacienteFicha is string && d.pacienteFicha.size() > 0 &&
+                   d.pacienteNombre is string && d.pacienteNombre.size() > 0 &&
+                   d.pacienteDni is string && d.pacienteDni.size() > 0 &&
+                   d.medicoResponsable is string && d.medicoResponsable.size() > 0)
+                : (d.lote is string && d.lote.size() > 0 &&
+                   (d.tipo == 'paciente'
+                     ? (d.mciAdministrados is number && d.mciAdministrados > 0 &&
+                        d.pacienteFicha is string && d.pacienteFicha.size() > 0 &&
+                        d.isotopoId is string && d.isotopoId.size() > 0 &&
+                        (d.isotopoId != 'lu177'
+                          ? (d.farmId is string && d.farmId.size() > 0)
+                          : (d.medicoResponsable is string && d.medicoResponsable.size() > 0)))
+                     : (d.farmId is string && d.farmId.size() > 0 &&
+                        d.mciMarcacion is number && d.mciMarcacion > 0))));
     }
 
     // Las actas tienen nombre y DNI de pacientes (Libro 2) -- Ley 25.326.

@@ -10,7 +10,7 @@ import { fmtF, fmtTs, fmtFechaISO, hoy, capitalizarPalabras, agruparPorFecha } f
 import { descargarArchivo } from "../../helpers/descargarArchivo.js";
 import { parseQR } from "../../helpers/qr.js";
 import { sedesActivas, farmsDeSede } from "../../helpers/stock.js";
-import { listenActas, addActaPaciente, actasPorRango, anularActaTransaction, listenAnulacionesActas } from "../../services/firestore/actas.js";
+import { listenActas, addActaPaciente, addActaI131Dosis, addActaI131Barrido, actasPorRango, anularActaTransaction, listenAnulacionesActas } from "../../services/firestore/actas.js";
 
 const TIMEOUT_BUSQUEDA_MS = 20000;
 const MSJ_TIMEOUT_BUSQUEDA = "La consulta tardó demasiado, puede haber un problema de conexión -- intentá cerrar las otras pestañas de RadioFarm que tengas abiertas y reintentá.";
@@ -45,15 +45,34 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
   }
 
   const [fichaNro, setFichaNro] = useState("");
+  // isotopoId siempre presente al guardar (nunca ausente) -- "tc99m" es el
+  // comportamiento por defecto sin selector visible (99% de los casos, cero
+  // fricción). mostrarIsotopo sólo controla si el link "¿Es un caso
+  // distinto...?" ya se tocó, para revelar el selector -- no se persiste.
+  const [mostrarIsotopo, setMostrarIsotopo] = useState(false);
+  const [isotopoId, setIsotopoId] = useState("tc99m");
+  const [medicoResponsable, setMedicoResponsable] = useState("");
   const [nombre, setNombre] = useState(""); const [dni, setDni] = useState("");
   const [peso, setPeso] = useState(""); const [talla, setTalla] = useState("");
   const [estudio, setEstudio] = useState(""); const [mci, setMci] = useState("");
   const [farmId, setFarmId] = useState(""); const [lote, setLote] = useState("");
   const [obs, setObs] = useState("");
   const [sedeId, setSedeId] = useState(usuario.sede);
+  // Sólo para isotopoId === "i131" -- ver esI131/guardar() más abajo. El N°
+  // de Ficha, nombre, DNI, médico responsable y lote ya están arriba
+  // (compartidos con Tc-99m/Lutecio, mismo campo/misma numeración diaria
+  // correlativa de VM RIS -- ese es justamente el motivo de este cambio).
+  const [tipoI131, setTipoI131] = useState("barrido");
+  const [actividadAdministrada, setActividadAdministrada] = useState("");
+  const [indicacion, setIndicacion] = useState("");
+  const [dosisVinculada, setDosisVinculada] = useState("");
+  const [dosisI131, setDosisI131] = useState([]);
 
   useEffect(() => listenActas("paciente", setActasTodas, { esAdmin, sedeId: usuario.sede }), []);
   useEffect(() => listenAnulacionesActas(setAnulacionesRaw, { esAdmin, sedeId: usuario.sede }), []);
+  // Sólo para el picker "Dosis relacionada" del sub-formulario de Barrido --
+  // misma sede/límite que el resto de los listeners de esta pantalla.
+  useEffect(() => listenActas("i131_dosis", setDosisI131, { esAdmin, sedeId: usuario.sede }), []);
 
   // anulaId -> acta de anulación (motivo, fecha, quién) -- Map en vez de Set
   // porque el listado necesita mostrar el motivo, no sólo saber que existe.
@@ -68,7 +87,9 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
       // que estaba mal, en vez de tipear todo de nuevo.
       setSedeId(acta.sedeId); setFichaNro(acta.pacienteFicha || ""); setNombre(acta.pacienteNombre); setDni(acta.pacienteDni);
       setPeso(String(acta.peso ?? "")); setTalla(String(acta.talla ?? "")); setEstudio(acta.estudio || "");
-      setFarmId(acta.farmId); setLote(acta.lote); setMci(String(acta.mciAdministrados ?? ""));
+      const iso = acta.isotopoId || "tc99m";
+      setMostrarIsotopo(iso !== "tc99m"); setIsotopoId(iso); setMedicoResponsable(acta.medicoResponsable || "");
+      setFarmId(acta.farmId || ""); setLote(acta.lote); setMci(String(acta.mciAdministrados ?? ""));
       setObs(acta.observacion || "");
       setMostrarForm(true);
     } catch (e) {
@@ -92,11 +113,58 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
 
   function limpiarForm() {
     setFichaNro(""); setNombre(""); setDni(""); setPeso(""); setTalla(""); setEstudio(""); setMci(""); setFarmId(""); setLote(""); setObs("");
+    setMostrarIsotopo(false); setIsotopoId("tc99m"); setMedicoResponsable("");
+    setTipoI131("barrido"); setActividadAdministrada(""); setIndicacion(""); setDosisVinculada("");
     setSedeId(usuario.sede);
   }
 
+  const esLutecio = isotopoId === "lu177";
+  const esI131 = isotopoId === "i131";
+  const puedeCargarDosisI131 = esAdmin || !!usuario.accesoTerapiaI131;
+
+  // Lutecio-177 e I-131 son los únicos "casos distintos" de hoy -- lista
+  // blanca explícita por id, no "todo lo que no sea tc99m": agregar una fila
+  // a radioisotopos no debe hacer aparecer nada acá por sí sola (ver nota en
+  // services/firestore/radioisotopos.js). I-131 ya no tiene pestaña propia de
+  // carga -- toda la carga de pacientes (sea cual sea el isótopo) vive acá,
+  // porque el N° de Ficha es un correlativo diario único compartido por
+  // todos; Terapia I-131 pasó a ser sólo una vista de consulta de estos
+  // mismos registros (tipo i131_dosis/i131_barrido, sin cambios de modelo).
+  const isotoposCasoDistinto = (catalogo.radioisotopos || []).filter((i) => i.id === "lu177" || i.id === "i131");
+
+  // Dosis recientes ya cargadas en memoria (mismo límite/sede que el resto
+  // de esta pantalla) para vincular un Barrido sin disparar una consulta
+  // nueva -- si hay DNI tipeado, prioriza coincidencias de ese paciente.
+  const dosisParaVincular = useMemo(() => {
+    const propias = dni.trim() ? dosisI131.filter((d) => d.pacienteDni === dni.trim()) : [];
+    return propias.length ? propias : dosisI131;
+  }, [dosisI131, dni]);
+
   function guardar() {
-    if (!fichaNro.trim() || !nombre.trim() || !dni.trim() || !mci || !estudio || !farmId || !lote) return;
+    if (!fichaNro.trim() || !nombre.trim() || !dni.trim()) return;
+    if (esI131) {
+      if (!medicoResponsable.trim()) return;
+      const base = {
+        sedeId, sedeNombre: catalogo.sedes[sedeId]?.nombre,
+        pacienteFicha: fichaNro.trim(), pacienteNombre: nombre.trim(), pacienteDni: dni.trim(),
+        medicoResponsable: medicoResponsable.trim(),
+        usuarioNombre: usuario.nombre, usuarioEmail: usuario.email, observacion: obs.trim(),
+      };
+      if (tipoI131 === "dosis") {
+        if (!puedeCargarDosisI131 || !actividadAdministrada || !lote.trim()) return;
+        addActaI131Dosis({ ...base, actividadAdministrada: parseFloat(actividadAdministrada) || 0, lote: lote.trim(), indicacion: indicacion.trim() })
+          .catch((e) => onToast(e.message || "No se pudo guardar la dosis", "error"));
+        onToast("Dosis terapéutica registrada — consultala en la pestaña Terapia I-131");
+      } else {
+        addActaI131Barrido({ ...base, dosisActaId: dosisVinculada || null })
+          .catch((e) => onToast(e.message || "No se pudo guardar el barrido", "error"));
+        onToast("Barrido corporal registrado — consultalo en la pestaña Terapia I-131");
+      }
+      limpiarForm(); setMostrarForm(false);
+      return;
+    }
+    if (!mci || !estudio || !lote.trim()) return;
+    if (esLutecio ? !medicoResponsable.trim() : !farmId) return;
     const farm = catalogo.farms.find((f) => f.id === farmId);
     addActaPaciente({
       sedeId, sedeNombre: catalogo.sedes[sedeId]?.nombre,
@@ -104,7 +172,11 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
       pacienteNombre: nombre.trim(), pacienteDni: dni.trim(),
       peso: parseFloat(peso) || 0, talla: parseFloat(talla) || 0,
       estudio, mciAdministrados: parseFloat(mci) || 0,
-      farmId, farmNombre: farm?.nombre || "", lote,
+      isotopoId, lote: lote.trim(),
+      // Lutecio-177 no pasa por el catálogo de radiofármacos/stock (dosis
+      // puntual por paciente, no stock rotativo) -- mismo criterio que
+      // loteGenerador en Elución. tc99m sigue igual que siempre.
+      ...(esLutecio ? { medicoResponsable: medicoResponsable.trim() } : { farmId, farmNombre: farm?.nombre || "" }),
       usuarioNombre: usuario.nombre, usuarioEmail: usuario.email, observacion: obs.trim(),
     }).catch((e) => onToast(e.message || "No se pudo guardar el registro", "error"));
     onToast("Registro guardado"); limpiarForm(); setMostrarForm(false);
@@ -133,8 +205,17 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
 
   const lotesDisp = (catalogo.stock[sedeId]?.[farmId] || []).filter((l) => l.cantidad > 0);
 
+  // "tc99m" (o ausente, actas viejas anteriores a este cambio) no se marca
+  // con nada -- es el caso de siempre. Sólo Lutecio-177 se distingue en el
+  // listado/CSV.
+  function nombreIsotopo(a) {
+    if (!a.isotopoId || a.isotopoId === "tc99m") return null;
+    return catalogo.radioisotopos?.find((i) => i.id === a.isotopoId)?.nombre || a.isotopoId;
+  }
+
   function filaPaciente(a) {
     const anulacion = anulaciones.get(a.id);
+    const iso = nombreIsotopo(a);
     return (
       <tr key={a.id} className={`border-b border-gray-50 last:border-0 hover:bg-gray-50/30 ${anulacion ? "opacity-50" : ""}`}>
         <td className="px-3 py-2.5 text-xs text-gray-500 whitespace-nowrap">{fmtTs(a.fecha).split(" ")[1] || ""}</td>
@@ -142,12 +223,13 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
         <td className="px-3 py-2.5 font-semibold text-gray-800 text-xs">
           {a.pacienteNombre}
           {(a.peso || a.talla) && <div className="text-xs font-normal text-gray-400">{a.peso && `${a.peso}kg`}{a.talla && ` · ${a.talla}cm`}</div>}
+          {a.medicoResponsable && <div className="text-xs font-normal text-gray-400">Médico: {a.medicoResponsable}</div>}
           {anulacion && <div className="text-xs text-orange-500 font-semibold">ANULADO: {anulacion.motivo}</div>}
         </td>
         <td className="px-3 py-2.5 text-xs font-mono text-gray-500">{a.pacienteDni}</td>
         <td className="px-3 py-2.5 text-xs text-gray-700">{a.estudio}</td>
         <td className="px-3 py-2.5 text-xs text-gray-700">
-          {a.farmNombre || "—"}
+          {iso ? <Badge color="purple">{iso}</Badge> : (a.farmNombre || "—")}
           {a.lote && <div className="text-xs text-gray-400 font-mono">{a.lote}</div>}
         </td>
         <td className="px-3 py-2.5">
@@ -168,20 +250,23 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
 
   function tarjetaPaciente(a) {
     const anulacion = anulaciones.get(a.id);
+    const iso = nombreIsotopo(a);
     return (
       <div key={a.id} className={`p-4 flex flex-col gap-1.5 ${anulacion ? "opacity-50" : ""}`}>
         <div className="flex items-center justify-between gap-2">
           <span className="font-semibold text-gray-800 text-sm">{a.pacienteNombre}</span>
           <span className="text-xs text-gray-500 whitespace-nowrap">{fmtTs(a.fecha).split(" ")[1] || ""}</span>
         </div>
+        {iso && <div><Badge color="purple">{iso}</Badge></div>}
         <div className="text-xs text-gray-500">
           Ficha {a.pacienteFicha || "—"} · DNI {a.pacienteDni}
           {(a.peso || a.talla) && <> · {a.peso ? `${a.peso}kg` : ""}{a.talla ? ` ${a.talla}cm` : ""}</>}
         </div>
         <div className="text-xs text-gray-700">{a.estudio}</div>
         <div className="text-xs text-gray-700">
-          {a.farmNombre || "—"}{a.lote && ` · Lote ${a.lote}`} · <span className="font-bold text-blue-700">{a.mciAdministrados} mCi</span>
+          {iso ? "" : (a.farmNombre || "—")}{a.lote && ` · Lote ${a.lote}`} · <span className="font-bold text-blue-700">{a.mciAdministrados} mCi</span>
         </div>
+        {a.medicoResponsable && <div className="text-xs text-gray-500">Médico: {a.medicoResponsable}</div>}
         <div className="text-xs text-gray-500">Técnico: {a.usuarioNombre}</div>
         {a.observacion && <div className="text-xs text-gray-400 italic">{a.observacion}</div>}
         {anulacion && <div className="text-xs text-orange-500 font-semibold">ANULADO: {anulacion.motivo}</div>}
@@ -199,13 +284,14 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
   function filaCSV(a) {
     const d = a.fecha?.toDate ? a.fecha.toDate() : new Date(a.fecha);
     return [d.toLocaleDateString("es-AR"), d.toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" }),
-      a.sedeNombre, a.pacienteFicha || "—", a.pacienteNombre, a.pacienteDni, a.peso, a.talla, a.estudio, a.farmNombre || "—", a.lote || "—",
+      a.sedeNombre, a.pacienteFicha || "—", nombreIsotopo(a) || "Tc-99m", a.pacienteNombre, a.pacienteDni, a.medicoResponsable || "—",
+      a.peso, a.talla, a.estudio, a.farmNombre || "—", a.lote || "—",
       a.mciAdministrados, a.usuarioNombre, a.observacion || "—"];
   }
 
   function descargarCSV(lista, nombreArchivo) {
     const filas = [
-      ["Fecha", "Hora", "Sede", "N° Ficha", "Paciente", "DNI", "Peso (kg)", "Talla (cm)", "Estudio", "Radiofármaco", "Lote", "mCi administrados", "Técnico", "Observación"],
+      ["Fecha", "Hora", "Sede", "N° Ficha", "Isótopo", "Paciente", "DNI", "Médico responsable", "Peso (kg)", "Talla (cm)", "Estudio", "Radiofármaco", "Lote", "mCi administrados", "Técnico", "Observación"],
       ...lista.map(filaCSV),
     ];
     const csv = filas.map((r) => r.map((x) => String(x).replace(/[\t\r\n]/g, " ")).join("\t")).join("\r\n");
@@ -337,33 +423,105 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
             <Input label="N° de Ficha" value={fichaNro} onChange={(e) => setFichaNro(e.target.value)} placeholder="4521" />
             <Input label="Apellido y nombre" value={nombre} onChange={(e) => setNombre(capitalizarPalabras(e.target.value))} placeholder="García Juan" />
             <Input label="DNI" value={dni} onChange={(e) => setDni(e.target.value)} placeholder="28456789" />
-            <Input label="Peso (kg)" type="number" min={0} value={peso} onChange={(e) => setPeso(e.target.value)} placeholder="78" />
-            <Input label="Talla (cm)" type="number" min={0} value={talla} onChange={(e) => setTalla(e.target.value)} placeholder="172" />
-            <div className="sm:col-span-2">
-              <Sel label="Estudio" value={estudio} onChange={(e) => setEstudio(e.target.value)}>
-                <option value="">Seleccionar estudio...</option>
-                {ESTUDIOS.map((e) => <option key={e}>{e}</option>)}
-              </Sel>
-            </div>
+            {!esI131 && (
+              <>
+                <Input label="Peso (kg)" type="number" min={0} value={peso} onChange={(e) => setPeso(e.target.value)} placeholder="78" />
+                <Input label="Talla (cm)" type="number" min={0} value={talla} onChange={(e) => setTalla(e.target.value)} placeholder="172" />
+                <div className="sm:col-span-2">
+                  <Sel label="Estudio" value={estudio} onChange={(e) => setEstudio(e.target.value)}>
+                    <option value="">Seleccionar estudio...</option>
+                    {ESTUDIOS.map((e) => <option key={e}>{e}</option>)}
+                  </Sel>
+                </div>
+              </>
+            )}
             {esAdmin && (
               <Sel label="Sede" value={sedeId} onChange={(e) => { setSedeId(e.target.value); setFarmId(""); setLote(""); }}>
                 {sedesActivas(catalogo).map((s) => <option key={s.id} value={s.id}>{s.short}</option>)}
               </Sel>
             )}
-            <Sel label="Radiofármaco utilizado" value={farmId} onChange={(e) => { setFarmId(e.target.value); setLote(""); }}>
-              <option value="">Seleccionar...</option>
-              {farmsDeSede(catalogo, sedeId).map((f) => <option key={f.id} value={f.id}>{f.nombre}</option>)}
-            </Sel>
-            <Sel label="Lote" value={lote} onChange={(e) => setLote(e.target.value)} disabled={!farmId}>
-              <option value="">Seleccionar lote...</option>
-              {lotesDisp.map((l) => <option key={l.id} value={l.lote}>{l.lote} · Venc: {fmtF(l.vencimiento)}</option>)}
-            </Sel>
-            <Input label="Dosis administrada (mCi)" type="number" min={0} step={0.1} value={mci} onChange={(e) => setMci(e.target.value)} placeholder="10.5" />
-            <Input label="Observación (opcional)" value={obs} onChange={(e) => setObs(e.target.value)} placeholder="Ej: paciente con marcapasos" />
+            {/* Tc-99m es el 99% de los casos -- sin selector visible por
+                defecto, cero fricción. Este link revela el selector de
+                isótopo sólo cuando hace falta (Lutecio-177 o I-131, lista
+                blanca explícita más arriba). I-131 no tiene pestaña propia de
+                carga: el N° de Ficha es un correlativo diario único
+                compartido por todos los pacientes del servicio, así que toda
+                la carga vive acá sin importar el isótopo -- Terapia I-131 es
+                sólo una vista de consulta de estos mismos registros. */}
+            {!mostrarIsotopo && isotoposCasoDistinto.length > 0 && (
+              <div className="sm:col-span-2">
+                <button type="button" onClick={() => setMostrarIsotopo(true)} className="text-xs text-blue-600 hover:text-blue-800 underline underline-offset-2">
+                  ¿Es un caso distinto a Tc-99m?
+                </button>
+              </div>
+            )}
+            {mostrarIsotopo && (
+              <Sel label="Isótopo" value={isotopoId} onChange={(e) => { setIsotopoId(e.target.value); setLote(""); }}>
+                <option value="tc99m">Tc-99m (caso habitual)</option>
+                {isotoposCasoDistinto.map((i) => <option key={i.id} value={i.id}>{i.nombre}</option>)}
+              </Sel>
+            )}
+            {esI131 && (
+              <div className="sm:col-span-2 flex gap-1 bg-gray-100 p-1 rounded-xl w-fit">
+                <button type="button" onClick={() => setTipoI131("barrido")} className={`px-4 py-1.5 min-h-11 md:min-h-0 text-xs font-semibold rounded-lg transition ${tipoI131 === "barrido" ? "bg-white text-gray-800 shadow-sm" : "text-gray-500 hover:text-gray-700"}`}>
+                  Barrido corporal
+                </button>
+                <button type="button" onClick={() => puedeCargarDosisI131 && setTipoI131("dosis")} disabled={!puedeCargarDosisI131}
+                  title={puedeCargarDosisI131 ? undefined : "No tenés acceso a Dosis terapéutica de I-131"}
+                  className={`px-4 py-1.5 min-h-11 md:min-h-0 text-xs font-semibold rounded-lg transition disabled:opacity-40 disabled:cursor-not-allowed ${tipoI131 === "dosis" ? "bg-white text-gray-800 shadow-sm" : "text-gray-500 hover:text-gray-700"}`}>
+                  Dosis terapéutica
+                </button>
+              </div>
+            )}
+            {(esLutecio || esI131) && (
+              <Input label="Médico responsable" value={medicoResponsable} onChange={(e) => setMedicoResponsable(e.target.value)} placeholder="Dr./Dra. ..." />
+            )}
+            {esI131 ? (
+              tipoI131 === "dosis" ? (
+                <>
+                  <Input label="Actividad administrada (mCi)" type="number" min={0} step={0.1} value={actividadAdministrada} onChange={(e) => setActividadAdministrada(e.target.value)} placeholder="150" />
+                  <Input label="Lote / cápsula" value={lote} onChange={(e) => setLote(e.target.value)} placeholder="Ej: I131-2026-014" />
+                  <Input label="Indicación / diagnóstico (opcional)" value={indicacion} onChange={(e) => setIndicacion(e.target.value)} placeholder="Ej: Ca. diferenciado de tiroides" />
+                </>
+              ) : (
+                <div className="sm:col-span-2">
+                  <Sel label="Dosis relacionada (opcional)" value={dosisVinculada} onChange={(e) => setDosisVinculada(e.target.value)}>
+                    <option value="">Sin vincular</option>
+                    {dosisParaVincular.map((d) => (
+                      <option key={d.id} value={d.id}>Ficha {d.pacienteFicha} · {d.pacienteNombre} · {fmtTs(d.fecha)}</option>
+                    ))}
+                  </Sel>
+                </div>
+              )
+            ) : esLutecio ? (
+              // Lutecio-177 no pasa por el catálogo de radiofármacos/stock --
+              // dosis puntual por paciente, no stock rotativo (ver guardar()).
+              <Input label="Lote / vial" value={lote} onChange={(e) => setLote(e.target.value)} placeholder="Ej: LU177-2026-014" />
+            ) : (
+              <>
+                <Sel label="Radiofármaco utilizado" value={farmId} onChange={(e) => { setFarmId(e.target.value); setLote(""); }}>
+                  <option value="">Seleccionar...</option>
+                  {farmsDeSede(catalogo, sedeId).map((f) => <option key={f.id} value={f.id}>{f.nombre}</option>)}
+                </Sel>
+                <Sel label="Lote" value={lote} onChange={(e) => setLote(e.target.value)} disabled={!farmId}>
+                  <option value="">Seleccionar lote...</option>
+                  {lotesDisp.map((l) => <option key={l.id} value={l.lote}>{l.lote} · Venc: {fmtF(l.vencimiento)}</option>)}
+                </Sel>
+              </>
+            )}
+            {!esI131 && (
+              <Input label="Dosis administrada (mCi)" type="number" min={0} step={0.1} value={mci} onChange={(e) => setMci(e.target.value)} placeholder="10.5" />
+            )}
+            <Input label="Observación (opcional)" value={obs} onChange={(e) => setObs(e.target.value)} placeholder={esI131 && tipoI131 === "barrido" ? "Ej: hallazgos del barrido" : "Ej: paciente con marcapasos"} />
           </div>
           <div className="flex gap-2 justify-end mt-4">
             <Btn variant="outline" onClick={() => { setMostrarForm(false); limpiarForm(); }}>Cancelar</Btn>
-            <Btn onClick={guardar} disabled={!fichaNro.trim() || !nombre.trim() || !dni.trim() || !mci || !estudio || !farmId || !lote}>Guardar registro</Btn>
+            <Btn onClick={guardar} disabled={
+              !fichaNro.trim() || !nombre.trim() || !dni.trim() ||
+              (esI131
+                ? (!medicoResponsable.trim() || (tipoI131 === "dosis" && (!puedeCargarDosisI131 || !actividadAdministrada || !lote.trim())))
+                : (!mci || !estudio || !lote.trim() || (esLutecio ? !medicoResponsable.trim() : !farmId)))
+            }>Guardar registro</Btn>
           </div>
         </div>
       )}

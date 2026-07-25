@@ -56,9 +56,13 @@ export function listenRoles(callback) {
   });
 }
 
-// Alta/edición de un usuario: precarga acceso incluso antes de su primer login.
-export function setRol(email, { nombre, rol, sede }) {
-  return setDoc(rolRef(email), { nombre, rol, sede }, { merge: true });
+// Alta/edición de un usuario: precarga acceso incluso antes de su primer
+// login. accesoTerapiaI131 es un permiso aparte del rol (técnico/admin) --
+// admin siempre puede cargar Dosis terapéutica de I-131 sin necesitar este
+// flag (ver isAdmin() en las reglas); esto sólo amplía el permiso a un
+// técnico puntual.
+export function setRol(email, { nombre, rol, sede, accesoTerapiaI131 }) {
+  return setDoc(rolRef(email), { nombre, rol, sede, accesoTerapiaI131: !!accesoTerapiaI131 }, { merge: true });
 }
 
 export function eliminarRol(email) {
@@ -90,8 +94,8 @@ export function listenSolicitudes(callback) {
 }
 
 // Aprobar: otorga el rol/sede elegidos y borra la solicitud.
-export async function aprobarSolicitud(email, { nombre, rol, sede }) {
-  await setRol(email, { nombre, rol, sede });
+export async function aprobarSolicitud(email, { nombre, rol, sede, accesoTerapiaI131 }) {
+  await setRol(email, { nombre, rol, sede, accesoTerapiaI131 });
   await eliminarSolicitud(email);
 }
 

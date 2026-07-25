@@ -15,23 +15,23 @@ function formatFecha(ts) {
 export function TabUsuarios({ catalogo, roles, solicitudes, usuarioActual, onToast }) {
   const sedes = todasLasSedes(catalogo);
   const sedeDefault = (sedes.find((s) => s.principal) || sedes.find((s) => s.activo) || sedes[0])?.id;
-  const vacio = { email: "", nombre: "", rol: "tecnico", sede: sedeDefault };
+  const vacio = { email: "", nombre: "", rol: "tecnico", sede: sedeDefault, accesoTerapiaI131: false };
 
   const [mForm, setMForm] = useState(null); // null | "nuevo" | "editar" | "aprobar"
   const [form, setForm] = useState(vacio);
 
   function abrirNuevo() { setForm(vacio); setMForm("nuevo"); }
-  function abrirEditar(r) { setForm({ email: r.email, nombre: r.nombre, rol: r.rol, sede: r.sede }); setMForm("editar"); }
-  function abrirAprobar(s) { setForm({ email: s.email, nombre: s.nombre, rol: "tecnico", sede: sedeDefault }); setMForm("aprobar"); }
+  function abrirEditar(r) { setForm({ email: r.email, nombre: r.nombre, rol: r.rol, sede: r.sede, accesoTerapiaI131: !!r.accesoTerapiaI131 }); setMForm("editar"); }
+  function abrirAprobar(s) { setForm({ email: s.email, nombre: s.nombre, rol: "tecnico", sede: sedeDefault, accesoTerapiaI131: false }); setMForm("aprobar"); }
 
   async function guardar() {
     if (!form.email.trim() || !form.nombre.trim()) return;
     try {
       if (mForm === "aprobar") {
-        await aprobarSolicitud(form.email, { nombre: form.nombre.trim(), rol: form.rol, sede: form.sede });
+        await aprobarSolicitud(form.email, { nombre: form.nombre.trim(), rol: form.rol, sede: form.sede, accesoTerapiaI131: form.accesoTerapiaI131 });
         onToast(`Acceso otorgado a ${form.nombre.trim()}`);
       } else {
-        await setRol(form.email, { nombre: form.nombre.trim(), rol: form.rol, sede: form.sede });
+        await setRol(form.email, { nombre: form.nombre.trim(), rol: form.rol, sede: form.sede, accesoTerapiaI131: form.accesoTerapiaI131 });
         onToast(mForm === "nuevo" ? "Usuario dado de alta" : "Usuario actualizado");
       }
       setMForm(null);
@@ -128,7 +128,12 @@ export function TabUsuarios({ catalogo, roles, solicitudes, usuarioActual, onToa
               <tr key={r.email} className="border-b border-gray-50 last:border-0 hover:bg-gray-50/30">
                 <td className="px-4 py-3 font-semibold text-gray-800 text-sm">{r.nombre}</td>
                 <td className="px-4 py-3 text-xs text-gray-500 font-mono">{r.email}</td>
-                <td className="px-4 py-3 text-center"><Badge color={r.rol === "admin" ? "purple" : "blue"}>{r.rol === "admin" ? "Responsable" : "Técnico"}</Badge></td>
+                <td className="px-4 py-3 text-center">
+                  <div className="flex items-center justify-center gap-1 flex-wrap">
+                    <Badge color={r.rol === "admin" ? "purple" : "blue"}>{r.rol === "admin" ? "Responsable" : "Técnico"}</Badge>
+                    {r.rol === "tecnico" && r.accesoTerapiaI131 && <Badge color="teal">I-131</Badge>}
+                  </div>
+                </td>
                 <td className="px-4 py-3 text-center text-xs text-gray-600">{catalogo.sedes[r.sede]?.short || r.sede}</td>
                 <td className="px-4 py-3">
                   <div className="flex gap-1.5 justify-end">
@@ -147,8 +152,9 @@ export function TabUsuarios({ catalogo, roles, solicitudes, usuarioActual, onToa
                 <div className="font-semibold text-gray-800 text-sm">{r.nombre}</div>
                 <div className="text-xs text-gray-500 font-mono">{r.email}</div>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
                 <Badge color={r.rol === "admin" ? "purple" : "blue"}>{r.rol === "admin" ? "Responsable" : "Técnico"}</Badge>
+                {r.rol === "tecnico" && r.accesoTerapiaI131 && <Badge color="teal">I-131</Badge>}
                 <span className="text-xs text-gray-600">{catalogo.sedes[r.sede]?.short || r.sede}</span>
               </div>
               <div className="flex gap-1.5 justify-end mt-1">
@@ -172,6 +178,15 @@ export function TabUsuarios({ catalogo, roles, solicitudes, usuarioActual, onToa
           <Sel label="Sede" value={form.sede} onChange={(e) => setForm((f) => ({ ...f, sede: e.target.value }))}>
             {sedes.map((s) => <option key={s.id} value={s.id}>{s.nombre}</option>)}
           </Sel>
+          {/* Sólo tiene sentido para técnico -- admin ya puede cargar Dosis
+              terapéutica de I-131 sin este flag (ver isAdmin() en las reglas). */}
+          {form.rol === "tecnico" && (
+            <label className="flex items-center gap-2 text-xs font-semibold text-gray-600 cursor-pointer">
+              <input type="checkbox" className="w-4 h-4 accent-blue-600" checked={form.accesoTerapiaI131}
+                onChange={(e) => setForm((f) => ({ ...f, accesoTerapiaI131: e.target.checked }))} />
+              Acceso a Dosis terapéutica de I-131
+            </label>
+          )}
           <div className="flex gap-2 justify-end">
             <Btn variant="outline" onClick={() => setMForm(null)}>Cancelar</Btn>
             <Btn onClick={guardar} disabled={!form.email.trim() || !form.nombre.trim()}>Guardar</Btn>
