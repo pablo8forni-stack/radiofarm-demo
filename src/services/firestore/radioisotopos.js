@@ -1,4 +1,4 @@
-import { collection, doc, onSnapshot, orderBy, query, setDoc, updateDoc } from "firebase/firestore";
+import { collection, deleteDoc, doc, onSnapshot, orderBy, query, setDoc, updateDoc, writeBatch } from "firebase/firestore";
 import { db } from "../../firebase.js";
 import { slugify } from "../../helpers/formato.js";
 
@@ -30,4 +30,22 @@ export function addRadioisotopo({ nombre }) {
 
 export function updateRadioisotopo(id, { nombre }) {
   return updateDoc(radioisotopoRef(id), { nombre });
+}
+
+export function deleteRadioisotopo(id) {
+  return deleteDoc(radioisotopoRef(id));
+}
+
+// "+ Nuevo isótopo" (addRadioisotopo, arriba) SIEMPRE genera un id aleatorio
+// -- no hay forma de llegar a los 3 ids fijos con comportamiento real
+// (tc99m/lu177/i131) cargándolos por ahí, ni forma de corregirlo después sin
+// esto. Upsert directo con merge:true: seguro de tocar varias veces (no
+// duplica ni pisa nada más que el nombre), y no requiere que quien lo corre
+// tenga ninguna credencial especial más allá de ser admin de ese proyecto.
+export function sembrarRadioisotoposBase() {
+  const batch = writeBatch(db);
+  batch.set(radioisotopoRef("tc99m"), { nombre: "Tc-99m" }, { merge: true });
+  batch.set(radioisotopoRef("lu177"), { nombre: "Lutecio-177" }, { merge: true });
+  batch.set(radioisotopoRef("i131"), { nombre: "I-131" }, { merge: true });
+  return batch.commit();
 }
