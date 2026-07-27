@@ -9,7 +9,12 @@ import { fmtF, fmtTs, fmtFechaISO, hoy, capitalizarPalabras, agruparPorFecha } f
 import { descargarArchivo } from "../../helpers/descargarArchivo.js";
 import { parseQR } from "../../helpers/qr.js";
 import { sedesActivas, farmsDeSede } from "../../helpers/stock.js";
-import { listenActas, addActaPaciente, addActaI131Dosis, addActaI131Barrido, actasPorRango, anularActaTransaction, listenAnulacionesActas } from "../../services/firestore/actas.js";
+import { TIPO_LABEL_I131 } from "../../constants/tipoI131.js";
+import {
+  listenActas, addActaPaciente, actasPorRango, anularActaTransaction, listenAnulacionesActas,
+  addActaI131Ablativa, addActaI131Dosis, addActaI131Barrido,
+  addActaI131Captacion, addActaI131Centellograma, addActaI131CaptacionCentellograma,
+} from "../../services/firestore/actas.js";
 
 const TIMEOUT_BUSQUEDA_MS = 20000;
 const MSJ_TIMEOUT_BUSQUEDA = "La consulta tardó demasiado, puede haber un problema de conexión -- intentá cerrar las otras pestañas de RadioFarm que tengas abiertas y reintentá.";
@@ -28,9 +33,27 @@ function tsMillis(fecha) {
   return Number.isNaN(d.getTime()) ? 0 : d.getTime();
 }
 
+// Tabla que maneja los 6 tipos de registro de I-131 -- categoria decide qué
+// campos pide el formulario y cómo se guarda (ver guardar()); requierePermiso
+// decide el gate de accesoTerapiaI131, tanto acá (deshabilita la opción)
+// como en la regla de Firestore (tieneAccesoI131(), respaldo server-side).
+// Barrido corporal es el único sin permiso especial.
+const TIPOS_I131 = [
+  { id: "ablativa", label: "Dosis ablativa", categoria: "dosis", requierePermiso: true, fn: addActaI131Ablativa },
+  { id: "dosis", label: "Dosis terapéutica", categoria: "dosis", requierePermiso: true, fn: addActaI131Dosis },
+  { id: "barrido", label: "Barrido corporal", categoria: "barrido", requierePermiso: false, fn: addActaI131Barrido },
+  { id: "captacion", label: "Captación", categoria: "diagnostico", requierePermiso: true, fn: addActaI131Captacion },
+  { id: "centellograma", label: "Centellograma", categoria: "diagnostico", requierePermiso: true, fn: addActaI131Centellograma },
+  { id: "capt_centellograma", label: "Captación y Centellograma", categoria: "diagnostico", requierePermiso: true, fn: addActaI131CaptacionCentellograma },
+];
+
 export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
   const [pacientesTodas, setPacientesTodas] = useState([]);
+  const [ablativaI131, setAblativaI131] = useState([]);
   const [barridosI131, setBarridosI131] = useState([]);
+  const [captacionI131, setCaptacionI131] = useState([]);
+  const [centellogramaI131, setCentellogramaI131] = useState([]);
+  const [captCentellogramaI131, setCaptCentellogramaI131] = useState([]);
   const [anulacionesRaw, setAnulacionesRaw] = useState([]);
   const [mAnular, setMAnular] = useState(null);
   const [mostrarForm, setMostrarForm] = useState(false);
@@ -80,22 +103,28 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
 
   useEffect(() => listenActas("paciente", setPacientesTodas, { esAdmin, sedeId: usuario.sede }), []);
   useEffect(() => listenAnulacionesActas(setAnulacionesRaw, { esAdmin, sedeId: usuario.sede }), []);
-  // dosisI131 sirve doble función: alimenta el picker "Dosis relacionada" del
-  // sub-formulario de Barrido, y se mezcla (junto con barridosI131) en el
-  // listado principal -- el N° de Ficha es un correlativo diario único
-  // compartido por todos los pacientes del servicio, así que el listado de
-  // "Registros del día" tiene que mostrar los 3 tipos intercalados por hora
+  // Un listener por tipo de I-131 (mismo criterio que dosis/barrido ya
+  // tenían) -- dosisI131/ablativaI131 alimentan además el picker "Dosis
+  // relacionada" de los 3 diagnósticos (ver dosisParaVincular). Todos se
+  // mezclan en el listado principal -- el N° de Ficha es un correlativo
+  // diario único compartido por todos los pacientes del servicio, así que
+  // "Registros del día" tiene que mostrar los 6 tipos intercalados por hora
   // para no dejar saltos de ficha sin explicación visible. La pestaña
   // "Terapia I-131" (consulta) sigue siendo el filtro específico de estos
-  // mismos 2 tipos, sin cambios.
+  // mismos 6 tipos, sin cambios.
+  useEffect(() => listenActas("i131_ablativa", setAblativaI131, { esAdmin, sedeId: usuario.sede }), []);
   useEffect(() => listenActas("i131_dosis", setDosisI131, { esAdmin, sedeId: usuario.sede }), []);
   useEffect(() => listenActas("i131_barrido", setBarridosI131, { esAdmin, sedeId: usuario.sede }), []);
+  useEffect(() => listenActas("i131_captacion", setCaptacionI131, { esAdmin, sedeId: usuario.sede }), []);
+  useEffect(() => listenActas("i131_centellograma", setCentellogramaI131, { esAdmin, sedeId: usuario.sede }), []);
+  useEffect(() => listenActas("i131_captacion_centellograma", setCaptCentellogramaI131, { esAdmin, sedeId: usuario.sede }), []);
 
   // Cada colección ya viene ordenada desc por fecha desde el listener, así
   // que sólo hace falta mezclar y volver a ordenar, no reordenar cada una.
   const actasTodas = useMemo(
-    () => [...pacientesTodas, ...dosisI131, ...barridosI131].sort((a, b) => tsMillis(b.fecha) - tsMillis(a.fecha)),
-    [pacientesTodas, dosisI131, barridosI131]
+    () => [...pacientesTodas, ...ablativaI131, ...dosisI131, ...barridosI131, ...captacionI131, ...centellogramaI131, ...captCentellogramaI131]
+      .sort((a, b) => tsMillis(b.fecha) - tsMillis(a.fecha)),
+    [pacientesTodas, ablativaI131, dosisI131, barridosI131, captacionI131, centellogramaI131, captCentellogramaI131]
   );
 
   // anulaId -> acta de anulación (motivo, fecha, quién) -- Map en vez de Set
@@ -153,34 +182,43 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
   // carga -- toda la carga de pacientes (sea cual sea el isótopo) vive acá,
   // porque el N° de Ficha es un correlativo diario único compartido por
   // todos; Terapia I-131 pasó a ser sólo una vista de consulta de estos
-  // mismos registros (tipo i131_dosis/i131_barrido, sin cambios de modelo).
+  // mismos registros (6 tipos, sin cambios de modelo).
   const isotoposCasoDistinto = (catalogo.radioisotopos || []).filter((i) => i.id === "lu177" || i.id === "i131");
 
-  // Dosis recientes ya cargadas en memoria (mismo límite/sede que el resto
-  // de esta pantalla) para vincular un Barrido sin disparar una consulta
-  // nueva -- si hay DNI tipeado, prioriza coincidencias de ese paciente.
+  const tipoI131Actual = TIPOS_I131.find((t) => t.id === tipoI131);
+
+  // Dosis/Ablativas recientes ya cargadas en memoria (mismo límite/sede que
+  // el resto de esta pantalla) para vincular un diagnóstico (Captación/
+  // Centellograma/Captación y Centellograma) al registro de dosis que lo
+  // motivó, sin disparar una consulta nueva -- si hay DNI tipeado, prioriza
+  // coincidencias de ese paciente.
   const dosisParaVincular = useMemo(() => {
-    const propias = dni.trim() ? dosisI131.filter((d) => d.pacienteDni === dni.trim()) : [];
-    return propias.length ? propias : dosisI131;
-  }, [dosisI131, dni]);
+    const todas = [...dosisI131, ...ablativaI131];
+    const propias = dni.trim() ? todas.filter((d) => d.pacienteDni === dni.trim()) : [];
+    return (propias.length ? propias : todas).sort((a, b) => tsMillis(b.fecha) - tsMillis(a.fecha));
+  }, [dosisI131, ablativaI131, dni]);
 
   function guardar() {
     if (!fichaNro.trim() || !nombre.trim() || !dni.trim()) return;
     if (esI131) {
-      if (!medicoResponsable.trim()) return;
       const base = {
         sedeId, sedeNombre: catalogo.sedes[sedeId]?.nombre,
         pacienteFicha: fichaNro.trim(), pacienteNombre: nombre.trim(), pacienteDni: dni.trim(),
-        medicoResponsable: medicoResponsable.trim(),
         usuarioNombre: usuario.nombre, usuarioEmail: usuario.email, observacion: obs.trim(),
       };
-      if (tipoI131 === "dosis") {
-        if (!puedeCargarDosisI131 || !actividadAdministrada || !lote.trim()) return;
-        addActaI131Dosis({ ...base, actividadAdministrada: parseFloat(actividadAdministrada) || 0, lote: lote.trim(), indicacion: indicacion.trim() })
-          .catch((e) => onToast(e.message || "No se pudo guardar la dosis", "error"));
-        onToast("Dosis terapéutica registrada — consultala en la pestaña Terapia I-131");
+      if (tipoI131Actual.requierePermiso && !puedeCargarDosisI131) return;
+      if (tipoI131Actual.categoria === "dosis") {
+        if (!actividadAdministrada || !lote.trim()) return;
+        tipoI131Actual.fn({ ...base, actividadAdministrada: parseFloat(actividadAdministrada) || 0, unidadActividad: "mCi", lote: lote.trim(), indicacion: indicacion.trim() })
+          .catch((e) => onToast(e.message || "No se pudo guardar el registro", "error"));
+        onToast(`${tipoI131Actual.label} registrada — consultala en la pestaña Terapia I-131`);
+      } else if (tipoI131Actual.categoria === "diagnostico") {
+        if (!actividadAdministrada) return;
+        tipoI131Actual.fn({ ...base, actividadAdministrada: parseFloat(actividadAdministrada) || 0, unidadActividad: "uCi", dosisActaId: dosisVinculada || null })
+          .catch((e) => onToast(e.message || "No se pudo guardar el registro", "error"));
+        onToast(`${tipoI131Actual.label} registrado — consultalo en la pestaña Terapia I-131`);
       } else {
-        addActaI131Barrido({ ...base, dosisActaId: dosisVinculada || null })
+        tipoI131Actual.fn(base)
           .catch((e) => onToast(e.message || "No se pudo guardar el barrido", "error"));
         onToast("Barrido corporal registrado — consultalo en la pestaña Terapia I-131");
       }
@@ -242,28 +280,36 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
   // (helpers/formato no lo exporta, es chico y sólo se usa acá). null = sin
   // badge (Tc-99m, caso habitual, no aporta nada verlo marcado en cada fila).
   function tipoInfo(a) {
-    if (a.tipo === "i131_dosis") return { label: "Dosis I-131", color: "orange" };
-    if (a.tipo === "i131_barrido") return { label: "Barrido I-131", color: "teal" };
+    if (TIPO_LABEL_I131[a.tipo]) return TIPO_LABEL_I131[a.tipo];
     const iso = nombreIsotopo(a);
     return iso ? { label: iso, color: "purple" } : null;
   }
 
   // Detalle: cada tipo usa esta columna/línea para algo distinto (radiofármaco
-  // real para Tc-99m, sólo lote para Lutecio/Dosis I-131, vínculo a la dosis
-  // para Barrido) -- se centraliza acá para no repetir la misma cadena de
-  // condiciones en la fila y en la tarjeta.
+  // real para Tc-99m, sólo lote para Lutecio/Dosis-Ablativa I-131, vínculo a
+  // la dosis para los 3 diagnósticos) -- se centraliza acá para no repetir la
+  // misma cadena de condiciones en la fila y en la tarjeta. Barrido no lleva
+  // vínculo (se sacó de ahí, ver TIPOS_I131) así que siempre queda en "—".
   function detalleRegistro(a) {
-    if (a.tipo === "i131_barrido") return { principal: a.dosisActaId ? "Vinculado a dosis" : "—", sub: null };
-    if (a.tipo === "i131_dosis") return { principal: `Lote: ${a.lote || "—"}`, sub: a.indicacion || null };
+    if (a.tipo === "i131_ablativa" || a.tipo === "i131_dosis") return { principal: `Lote: ${a.lote || "—"}`, sub: a.indicacion || null };
+    if (a.tipo === "i131_captacion" || a.tipo === "i131_centellograma" || a.tipo === "i131_captacion_centellograma") {
+      return { principal: a.dosisActaId ? "Vinculado a dosis" : "—", sub: null };
+    }
+    if (a.tipo === "i131_barrido") return { principal: "—", sub: null };
     return { principal: a.isotopoId === "lu177" ? null : (a.farmNombre || "—"), sub: a.lote || null };
   }
 
-  // Misma magnitud física (actividad administrada, en mCi) para Tc-99m/
-  // Lutecio (mciAdministrados) y Dosis I-131 (actividadAdministrada) -- se
-  // unifica en una sola columna. Barrido corporal no administra nada nuevo.
+  // Misma magnitud física (actividad administrada) para Tc-99m/Lutecio
+  // (mciAdministrados, siempre mCi) y los 5 tipos de I-131 con actividad
+  // (actividadAdministrada, mCi para dosis/ablativa, µCi para los 3
+  // diagnósticos) -- se unifica en una sola columna con su unidad real, no un
+  // sufijo "mCi" fijo. unidadActividad ausente (actas i131_dosis anteriores a
+  // este cambio) se interpreta como mCi, mismo criterio que isotopoId
+  // ausente = tc99m. Barrido corporal no administra nada nuevo.
   function dosisRegistro(a) {
-    const v = a.mciAdministrados ?? a.actividadAdministrada;
-    return v == null ? null : v;
+    if (a.mciAdministrados != null) return { valor: a.mciAdministrados, unidad: "mCi" };
+    if (a.actividadAdministrada != null) return { valor: a.actividadAdministrada, unidad: a.unidadActividad || "mCi" };
+    return null;
   }
 
   function filaPaciente(a) {
@@ -289,10 +335,10 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
           {sub && <div className="text-xs text-gray-400 font-mono mt-0.5">{sub}</div>}
         </td>
         <td className="px-3 py-2.5">
-          {dosis != null ? (
+          {dosis ? (
             <>
-              <span className="font-bold text-blue-700 text-sm">{dosis}</span>
-              <span className="text-xs text-gray-400 ml-1">mCi</span>
+              <span className="font-bold text-blue-700 text-sm">{dosis.valor}</span>
+              <span className="text-xs text-gray-400 ml-1">{dosis.unidad}</span>
             </>
           ) : <span className="text-xs text-gray-300">—</span>}
         </td>
@@ -326,7 +372,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
         </div>
         {a.estudio && <div className="text-xs text-gray-700">{a.estudio}</div>}
         <div className="text-xs text-gray-700">
-          {principal}{sub && ` · ${sub}`}{dosis != null && <> · <span className="font-bold text-blue-700">{dosis} mCi</span></>}
+          {principal}{sub && ` · ${sub}`}{dosis && <> · <span className="font-bold text-blue-700">{dosis.valor} {dosis.unidad}</span></>}
         </div>
         {a.medicoResponsable && <div className="text-xs text-gray-500">Médico: {a.medicoResponsable}</div>}
         <div className="text-xs text-gray-500">Técnico: {a.usuarioNombre}</div>
@@ -344,22 +390,21 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
   }
 
   function tipoTextoCSV(a) {
-    if (a.tipo === "i131_dosis") return "Dosis I-131";
-    if (a.tipo === "i131_barrido") return "Barrido I-131";
-    return nombreIsotopo(a) || "Tc-99m";
+    return TIPO_LABEL_I131[a.tipo]?.label || nombreIsotopo(a) || "Tc-99m";
   }
 
   function filaCSV(a) {
     const d = a.fecha?.toDate ? a.fecha.toDate() : new Date(a.fecha);
+    const dosis = dosisRegistro(a);
     return [d.toLocaleDateString("es-AR"), d.toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" }),
       a.sedeNombre, tipoTextoCSV(a), a.pacienteFicha || "—", a.pacienteNombre, a.pacienteDni, a.medicoResponsable || "—",
       a.peso ?? "—", a.talla ?? "—", a.estudio || "—", a.farmNombre || "—", a.lote || "—",
-      dosisRegistro(a) ?? "—", a.indicacion || "—", a.dosisActaId || "—", a.usuarioNombre, a.observacion || "—"];
+      dosis?.valor ?? "—", dosis?.unidad ?? "—", a.indicacion || "—", a.dosisActaId || "—", a.usuarioNombre, a.observacion || "—"];
   }
 
   function descargarCSV(lista, nombreArchivo) {
     const filas = [
-      ["Fecha", "Hora", "Sede", "Tipo de registro", "N° Ficha", "Paciente", "DNI", "Médico responsable", "Peso (kg)", "Talla (cm)", "Estudio", "Radiofármaco", "Lote", "Dosis/Actividad (mCi)", "Indicación", "Dosis vinculada (id)", "Técnico", "Observación"],
+      ["Fecha", "Hora", "Sede", "Tipo de registro", "N° Ficha", "Paciente", "DNI", "Médico responsable", "Peso (kg)", "Talla (cm)", "Estudio", "Radiofármaco", "Lote", "Dosis/Actividad", "Unidad", "Indicación", "Dosis vinculada (id)", "Técnico", "Observación"],
       ...lista.map(filaCSV),
     ];
     const csv = filas.map((r) => r.map((x) => String(x).replace(/[\t\r\n]/g, " ")).join("\t")).join("\r\n");
@@ -376,7 +421,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
   // largo -- este es un getDocs aparte, sin ese límite, por rango de fechas.
   // Buscar y descargar son dos pasos separados a propósito: ver nota completa
   // en TabMarcacion.jsx#buscarRango.
-  // Trae los 3 tipos por separado (misma sede/rango, tres consultas en
+  // Trae los 7 tipos por separado (misma sede/rango, siete consultas en
   // paralelo) y los mezcla, igual que el listado en vivo -- una exportación
   // de rango tiene que reflejar la misma secuencia de fichas sin huecos.
   async function buscarRango() {
@@ -386,11 +431,12 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
     setResultadoRango(null);
     try {
       const opts = { desde: rangoDesde, hasta: rangoHasta, esAdmin, sedeId: esAdmin ? (filtroSede || null) : usuario.sede };
-      const [pacientes, dosis, barridos] = await conTimeout(
-        Promise.all([actasPorRango("paciente", opts), actasPorRango("i131_dosis", opts), actasPorRango("i131_barrido", opts)]),
+      const tipos = ["paciente", "i131_ablativa", "i131_dosis", "i131_barrido", "i131_captacion", "i131_centellograma", "i131_captacion_centellograma"];
+      const resultados = await conTimeout(
+        Promise.all(tipos.map((t) => actasPorRango(t, opts))),
         TIMEOUT_BUSQUEDA_MS, MSJ_TIMEOUT_BUSQUEDA
       );
-      const registros = [...pacientes, ...dosis, ...barridos].sort((a, b) => tsMillis(b.fecha) - tsMillis(a.fecha));
+      const registros = resultados.flat().sort((a, b) => tsMillis(b.fecha) - tsMillis(a.fecha));
       setResultadoRango(registros);
     } catch (e) {
       setErrorRango(e.message || "No se pudo buscar el rango.");
@@ -542,29 +588,35 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
                 {isotoposCasoDistinto.map((i) => <option key={i.id} value={i.id}>{i.nombre}</option>)}
               </Sel>
             )}
+            {/* 6 opciones ya no entran cómodas en pills -- Sel, mismo criterio
+                que usamos en otros lados cuando una lista de opciones crece
+                (tabs de Configuración/Actas ARN). Las 4 que requieren
+                accesoTerapiaI131 quedan disabled con una nota en el texto si
+                el técnico no lo tiene -- admin siempre puede elegir cualquiera. */}
             {esI131 && (
-              <div className="sm:col-span-2 flex gap-1 bg-gray-100 p-1 rounded-xl w-fit">
-                <button type="button" onClick={() => setTipoI131("barrido")} className={`px-4 py-1.5 min-h-11 md:min-h-0 text-xs font-semibold rounded-lg transition ${tipoI131 === "barrido" ? "bg-white text-gray-800 shadow-sm" : "text-gray-500 hover:text-gray-700"}`}>
-                  Barrido corporal
-                </button>
-                <button type="button" onClick={() => puedeCargarDosisI131 && setTipoI131("dosis")} disabled={!puedeCargarDosisI131}
-                  title={puedeCargarDosisI131 ? undefined : "No tenés acceso a Dosis terapéutica de I-131"}
-                  className={`px-4 py-1.5 min-h-11 md:min-h-0 text-xs font-semibold rounded-lg transition disabled:opacity-40 disabled:cursor-not-allowed ${tipoI131 === "dosis" ? "bg-white text-gray-800 shadow-sm" : "text-gray-500 hover:text-gray-700"}`}>
-                  Dosis terapéutica
-                </button>
+              <div className="sm:col-span-2">
+                <Sel label="Tipo de registro" value={tipoI131} onChange={(e) => setTipoI131(e.target.value)}>
+                  {TIPOS_I131.map((t) => (
+                    <option key={t.id} value={t.id} disabled={t.requierePermiso && !puedeCargarDosisI131}>
+                      {t.label}{t.requierePermiso && !puedeCargarDosisI131 ? " (requiere acceso)" : ""}
+                    </option>
+                  ))}
+                </Sel>
               </div>
             )}
-            {(esLutecio || esI131) && (
+            {esLutecio && (
               <Input label="Médico responsable" value={medicoResponsable} onChange={(e) => setMedicoResponsable(e.target.value)} placeholder="Dr./Dra. ..." />
             )}
-            {esI131 ? (
-              tipoI131 === "dosis" ? (
-                <>
-                  <Input label="Actividad administrada (mCi)" type="number" min={0} step={0.1} value={actividadAdministrada} onChange={(e) => setActividadAdministrada(e.target.value)} placeholder="150" />
-                  <Input label="Lote / cápsula" value={lote} onChange={(e) => setLote(e.target.value)} placeholder="Ej: I131-2026-014" />
-                  <Input label="Indicación / diagnóstico (opcional)" value={indicacion} onChange={(e) => setIndicacion(e.target.value)} placeholder="Ej: Ca. diferenciado de tiroides" />
-                </>
-              ) : (
+            {esI131 && tipoI131Actual.categoria === "dosis" && (
+              <>
+                <Input label="Actividad administrada (mCi)" type="number" min={0} step={0.1} value={actividadAdministrada} onChange={(e) => setActividadAdministrada(e.target.value)} placeholder={tipoI131 === "ablativa" ? "100" : "10"} />
+                <Input label="Lote / cápsula" value={lote} onChange={(e) => setLote(e.target.value)} placeholder="Ej: I131-2026-014" />
+                <Input label="Indicación / diagnóstico (opcional)" value={indicacion} onChange={(e) => setIndicacion(e.target.value)} placeholder="Ej: Ca. diferenciado de tiroides" />
+              </>
+            )}
+            {esI131 && tipoI131Actual.categoria === "diagnostico" && (
+              <>
+                <Input label="Actividad administrada (µCi)" type="number" min={0} step={1} value={actividadAdministrada} onChange={(e) => setActividadAdministrada(e.target.value)} placeholder="90" />
                 <div className="sm:col-span-2">
                   <Sel label="Dosis relacionada (opcional)" value={dosisVinculada} onChange={(e) => setDosisVinculada(e.target.value)}>
                     <option value="">Sin vincular</option>
@@ -573,8 +625,9 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
                     ))}
                   </Sel>
                 </div>
-              )
-            ) : esLutecio ? (
+              </>
+            )}
+            {!esI131 && (esLutecio ? (
               // Lutecio-177 no pasa por el catálogo de radiofármacos/stock --
               // dosis puntual por paciente, no stock rotativo (ver guardar()).
               <Input label="Lote / vial" value={lote} onChange={(e) => setLote(e.target.value)} placeholder="Ej: LU177-2026-014" />
@@ -589,7 +642,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
                   {lotesDisp.map((l) => <option key={l.id} value={l.lote}>{l.lote} · Venc: {fmtF(l.vencimiento)}</option>)}
                 </Sel>
               </>
-            )}
+            ))}
             {!esI131 && (
               <Input label="Dosis administrada (mCi)" type="number" min={0} step={0.1} value={mci} onChange={(e) => setMci(e.target.value)} placeholder="10.5" />
             )}
@@ -600,7 +653,9 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
             <Btn onClick={guardar} disabled={
               !fichaNro.trim() || !nombre.trim() || !dni.trim() ||
               (esI131
-                ? (!medicoResponsable.trim() || (tipoI131 === "dosis" && (!puedeCargarDosisI131 || !actividadAdministrada || !lote.trim())))
+                ? ((tipoI131Actual.requierePermiso && !puedeCargarDosisI131) ||
+                   (tipoI131Actual.categoria !== "barrido" && !actividadAdministrada) ||
+                   (tipoI131Actual.categoria === "dosis" && !lote.trim()))
                 : (!mci || !estudio || (estudio === "Otro" && !estudioOtro.trim()) || !lote.trim() || (esLutecio ? !medicoResponsable.trim() : !farmId)))
             }>Guardar registro</Btn>
           </div>

@@ -350,15 +350,15 @@ test("técnico NO puede crear un marcador generadoresVistos de otra sede", async
   );
 });
 
-// Terapia I-131: dos tipos planos ('i131_dosis'/'i131_barrido'), no un campo
-// "subtipo" -- ver nota larga en firestore.rules#actaValida. 'i131_dosis'
-// exige tieneAccesoI131() (admin o técnico con el flag accesoTerapiaI131);
-// 'i131_barrido' no, cualquier técnico de la sede puede cargarlo.
+// Terapia I-131: 6 tipos planos, no un campo "subtipo" -- ver nota larga en
+// firestore.rules#actaValida. Ablativa/Dosis (mCi) y los 3 diagnósticos (µCi)
+// exigen tieneAccesoI131() (admin o técnico con el flag accesoTerapiaI131);
+// Barrido corporal no, cualquier técnico de la sede puede cargarlo. Médico
+// responsable ya NO es requisito de ninguno de los 6 (se sacó del formulario).
 function i131Base(tipo, overrides = {}) {
   return {
     tipo, fecha: serverTimestamp(), sedeId: SEDE_A,
     pacienteFicha: "9001", pacienteNombre: "Test I131", pacienteDni: "2",
-    medicoResponsable: "Dr. Test",
     ...overrides,
   };
 }
@@ -367,7 +367,25 @@ test("técnico sin accesoTerapiaI131 NO puede crear una Dosis terapéutica de I-
   await loguearComo(PERSONAS.tecnicoA);
   await assertPermissionDenied(() =>
     addDoc(collection(db, "actas"), i131Base("i131_dosis", {
-      usuarioEmail: PERSONAS.tecnicoA.email, actividadAdministrada: 150, lote: "I131-TEST",
+      usuarioEmail: PERSONAS.tecnicoA.email, actividadAdministrada: 10, unidadActividad: "mCi", lote: "I131-TEST",
+    }))
+  );
+});
+
+test("técnico sin accesoTerapiaI131 NO puede crear una Dosis ablativa de I-131", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  await assertPermissionDenied(() =>
+    addDoc(collection(db, "actas"), i131Base("i131_ablativa", {
+      usuarioEmail: PERSONAS.tecnicoA.email, actividadAdministrada: 150, unidadActividad: "mCi", lote: "I131-TEST",
+    }))
+  );
+});
+
+test("técnico sin accesoTerapiaI131 NO puede crear una Captación de I-131", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  await assertPermissionDenied(() =>
+    addDoc(collection(db, "actas"), i131Base("i131_captacion", {
+      usuarioEmail: PERSONAS.tecnicoA.email, actividadAdministrada: 90, unidadActividad: "uCi",
     }))
   );
 });
@@ -379,13 +397,31 @@ test("control positivo: técnico sin accesoTerapiaI131 SÍ puede crear un Barrid
   assert.ok(snap.exists());
 });
 
+test("Dosis terapéutica de I-131 con unidadActividad 'uCi' (en vez de 'mCi') es rechazada, aunque tenga el permiso", async () => {
+  await loguearComo(PERSONAS.admin);
+  await assertPermissionDenied(() =>
+    addDoc(collection(db, "actas"), i131Base("i131_dosis", {
+      usuarioEmail: PERSONAS.admin.email, actividadAdministrada: 10, unidadActividad: "uCi", lote: "I131-TEST",
+    }))
+  );
+});
+
+test("Captación de I-131 con unidadActividad 'mCi' (en vez de 'uCi') es rechazada, aunque tenga el permiso", async () => {
+  await loguearComo(PERSONAS.admin);
+  await assertPermissionDenied(() =>
+    addDoc(collection(db, "actas"), i131Base("i131_captacion", {
+      usuarioEmail: PERSONAS.admin.email, actividadAdministrada: 90, unidadActividad: "mCi",
+    }))
+  );
+});
+
 test("control positivo: técnico CON accesoTerapiaI131 SÍ puede crear una Dosis terapéutica de I-131", async () => {
   await loguearComo(PERSONAS.admin);
   await setDoc(doc(db, "roles", PERSONAS.tecnicoA.email), { accesoTerapiaI131: true }, { merge: true });
 
   await loguearComo(PERSONAS.tecnicoA);
   const ref = await addDoc(collection(db, "actas"), i131Base("i131_dosis", {
-    usuarioEmail: PERSONAS.tecnicoA.email, actividadAdministrada: 150, lote: "I131-TEST",
+    usuarioEmail: PERSONAS.tecnicoA.email, actividadAdministrada: 10, unidadActividad: "mCi", lote: "I131-TEST",
   }));
   const snap = await getDoc(ref);
   assert.ok(snap.exists());
@@ -395,10 +431,40 @@ test("control positivo: técnico CON accesoTerapiaI131 SÍ puede crear una Dosis
   await setDoc(doc(db, "roles", PERSONAS.tecnicoA.email), { accesoTerapiaI131: false }, { merge: true });
 });
 
-test("control positivo: admin SÍ puede crear una Dosis terapéutica de I-131 sin el flag", async () => {
+test("control positivo: admin SÍ puede crear una Dosis ablativa de I-131 sin el flag", async () => {
   await loguearComo(PERSONAS.admin);
-  const ref = await addDoc(collection(db, "actas"), i131Base("i131_dosis", {
-    sedeId: SEDE_B, usuarioEmail: PERSONAS.admin.email, actividadAdministrada: 150, lote: "I131-TEST",
+  const ref = await addDoc(collection(db, "actas"), i131Base("i131_ablativa", {
+    sedeId: SEDE_B, usuarioEmail: PERSONAS.admin.email, actividadAdministrada: 150, unidadActividad: "mCi", lote: "I131-TEST", indicacion: "Ca. de tiroides",
+  }));
+  const snap = await getDoc(ref);
+  assert.ok(snap.exists());
+});
+
+test("control positivo: admin SÍ puede crear una Captación de I-131 sin el flag", async () => {
+  await loguearComo(PERSONAS.admin);
+  const ref = await addDoc(collection(db, "actas"), i131Base("i131_captacion", {
+    sedeId: SEDE_B, usuarioEmail: PERSONAS.admin.email, actividadAdministrada: 90, unidadActividad: "uCi",
+  }));
+  const snap = await getDoc(ref);
+  assert.ok(snap.exists());
+});
+
+test("control positivo: admin SÍ puede crear un Centellograma de I-131, vinculado a una dosis", async () => {
+  await loguearComo(PERSONAS.admin);
+  const dosisRef = await addDoc(collection(db, "actas"), i131Base("i131_dosis", {
+    sedeId: SEDE_B, usuarioEmail: PERSONAS.admin.email, actividadAdministrada: 10, unidadActividad: "mCi", lote: "I131-TEST",
+  }));
+  const ref = await addDoc(collection(db, "actas"), i131Base("i131_centellograma", {
+    sedeId: SEDE_B, usuarioEmail: PERSONAS.admin.email, actividadAdministrada: 90, unidadActividad: "uCi", dosisActaId: dosisRef.id,
+  }));
+  const snap = await getDoc(ref);
+  assert.equal(snap.data().dosisActaId, dosisRef.id);
+});
+
+test("control positivo: admin SÍ puede crear un registro de Captación y Centellograma de I-131", async () => {
+  await loguearComo(PERSONAS.admin);
+  const ref = await addDoc(collection(db, "actas"), i131Base("i131_captacion_centellograma", {
+    sedeId: SEDE_B, usuarioEmail: PERSONAS.admin.email, actividadAdministrada: 100, unidadActividad: "uCi",
   }));
   const snap = await getDoc(ref);
   assert.ok(snap.exists());

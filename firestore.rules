@@ -141,7 +141,25 @@ service cloud.firestore {
     }
 
     function tiposActa() {
-      return ['paciente', 'marcacion', 'elucion', 'anulacion', 'i131_dosis', 'i131_barrido'];
+      return [
+        'paciente', 'marcacion', 'elucion', 'anulacion',
+        'i131_ablativa', 'i131_dosis', 'i131_barrido',
+        'i131_captacion', 'i131_centellograma', 'i131_captacion_centellograma',
+      ];
+    }
+
+    // 'i131_ablativa' (30-200 mCi, Ca. de tiroides) e 'i131_dosis' (5-15 mCi,
+    // hipertiroidismo) comparten forma y permiso -- ambas son "dosis
+    // terapéutica administrada", sólo cambia el rango clínico. Los 3
+    // diagnósticos (Captación/Centellograma/Captación y Centellograma)
+    // comparten forma y permiso entre sí, distinta a las de dosis: llevan
+    // actividad en microcurie (µCi, no mCi) y vínculo opcional a la dosis que
+    // motivó el estudio, en vez de lote/cápsula propio.
+    function esTipoDosisI131(tipo) {
+      return tipo == 'i131_dosis' || tipo == 'i131_ablativa';
+    }
+    function esTipoDiagnosticoI131(tipo) {
+      return tipo == 'i131_captacion' || tipo == 'i131_centellograma' || tipo == 'i131_captacion_centellograma';
     }
 
     // Elución (Libro 3, Mo-99/Tc-99m): la actividad calibrada del generador
@@ -171,13 +189,20 @@ service cloud.firestore {
     // acta nueva vinculada por anulaId, nunca una edición de la original --
     // mismo espíritu de inmutabilidad que ya usa `movimientos`.
     //
-    // 'i131_dosis'/'i131_barrido' (Terapia I-131, pestaña propia): dos tipos
-    // planos, mismo criterio que transferencia_salida/transferencia_entrada
-    // en movimientos, no un campo "subtipo". 'i131_dosis' exige
-    // tieneAccesoI131() -- admin o técnico con el flag; 'i131_barrido' no,
-    // cualquier técnico de la sede puede cargarlo. Ninguno de los dos usa
-    // farmId/stock: el lote de la dosis/cápsula es texto libre, igual que
-    // loteGenerador en elución (no son radiofármacos con stock rotativo).
+    // I-131 (Terapia I-131 / Libro 2): 6 tipos planos, mismo criterio que
+    // transferencia_salida/transferencia_entrada en movimientos, no un campo
+    // "subtipo". Ninguno usa farmId/stock: lote/cápsula es texto libre, igual
+    // que loteGenerador en elución (no son radiofármacos con stock rotativo).
+    // Médico responsable NO se exige en ninguno de los 6 (se sacó del
+    // formulario -- sigue siendo válido leerlo en actas viejas que lo tengan,
+    // simplemente ya no es requisito para crear una nueva).
+    //   - i131_ablativa / i131_dosis (dosis administrada, mCi): exigen
+    //     tieneAccesoI131() y unidadActividad=='mCi'.
+    //   - i131_captacion / i131_centellograma / i131_captacion_centellograma
+    //     (diagnóstico, µCi): exigen tieneAccesoI131() y
+    //     unidadActividad=='uCi'; dosisActaId es opcional (vínculo a la dosis
+    //     que motivó el estudio), no se valida más que ser string si viene.
+    //   - i131_barrido: sin permiso especial, cualquier técnico de la sede.
     //
     // 'paciente' (Libro 2) ahora siempre trae isotopoId ('tc99m' por
     // defecto, nunca ausente en actas nuevas -- las viejas sin el campo
@@ -199,20 +224,26 @@ service cloud.firestore {
                d.volumen is number && d.volumen > 0 &&
                (loteGeneradorVisto(d.sedeId, d.loteGenerador) ||
                  (d.actividadCalibrada is number && d.actividadCalibrada > 0)))
-            : d.tipo == 'i131_dosis'
+            : esTipoDosisI131(d.tipo)
               ? (tieneAccesoI131() &&
                  d.pacienteFicha is string && d.pacienteFicha.size() > 0 &&
                  d.pacienteNombre is string && d.pacienteNombre.size() > 0 &&
                  d.pacienteDni is string && d.pacienteDni.size() > 0 &&
-                 d.medicoResponsable is string && d.medicoResponsable.size() > 0 &&
                  d.actividadAdministrada is number && d.actividadAdministrada > 0 &&
+                 d.unidadActividad == 'mCi' &&
                  d.lote is string && d.lote.size() > 0)
-              : d.tipo == 'i131_barrido'
-                ? (d.pacienteFicha is string && d.pacienteFicha.size() > 0 &&
+              : esTipoDiagnosticoI131(d.tipo)
+                ? (tieneAccesoI131() &&
+                   d.pacienteFicha is string && d.pacienteFicha.size() > 0 &&
                    d.pacienteNombre is string && d.pacienteNombre.size() > 0 &&
                    d.pacienteDni is string && d.pacienteDni.size() > 0 &&
-                   d.medicoResponsable is string && d.medicoResponsable.size() > 0)
-                : (d.lote is string && d.lote.size() > 0 &&
+                   d.actividadAdministrada is number && d.actividadAdministrada > 0 &&
+                   d.unidadActividad == 'uCi')
+                : d.tipo == 'i131_barrido'
+                  ? (d.pacienteFicha is string && d.pacienteFicha.size() > 0 &&
+                     d.pacienteNombre is string && d.pacienteNombre.size() > 0 &&
+                     d.pacienteDni is string && d.pacienteDni.size() > 0)
+                  : (d.lote is string && d.lote.size() > 0 &&
                    (d.tipo == 'paciente'
                      ? (d.mciAdministrados is number && d.mciAdministrados > 0 &&
                         d.pacienteFicha is string && d.pacienteFicha.size() > 0 &&

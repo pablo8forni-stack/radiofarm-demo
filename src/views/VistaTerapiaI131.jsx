@@ -8,6 +8,9 @@ import { fmtF, fmtTs, fmtFechaISO, hoy, agruparPorFecha } from "../helpers/forma
 import { descargarArchivo } from "../helpers/descargarArchivo.js";
 import { sedesActivas } from "../helpers/stock.js";
 import { listenActas, actasPorRango, anularActaTransaction, listenAnulacionesActas } from "../services/firestore/actas.js";
+import { TIPO_LABEL_I131 } from "../constants/tipoI131.js";
+
+const TIPOS_I131 = ["i131_ablativa", "i131_dosis", "i131_barrido", "i131_captacion", "i131_centellograma", "i131_captacion_centellograma"];
 
 const TIMEOUT_BUSQUEDA_MS = 20000;
 const MSJ_TIMEOUT_BUSQUEDA = "La consulta tardó demasiado, puede haber un problema de conexión -- intentá cerrar las otras pestañas de RadioFarm que tengas abiertas y reintentá.";
@@ -26,19 +29,20 @@ function tsMillis(fecha) {
   return Number.isNaN(d.getTime()) ? 0 : d.getTime();
 }
 
-const TIPO_LABEL = { i131_dosis: "Dosis terapéutica", i131_barrido: "Barrido corporal" };
-
-// Vista de SÓLO CONSULTA de los registros i131_dosis/i131_barrido -- la
-// carga se mudó a Libro 2 (Pacientes), eligiendo I-131 como isótopo. Motivo:
-// el N° de Ficha es un correlativo diario único compartido por TODOS los
-// pacientes del servicio (Tc-99m, Lutecio, I-131 por igual); tener una
-// pantalla de carga separada acá rompía esa continuidad -- obligaba a ir y
-// volver entre pestañas para saber cuál era el próximo número. El modelo de
-// datos y las reglas de Firestore no cambiaron (mismos tipos, mismos campos,
-// mismo permiso accesoTerapiaI131 para Dosis), sólo el punto de entrada.
+// Vista de SÓLO CONSULTA de los 6 tipos de registro de I-131 -- la carga se
+// mudó a Libro 2 (Pacientes), eligiendo I-131 como isótopo. Motivo: el N° de
+// Ficha es un correlativo diario único compartido por TODOS los pacientes
+// del servicio (Tc-99m, Lutecio, I-131 por igual); tener una pantalla de
+// carga separada acá rompía esa continuidad -- obligaba a ir y volver entre
+// pestañas para saber cuál era el próximo número. El modelo de datos y las
+// reglas de Firestore no cambian acá, sólo el punto de entrada.
 export function VistaTerapiaI131({ catalogo, usuario, esAdmin, onToast }) {
+  const [ablativaTodas, setAblativaTodas] = useState([]);
   const [dosisTodas, setDosisTodas] = useState([]);
   const [barridosTodas, setBarridosTodas] = useState([]);
+  const [captacionTodas, setCaptacionTodas] = useState([]);
+  const [centellogramaTodas, setCentellogramaTodas] = useState([]);
+  const [captCentellogramaTodas, setCaptCentellogramaTodas] = useState([]);
   const [anulacionesRaw, setAnulacionesRaw] = useState([]);
   const [mAnular, setMAnular] = useState(null);
   const [filtroFecha, setFiltroFecha] = useState(hoy());
@@ -54,18 +58,23 @@ export function VistaTerapiaI131({ catalogo, usuario, esAdmin, onToast }) {
     return (e) => { setter(e.target.value); setResultadoRango(null); setErrorRango(null); };
   }
 
+  useEffect(() => listenActas("i131_ablativa", setAblativaTodas, { esAdmin, sedeId: usuario.sede }), []);
   useEffect(() => listenActas("i131_dosis", setDosisTodas, { esAdmin, sedeId: usuario.sede }), []);
   useEffect(() => listenActas("i131_barrido", setBarridosTodas, { esAdmin, sedeId: usuario.sede }), []);
+  useEffect(() => listenActas("i131_captacion", setCaptacionTodas, { esAdmin, sedeId: usuario.sede }), []);
+  useEffect(() => listenActas("i131_centellograma", setCentellogramaTodas, { esAdmin, sedeId: usuario.sede }), []);
+  useEffect(() => listenActas("i131_captacion_centellograma", setCaptCentellogramaTodas, { esAdmin, sedeId: usuario.sede }), []);
   useEffect(() => listenAnulacionesActas(setAnulacionesRaw, { esAdmin, sedeId: usuario.sede }), []);
 
   const anulaciones = useMemo(() => new Map(anulacionesRaw.map((a) => [a.anulaId, a])), [anulacionesRaw]);
 
-  // Ambos tipos comparten un solo listado (con badge de tipo por fila) --
+  // Los 6 tipos comparten un solo listado (con badge de tipo por fila) --
   // cada colección ya viene ordenada desc por fecha desde el listener, así
   // que sólo hace falta mezclar y volver a ordenar, no reordenar cada una.
   const actasTodas = useMemo(
-    () => [...dosisTodas, ...barridosTodas].sort((a, b) => tsMillis(b.fecha) - tsMillis(a.fecha)),
-    [dosisTodas, barridosTodas]
+    () => [...ablativaTodas, ...dosisTodas, ...barridosTodas, ...captacionTodas, ...centellogramaTodas, ...captCentellogramaTodas]
+      .sort((a, b) => tsMillis(b.fecha) - tsMillis(a.fecha)),
+    [ablativaTodas, dosisTodas, barridosTodas, captacionTodas, centellogramaTodas, captCentellogramaTodas]
   );
 
   // Sin formulario que reabrir acá -- corregir un registro anulado se hace
@@ -74,7 +83,7 @@ export function VistaTerapiaI131({ catalogo, usuario, esAdmin, onToast }) {
     try {
       await anularActaTransaction(acta, motivo, usuario);
       onToast(
-        `${acta.tipo === "i131_dosis" ? "Dosis" : "Barrido"} anulado. Para corregirlo, volvé a cargarlo en Libro 2 (Pacientes) eligiendo I-131.`,
+        `${TIPO_LABEL_I131[acta.tipo]?.label || acta.tipo} anulado. Para corregirlo, volvé a cargarlo en Libro 2 (Pacientes) eligiendo I-131.`,
         "info", 8000
       );
       setMAnular(null);
@@ -97,25 +106,33 @@ export function VistaTerapiaI131({ catalogo, usuario, esAdmin, onToast }) {
     [actas, filtroFecha]
   );
 
+  // Ablativa/Dosis (mCi, con lote/cápsula) y los 3 diagnósticos (µCi, con
+  // vínculo opcional a la dosis que motivó el estudio) usan esta línea/celda
+  // para algo distinto -- Barrido corporal no lleva ninguno de los dos desde
+  // que se le sacó el vínculo, siempre queda en "—".
   function detalleFila(a) {
-    if (a.tipo === "i131_dosis") return `${a.actividadAdministrada} mCi · Lote ${a.lote}`;
-    if (a.dosisActaId) return "Vinculado a dosis";
+    if (a.tipo === "i131_ablativa" || a.tipo === "i131_dosis") return `${a.actividadAdministrada} mCi · Lote ${a.lote}`;
+    if (a.tipo === "i131_captacion" || a.tipo === "i131_centellograma" || a.tipo === "i131_captacion_centellograma") {
+      const base = a.actividadAdministrada != null ? `${a.actividadAdministrada} ${a.unidadActividad === "mCi" ? "mCi" : "µCi"}` : "—";
+      return a.dosisActaId ? `${base} · Vinculado a dosis` : base;
+    }
     return "—";
   }
 
   function filaI131(a) {
     const anulacion = anulaciones.get(a.id);
+    const tipo = TIPO_LABEL_I131[a.tipo];
     return (
       <tr key={a.id} className={`border-b border-gray-50 last:border-0 hover:bg-gray-50/30 ${anulacion ? "opacity-50" : ""}`}>
         <td className="px-3 py-2.5 text-xs text-gray-500 whitespace-nowrap">{fmtTs(a.fecha).split(" ")[1] || ""}</td>
-        <td className="px-3 py-2.5"><Badge color={a.tipo === "i131_dosis" ? "orange" : "teal"}>{TIPO_LABEL[a.tipo]}</Badge></td>
+        <td className="px-3 py-2.5">{tipo && <Badge color={tipo.color}>{tipo.label}</Badge>}</td>
         <td className="px-3 py-2.5 text-xs font-mono text-gray-600">{a.pacienteFicha || "—"}</td>
         <td className="px-3 py-2.5 font-semibold text-gray-800 text-xs">
           {a.pacienteNombre}
           {anulacion && <div className="text-xs text-orange-500 font-semibold">ANULADO: {anulacion.motivo}</div>}
         </td>
         <td className="px-3 py-2.5 text-xs font-mono text-gray-500">{a.pacienteDni}</td>
-        <td className="px-3 py-2.5 text-xs text-gray-700">{a.medicoResponsable}</td>
+        <td className="px-3 py-2.5 text-xs text-gray-700">{a.medicoResponsable || "—"}</td>
         <td className="px-3 py-2.5 text-xs text-gray-700">{detalleFila(a)}</td>
         <td className="px-3 py-2.5 text-xs text-gray-500">{a.usuarioNombre}</td>
         <td className="px-3 py-2.5 text-right">
@@ -131,15 +148,16 @@ export function VistaTerapiaI131({ catalogo, usuario, esAdmin, onToast }) {
 
   function tarjetaI131(a) {
     const anulacion = anulaciones.get(a.id);
+    const tipo = TIPO_LABEL_I131[a.tipo];
     return (
       <div key={a.id} className={`p-4 flex flex-col gap-1.5 ${anulacion ? "opacity-50" : ""}`}>
         <div className="flex items-center justify-between gap-2">
           <span className="font-semibold text-gray-800 text-sm">{a.pacienteNombre}</span>
           <span className="text-xs text-gray-500 whitespace-nowrap">{fmtTs(a.fecha).split(" ")[1] || ""}</span>
         </div>
-        <div><Badge color={a.tipo === "i131_dosis" ? "orange" : "teal"}>{TIPO_LABEL[a.tipo]}</Badge></div>
+        {tipo && <div><Badge color={tipo.color}>{tipo.label}</Badge></div>}
         <div className="text-xs text-gray-500">Ficha {a.pacienteFicha || "—"} · DNI {a.pacienteDni}</div>
-        <div className="text-xs text-gray-700">Médico: {a.medicoResponsable}</div>
+        {a.medicoResponsable && <div className="text-xs text-gray-700">Médico: {a.medicoResponsable}</div>}
         <div className="text-xs text-gray-700">{detalleFila(a)}</div>
         <div className="text-xs text-gray-500">Técnico: {a.usuarioNombre}</div>
         {a.observacion && <div className="text-xs text-gray-400 italic">{a.observacion}</div>}
@@ -158,14 +176,14 @@ export function VistaTerapiaI131({ catalogo, usuario, esAdmin, onToast }) {
   function filaCSV(a) {
     const d = a.fecha?.toDate ? a.fecha.toDate() : new Date(a.fecha);
     return [d.toLocaleDateString("es-AR"), d.toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" }),
-      a.sedeNombre, TIPO_LABEL[a.tipo] || a.tipo, a.pacienteFicha || "—", a.pacienteNombre, a.pacienteDni, a.medicoResponsable,
-      a.actividadAdministrada ?? "—", a.lote || "—", a.indicacion || "—", a.dosisActaId || "—",
+      a.sedeNombre, TIPO_LABEL_I131[a.tipo]?.label || a.tipo, a.pacienteFicha || "—", a.pacienteNombre, a.pacienteDni, a.medicoResponsable || "—",
+      a.actividadAdministrada ?? "—", a.unidadActividad || "—", a.lote || "—", a.indicacion || "—", a.dosisActaId || "—",
       a.usuarioNombre, a.observacion || "—"];
   }
 
   function descargarCSV(lista, nombreArchivo) {
     const filas = [
-      ["Fecha", "Hora", "Sede", "Tipo", "N° Ficha", "Paciente", "DNI", "Médico responsable", "Actividad administrada (mCi)", "Lote", "Indicación", "Dosis vinculada (id)", "Técnico", "Observación"],
+      ["Fecha", "Hora", "Sede", "Tipo", "N° Ficha", "Paciente", "DNI", "Médico responsable", "Actividad administrada", "Unidad", "Lote", "Indicación", "Dosis vinculada (id)", "Técnico", "Observación"],
       ...lista.map(filaCSV),
     ];
     const csv = filas.map((r) => r.map((x) => String(x).replace(/[\t\r\n]/g, " ")).join("\t")).join("\r\n");
@@ -178,8 +196,8 @@ export function VistaTerapiaI131({ catalogo, usuario, esAdmin, onToast }) {
   }
 
   // Buscar y descargar son dos pasos separados a propósito -- ver nota
-  // completa en TabMarcacion.jsx#buscarRango. Trae ambos tipos por separado
-  // (dos consultas, mismo rango) y los mezcla, igual que el listado en vivo.
+  // completa en TabMarcacion.jsx#buscarRango. Trae los 6 tipos por separado
+  // (seis consultas, mismo rango) y los mezcla, igual que el listado en vivo.
   async function buscarRango() {
     if (!rangoDesde || !rangoHasta) return;
     setBuscandoRango(true);
@@ -187,11 +205,11 @@ export function VistaTerapiaI131({ catalogo, usuario, esAdmin, onToast }) {
     setResultadoRango(null);
     try {
       const opts = { desde: rangoDesde, hasta: rangoHasta, esAdmin, sedeId: esAdmin ? (filtroSede || null) : usuario.sede };
-      const [dosis, barridos] = await conTimeout(
-        Promise.all([actasPorRango("i131_dosis", opts), actasPorRango("i131_barrido", opts)]),
+      const resultados = await conTimeout(
+        Promise.all(TIPOS_I131.map((t) => actasPorRango(t, opts))),
         TIMEOUT_BUSQUEDA_MS, MSJ_TIMEOUT_BUSQUEDA
       );
-      let registros = [...dosis, ...barridos].sort((a, b) => tsMillis(b.fecha) - tsMillis(a.fecha));
+      let registros = resultados.flat().sort((a, b) => tsMillis(b.fecha) - tsMillis(a.fecha));
       if (filtroTipo) registros = registros.filter((a) => a.tipo === filtroTipo);
       setResultadoRango(registros);
     } catch (e) {
@@ -211,7 +229,7 @@ export function VistaTerapiaI131({ catalogo, usuario, esAdmin, onToast }) {
     <div className="flex flex-col gap-4">
       <div>
         <h2 className="text-base font-bold text-gray-800">Terapia I-131</h2>
-        <p className="text-xs text-gray-400 mt-0.5">Consulta de dosis terapéutica y barrido corporal post-tratamiento</p>
+        <p className="text-xs text-gray-400 mt-0.5">Consulta de dosis, barrido corporal y estudios diagnósticos de I-131</p>
       </div>
 
       <div className="bg-blue-50 border border-blue-100 rounded-xl px-4 py-3 text-xs text-blue-700">
@@ -228,9 +246,8 @@ export function VistaTerapiaI131({ catalogo, usuario, esAdmin, onToast }) {
           </div>
           <div className="w-full md:w-auto">
             <Sel value={filtroTipo} onChange={(e) => setFiltroTipo(e.target.value)}>
-              <option value="">Dosis y barrido</option>
-              <option value="i131_dosis">Sólo dosis</option>
-              <option value="i131_barrido">Sólo barrido</option>
+              <option value="">Todos los tipos</option>
+              {TIPOS_I131.map((t) => <option key={t} value={t}>{TIPO_LABEL_I131[t].label}</option>)}
             </Sel>
           </div>
           {esAdmin && (
@@ -329,7 +346,7 @@ export function VistaTerapiaI131({ catalogo, usuario, esAdmin, onToast }) {
       {mAnular && (
         <ModalAnularActa
           acta={mAnular}
-          resumen={`${TIPO_LABEL[mAnular.tipo]} — ${mAnular.pacienteNombre} (DNI ${mAnular.pacienteDni})`}
+          resumen={`${TIPO_LABEL_I131[mAnular.tipo]?.label || mAnular.tipo} — ${mAnular.pacienteNombre} (DNI ${mAnular.pacienteDni})`}
           onConfirm={confirmarAnulacion}
           onClose={() => setMAnular(null)}
         />

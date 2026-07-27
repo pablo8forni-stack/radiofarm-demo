@@ -59,21 +59,28 @@ export function addActaMarcacion(data) {
   return batch.commit();
 }
 
-// Terapia I-131: dos tipos planos (mismo criterio que transferencia_salida/
+// Terapia I-131: 6 tipos planos (mismo criterio que transferencia_salida/
 // transferencia_entrada en movimientos, no un campo "subtipo") -- cada uno
-// tiene su propio requisito de campos y de permiso en actaValida(). "Dosis"
-// exige accesoTerapiaI131 (o admin) del lado servidor; "Barrido" no.
-export function addActaI131Dosis(data) {
+// tiene su propio requisito de campos y de permiso en actaValida(). Dosis
+// ablativa/terapéutica y los 3 diagnósticos (Captación/Centellograma/
+// Captación y Centellograma) exigen accesoTerapiaI131 (o admin) del lado
+// servidor; Barrido corporal no.
+function addActaI131(tipo, data) {
   const batch = writeBatch(db);
-  batch.set(doc(actasCol), { ...data, tipo: "i131_dosis", fecha: serverTimestamp() });
+  batch.set(doc(actasCol), { ...data, tipo, fecha: serverTimestamp() });
   return batch.commit();
 }
 
-export function addActaI131Barrido(data) {
-  const batch = writeBatch(db);
-  batch.set(doc(actasCol), { ...data, tipo: "i131_barrido", fecha: serverTimestamp() });
-  return batch.commit();
-}
+// unidadActividad la fija el llamador según el tipo (nunca a elección del
+// técnico) -- ver nota en TabPacientes.jsx#guardar. La regla de Firestore
+// valida que coincida con lo esperado para cada tipo, no confía en el valor
+// que mande el cliente.
+export const addActaI131Ablativa = (data) => addActaI131("i131_ablativa", data);
+export const addActaI131Dosis = (data) => addActaI131("i131_dosis", data);
+export const addActaI131Barrido = (data) => addActaI131("i131_barrido", data);
+export const addActaI131Captacion = (data) => addActaI131("i131_captacion", data);
+export const addActaI131Centellograma = (data) => addActaI131("i131_centellograma", data);
+export const addActaI131CaptacionCentellograma = (data) => addActaI131("i131_captacion_centellograma", data);
 
 // Libro 3 (Elución Mo-99/Tc-99m). getDoc directo por id determinístico
 // (sedeId_loteGenerador), no una query -- funciona aunque el lote tenga

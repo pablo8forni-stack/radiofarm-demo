@@ -123,7 +123,7 @@ export function VistaPedidos({ catalogo, esAdmin, onToast }) {
                 <div className="flex-1 h-px bg-gray-100" /><Badge color="red">{g.items.length} para pedir</Badge>
               </div>
               {esAdmin && agruparPor === "proveedor" && g.contacto && (
-                <div className="text-xs text-gray-500 mb-2 -mt-1">
+                <div className="text-sm font-semibold text-gray-700 mb-2 -mt-1">
                   Contacto: {[g.contacto.contactoNombre, g.contacto.contactoEmail, g.contacto.contactoTelefono].filter(Boolean).join(" · ") || "Sin datos de contacto cargados"}
                 </div>
               )}
