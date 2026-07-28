@@ -739,6 +739,111 @@ test("control positivo: técnico CON accesoTerapiaI131 SÍ puede crear y leer un
   await setDoc(doc(db, "roles", PERSONAS.tecnicoA.email), { accesoTerapiaI131: false }, { merge: true });
 });
 
+// Agenda de turnos (Parte C): a diferencia de TODO lo demás en el sistema,
+// turnos es una colección mutable de verdad -- create/update/delete
+// habilitados, no create-only. Gate por accesoAgendaI131, permiso SEPARADO
+// de accesoTerapiaI131 (ver firestore.rules#turnoValido).
+function turnoBase(overrides = {}) {
+  return {
+    sedeId: SEDE_A, fechaTurno: "2026-08-03", pacienteNombre: "Test Turno", pacienteDni: "1",
+    tipoDosis: "i131_dosis", estado: "confirmado",
+    ...overrides,
+  };
+}
+
+test("técnico sin accesoAgendaI131 NO puede crear un turno", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  await assertPermissionDenied(() => addDoc(collection(db, "turnos"), turnoBase()));
+});
+
+test("turno con tipoDosis inválido es rechazado, aunque sea admin", async () => {
+  await loguearComo(PERSONAS.admin);
+  await assertPermissionDenied(() => addDoc(collection(db, "turnos"), turnoBase({ sedeId: SEDE_B, tipoDosis: "otra" })));
+});
+
+test("turno con estado inválido es rechazado, aunque sea admin", async () => {
+  await loguearComo(PERSONAS.admin);
+  await assertPermissionDenied(() => addDoc(collection(db, "turnos"), turnoBase({ sedeId: SEDE_B, estado: "otro" })));
+});
+
+test("control positivo: admin SÍ puede crear un turno sin el flag", async () => {
+  await loguearComo(PERSONAS.admin);
+  const ref = await addDoc(collection(db, "turnos"), turnoBase({ sedeId: SEDE_B }));
+  const snap = await getDoc(ref);
+  assert.ok(snap.exists());
+});
+
+test("control positivo: técnico CON accesoAgendaI131 (pero SIN accesoTerapiaI131) SÍ puede crear y leer un turno de su sede", async () => {
+  await loguearComo(PERSONAS.admin);
+  await setDoc(doc(db, "roles", PERSONAS.tecnicoA.email), { accesoAgendaI131: true, accesoTerapiaI131: false }, { merge: true });
+
+  await loguearComo(PERSONAS.tecnicoA);
+  const ref = await addDoc(collection(db, "turnos"), turnoBase());
+  const snap = await getDoc(ref);
+  assert.ok(snap.exists());
+
+  await loguearComo(PERSONAS.admin);
+  await setDoc(doc(db, "roles", PERSONAS.tecnicoA.email), { accesoAgendaI131: false }, { merge: true });
+});
+
+test("técnico sin accesoAgendaI131 NO puede LEER un turno de su propia sede", async () => {
+  await loguearComo(PERSONAS.admin);
+  const ref = await addDoc(collection(db, "turnos"), turnoBase());
+
+  await loguearComo(PERSONAS.tecnicoA); // sede central == SEDE_A
+  await assertPermissionDenied(() => getDoc(ref));
+});
+
+test("técnico CON accesoAgendaI131 NO puede editar un turno de otra sede", async () => {
+  await loguearComo(PERSONAS.admin);
+  await setDoc(doc(db, "roles", PERSONAS.tecnicoA.email), { accesoAgendaI131: true }, { merge: true });
+  const ref = await addDoc(collection(db, "turnos"), turnoBase({ sedeId: SEDE_B }));
+
+  await loguearComo(PERSONAS.tecnicoA); // sede central == SEDE_A
+  await assertPermissionDenied(() => updateDoc(ref, { estado: "cancelado" }));
+
+  await loguearComo(PERSONAS.admin);
+  await setDoc(doc(db, "roles", PERSONAS.tecnicoA.email), { accesoAgendaI131: false }, { merge: true });
+});
+
+test("control positivo: técnico CON accesoAgendaI131 SÍ puede editar (reprogramar) un turno de su sede", async () => {
+  await loguearComo(PERSONAS.admin);
+  await setDoc(doc(db, "roles", PERSONAS.tecnicoA.email), { accesoAgendaI131: true }, { merge: true });
+
+  await loguearComo(PERSONAS.tecnicoA);
+  const ref = await addDoc(collection(db, "turnos"), turnoBase());
+  await updateDoc(ref, { estado: "reprogramado", fechaTurno: "2026-08-10" });
+  const snap = await getDoc(ref);
+  assert.equal(snap.data().estado, "reprogramado");
+
+  await loguearComo(PERSONAS.admin);
+  await setDoc(doc(db, "roles", PERSONAS.tecnicoA.email), { accesoAgendaI131: false }, { merge: true });
+});
+
+test("técnico CON accesoAgendaI131 NO puede eliminar un turno de otra sede", async () => {
+  await loguearComo(PERSONAS.admin);
+  await setDoc(doc(db, "roles", PERSONAS.tecnicoA.email), { accesoAgendaI131: true }, { merge: true });
+  const ref = await addDoc(collection(db, "turnos"), turnoBase({ sedeId: SEDE_B }));
+
+  await loguearComo(PERSONAS.tecnicoA); // sede central == SEDE_A
+  await assertPermissionDenied(() => deleteDoc(ref));
+
+  await loguearComo(PERSONAS.admin);
+  await setDoc(doc(db, "roles", PERSONAS.tecnicoA.email), { accesoAgendaI131: false }, { merge: true });
+});
+
+test("control positivo: técnico CON accesoAgendaI131 SÍ puede eliminar un turno de su sede (no es create-only)", async () => {
+  await loguearComo(PERSONAS.admin);
+  await setDoc(doc(db, "roles", PERSONAS.tecnicoA.email), { accesoAgendaI131: true }, { merge: true });
+
+  await loguearComo(PERSONAS.tecnicoA);
+  const ref = await addDoc(collection(db, "turnos"), turnoBase());
+  await deleteDoc(ref); // no debe tirar -- si tirara, el test fallaría acá mismo
+
+  await loguearComo(PERSONAS.admin);
+  await setDoc(doc(db, "roles", PERSONAS.tecnicoA.email), { accesoAgendaI131: false }, { merge: true });
+});
+
 // radioisotopos: mismo criterio que proveedores -- lectura para cualquiera
 // con acceso, escritura sólo admin.
 test("técnico NO puede escribir en radioisotopos", async () => {

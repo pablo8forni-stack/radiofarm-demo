@@ -26,6 +26,15 @@ service cloud.firestore {
       return isAdmin() || miRol().accesoTerapiaI131 == true;
     }
 
+    // Permiso SEPARADO de tieneAccesoI131() -- pensado para poder darle
+    // acceso a la agenda a personal administrativo sin darle acceso a cargar
+    // dosis ni ver cálculos clínicos (Stock de viales / Resultados
+    // %Captación). Hoy las técnicas probablemente tengan los dos flags, pero
+    // el gate en sí queda independiente.
+    function tieneAccesoAgendaI131() {
+      return isAdmin() || miRol().accesoAgendaI131 == true;
+    }
+
     // roles: cada quien lee su propio doc; sólo admins leen/escriben todo.
     match /roles/{email} {
       allow read: if request.auth != null && (request.auth.token.email == email || isAdmin());
@@ -67,6 +76,33 @@ service cloud.firestore {
     match /estudios/{estudioId} {
       allow read: if tieneAcceso();
       allow write: if isAdmin();
+    }
+
+    // Agenda de turnos I-131 (espacio de cálculo, Parte C) -- a diferencia de
+    // TODO lo demás en el sistema (actas/movimientos), esta colección es
+    // mutable de verdad: un turno se reprograma, cancela o corrige
+    // libremente, no es un registro regulatorio inmutable. Gate por
+    // tieneAccesoAgendaI131(), separado de tieneAccesoI131(). read/update/
+    // delete chequean el documento EXISTENTE (resource.data.sedeId) además
+    // de turnoValido() en create/update (que valida el documento NUEVO) --
+    // así un técnico no puede tocar turnos de otra sede ni "mudar" uno a una
+    // sede que no es la suya.
+    function turnoValido() {
+      let d = request.resource.data;
+      return d.sedeId is string && d.sedeId.size() > 0 &&
+        (isAdmin() || miRol().sede == d.sedeId) &&
+        d.fechaTurno is string && d.fechaTurno.size() > 0 &&
+        d.pacienteNombre is string && d.pacienteNombre.size() > 0 &&
+        d.pacienteDni is string && d.pacienteDni.size() > 0 &&
+        d.tipoDosis in ['i131_ablativa', 'i131_dosis', 'i131_barrido', 'i131_captacion', 'i131_centellograma', 'i131_captacion_centellograma'] &&
+        d.estado in ['confirmado', 'no_vino', 'cancelado', 'reprogramado'];
+    }
+    match /turnos/{turnoId} {
+      allow read: if tieneAccesoAgendaI131() && (isAdmin() || resource.data.sedeId == miRol().sede);
+      allow create: if tieneAccesoAgendaI131() && turnoValido();
+      allow update: if tieneAccesoAgendaI131() && turnoValido() &&
+        (isAdmin() || resource.data.sedeId == miRol().sede);
+      allow delete: if tieneAccesoAgendaI131() && (isAdmin() || resource.data.sedeId == miRol().sede);
     }
 
     // sedes: config (activo/farmIds/puntosReorden) sólo la edita un admin.

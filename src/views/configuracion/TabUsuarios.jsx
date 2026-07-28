@@ -15,23 +15,23 @@ function formatFecha(ts) {
 export function TabUsuarios({ catalogo, roles, solicitudes, usuarioActual, onToast }) {
   const sedes = todasLasSedes(catalogo);
   const sedeDefault = (sedes.find((s) => s.principal) || sedes.find((s) => s.activo) || sedes[0])?.id;
-  const vacio = { email: "", nombre: "", rol: "tecnico", sede: sedeDefault, accesoTerapiaI131: false };
+  const vacio = { email: "", nombre: "", rol: "tecnico", sede: sedeDefault, accesoTerapiaI131: false, accesoAgendaI131: false };
 
   const [mForm, setMForm] = useState(null); // null | "nuevo" | "editar" | "aprobar"
   const [form, setForm] = useState(vacio);
 
   function abrirNuevo() { setForm(vacio); setMForm("nuevo"); }
-  function abrirEditar(r) { setForm({ email: r.email, nombre: r.nombre, rol: r.rol, sede: r.sede, accesoTerapiaI131: !!r.accesoTerapiaI131 }); setMForm("editar"); }
-  function abrirAprobar(s) { setForm({ email: s.email, nombre: s.nombre, rol: "tecnico", sede: sedeDefault, accesoTerapiaI131: false }); setMForm("aprobar"); }
+  function abrirEditar(r) { setForm({ email: r.email, nombre: r.nombre, rol: r.rol, sede: r.sede, accesoTerapiaI131: !!r.accesoTerapiaI131, accesoAgendaI131: !!r.accesoAgendaI131 }); setMForm("editar"); }
+  function abrirAprobar(s) { setForm({ email: s.email, nombre: s.nombre, rol: "tecnico", sede: sedeDefault, accesoTerapiaI131: false, accesoAgendaI131: false }); setMForm("aprobar"); }
 
   async function guardar() {
     if (!form.email.trim() || !form.nombre.trim()) return;
     try {
       if (mForm === "aprobar") {
-        await aprobarSolicitud(form.email, { nombre: form.nombre.trim(), rol: form.rol, sede: form.sede, accesoTerapiaI131: form.accesoTerapiaI131 });
+        await aprobarSolicitud(form.email, { nombre: form.nombre.trim(), rol: form.rol, sede: form.sede, accesoTerapiaI131: form.accesoTerapiaI131, accesoAgendaI131: form.accesoAgendaI131 });
         onToast(`Acceso otorgado a ${form.nombre.trim()}`);
       } else {
-        await setRol(form.email, { nombre: form.nombre.trim(), rol: form.rol, sede: form.sede, accesoTerapiaI131: form.accesoTerapiaI131 });
+        await setRol(form.email, { nombre: form.nombre.trim(), rol: form.rol, sede: form.sede, accesoTerapiaI131: form.accesoTerapiaI131, accesoAgendaI131: form.accesoAgendaI131 });
         onToast(mForm === "nuevo" ? "Usuario dado de alta" : "Usuario actualizado");
       }
       setMForm(null);
@@ -132,6 +132,7 @@ export function TabUsuarios({ catalogo, roles, solicitudes, usuarioActual, onToa
                   <div className="flex items-center justify-center gap-1 flex-wrap">
                     <Badge color={r.rol === "admin" ? "purple" : "blue"}>{r.rol === "admin" ? "Responsable" : "Técnico"}</Badge>
                     {r.rol === "tecnico" && r.accesoTerapiaI131 && <Badge color="teal">I-131</Badge>}
+                    {r.rol === "tecnico" && r.accesoAgendaI131 && <Badge color="orange">Agenda</Badge>}
                   </div>
                 </td>
                 <td className="px-4 py-3 text-center text-xs text-gray-600">{catalogo.sedes[r.sede]?.short || r.sede}</td>
@@ -155,6 +156,7 @@ export function TabUsuarios({ catalogo, roles, solicitudes, usuarioActual, onToa
               <div className="flex items-center gap-2 flex-wrap">
                 <Badge color={r.rol === "admin" ? "purple" : "blue"}>{r.rol === "admin" ? "Responsable" : "Técnico"}</Badge>
                 {r.rol === "tecnico" && r.accesoTerapiaI131 && <Badge color="teal">I-131</Badge>}
+                {r.rol === "tecnico" && r.accesoAgendaI131 && <Badge color="orange">Agenda</Badge>}
                 <span className="text-xs text-gray-600">{catalogo.sedes[r.sede]?.short || r.sede}</span>
               </div>
               <div className="flex gap-1.5 justify-end mt-1">
@@ -185,6 +187,16 @@ export function TabUsuarios({ catalogo, roles, solicitudes, usuarioActual, onToa
               <input type="checkbox" className="w-4 h-4 accent-blue-600" checked={form.accesoTerapiaI131}
                 onChange={(e) => setForm((f) => ({ ...f, accesoTerapiaI131: e.target.checked }))} />
               Acceso a Dosis terapéutica de I-131
+            </label>
+          )}
+          {/* Permiso SEPARADO del anterior -- pensado para poder darle acceso
+              sólo a la agenda a personal administrativo, sin darle acceso a
+              cargar dosis ni ver cálculos clínicos. */}
+          {form.rol === "tecnico" && (
+            <label className="flex items-center gap-2 text-xs font-semibold text-gray-600 cursor-pointer">
+              <input type="checkbox" className="w-4 h-4 accent-blue-600" checked={form.accesoAgendaI131}
+                onChange={(e) => setForm((f) => ({ ...f, accesoAgendaI131: e.target.checked }))} />
+              Acceso a Agenda de turnos I-131
             </label>
           )}
           <div className="flex gap-2 justify-end">
