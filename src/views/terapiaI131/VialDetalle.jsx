@@ -8,6 +8,7 @@ import { addActaI131Extraccion } from "../../services/firestore/actas.js";
 import { diasTranscurridos, actividadRestante, volumenExtraidoDe, calcularDesglosePorVial } from "../../helpers/decaimientoI131.js";
 import { DesgloseCalculo, AvisoGuiaNoOficial } from "./DesgloseCalculo.jsx";
 import { CurvaDecaimiento } from "./CurvaDecaimiento.jsx";
+import { CATEGORIA_VIAL_LABEL, categoriaVial } from "../../constants/tipoI131.js";
 
 const LINEA_VACIA = () => ({ vialId: "", ml: "" });
 
@@ -28,6 +29,15 @@ export function VialDetalle({ vial, anulacionVial, todosLosViales, extracciones,
   const extraccionesDelVial = useMemo(
     () => extracciones.filter((e) => (e.viales || []).some((p) => p.vialId === vial.id)),
     [extracciones, vial.id]
+  );
+
+  // Guardrail sólo client-side (confirmado, sin validación server-side): al
+  // combinar viales en una misma extracción, sólo se ofrecen otros de la
+  // MISMA categoría que el actual -- mezclar mL de un vial terapéutico con
+  // uno diagnóstico en una sola extracción no tiene sentido clínico.
+  const vialesParaCombinar = useMemo(
+    () => todosLosViales.filter((v) => categoriaVial(v) === categoriaVial(vial)),
+    [todosLosViales, vial]
   );
 
   const volumenExtraido = volumenExtraidoDe(vial.id, extracciones);
@@ -105,7 +115,10 @@ export function VialDetalle({ vial, anulacionVial, todosLosViales, extracciones,
       <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
         <div className="flex items-start justify-between gap-3 mb-3">
           <div>
-            <div className="font-mono font-bold text-gray-800 text-lg">{vial.lote}</div>
+            <div className="flex items-center gap-2">
+              <span className="font-mono font-bold text-gray-800 text-lg">{vial.lote}</span>
+              <Badge color={CATEGORIA_VIAL_LABEL[categoriaVial(vial)].color}>{CATEGORIA_VIAL_LABEL[categoriaVial(vial)].label}</Badge>
+            </div>
             <div className="text-xs text-gray-400">{catalogo.sedes[vial.sedeId]?.short || "—"}</div>
           </div>
           {esAdmin && !anulacionVial && (
@@ -165,7 +178,7 @@ export function VialDetalle({ vial, anulacionVial, todosLosViales, extracciones,
                 <div className="grid grid-cols-1 sm:grid-cols-[1fr_auto_auto] gap-3 items-end">
                   <Sel label={`Vial ${i + 1}`} value={l.vialId} onChange={(e) => cambiarLinea(i, "vialId", e.target.value)} disabled={i === 0}>
                     <option value="">Seleccionar vial...</option>
-                    {todosLosViales.map((v) => <option key={v.id} value={v.id}>{v.lote}</option>)}
+                    {vialesParaCombinar.map((v) => <option key={v.id} value={v.id}>{v.lote}</option>)}
                   </Sel>
                   <Input label="mL extraídos" type="number" min={0} step={0.1} value={l.ml} onChange={(e) => cambiarLinea(i, "ml", e.target.value)} placeholder="1.5" />
                   {lineas.length > 1 && (

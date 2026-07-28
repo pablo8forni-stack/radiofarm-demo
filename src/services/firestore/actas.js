@@ -94,6 +94,16 @@ export const addActaI131CaptacionCentellograma = (data) => addActaI131("i131_cap
 export const addActaI131Vial = (data) => addActaI131("i131_vial", data);
 export const addActaI131Extraccion = (data) => addActaI131("i131_extraccion", data);
 
+// Resultado de %Captación (espacio de cálculo, Parte B) -- vinculado por
+// dosisActaId al registro original de Captación/Centellograma/Captación y
+// Centellograma (mismo patrón que dosisActaId ya usa para vincular un
+// Barrido/diagnóstico a la dosis que lo motivó). porcentajeCaptacion se
+// calcula y congela en el cliente al guardar -- a diferencia del
+// decaimiento, esta fórmula no depende de cuándo se consulta, así que no
+// hay riesgo de que "cambie"; se guarda igual para no recalcular en cada
+// render y para que el CSV lo tenga directo.
+export const addActaI131CaptacionResultado = (data) => addActaI131("i131_captacion_resultado", data);
+
 // Libro 3 (Elución Mo-99/Tc-99m). getDoc directo por id determinístico
 // (sedeId_loteGenerador), no una query -- funciona aunque el lote tenga
 // meses de historial, no depende de estar dentro de los últimos PAGINA

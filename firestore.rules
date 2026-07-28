@@ -145,17 +145,19 @@ service cloud.firestore {
         'paciente', 'marcacion', 'elucion', 'anulacion',
         'i131_ablativa', 'i131_dosis', 'i131_barrido',
         'i131_captacion', 'i131_centellograma', 'i131_captacion_centellograma',
-        'i131_vial', 'i131_extraccion',
+        'i131_vial', 'i131_extraccion', 'i131_captacion_resultado',
       ];
     }
 
     // Espacio de cálculo I-131 (stock de viales + extracciones con
-    // decaimiento) -- a diferencia del resto de los tipos de acta, acá ni
-    // siquiera la LECTURA queda abierta a cualquier técnico de la sede: es
-    // inventario de material controlado, gate completo por tieneAccesoI131()
-    // tanto para crear como para leer (ver match /actas más abajo).
+    // decaimiento, Parte A; resultados de %Captación, Parte B) -- a
+    // diferencia del resto de los tipos de acta, acá ni siquiera la LECTURA
+    // queda abierta a cualquier técnico de la sede: es inventario de
+    // material controlado / resultados derivados de él, gate completo por
+    // tieneAccesoI131() tanto para crear como para leer (ver match /actas
+    // más abajo).
     function esTipoStockI131(tipo) {
-      return tipo == 'i131_vial' || tipo == 'i131_extraccion';
+      return tipo == 'i131_vial' || tipo == 'i131_extraccion' || tipo == 'i131_captacion_resultado';
     }
 
     // 'i131_ablativa' (30-200 mCi, Ca. de tiroides) e 'i131_dosis' (5-15 mCi,
@@ -258,13 +260,22 @@ service cloud.firestore {
                        d.lote is string && d.lote.size() > 0 &&
                        d.fechaCalibracion is timestamp &&
                        d.actividadCalibrada is number && d.actividadCalibrada > 0 &&
-                       d.volumenInicial is number && d.volumenInicial > 0)
+                       d.volumenInicial is number && d.volumenInicial > 0 &&
+                       d.categoria in ['terapeutico', 'diagnostico'])
                     : d.tipo == 'i131_extraccion'
                       ? (tieneAccesoI131() &&
                          d.viales is list && d.viales.size() > 0 &&
                          d.actividadCalculada is number && d.actividadCalculada > 0 &&
                          d.actividadMedida is number && d.actividadMedida > 0)
-                      : (d.lote is string && d.lote.size() > 0 &&
+                      : d.tipo == 'i131_captacion_resultado'
+                        ? (tieneAccesoI131() &&
+                           d.dosisActaId is string && d.dosisActaId.size() > 0 &&
+                           d.cuentasPaciente is number && d.cuentasPaciente >= 0 &&
+                           d.fondo is number && d.fondo >= 0 &&
+                           d.cuentasEstandar is number && d.cuentasEstandar > 0 &&
+                           d.volumenAdministrado is number && d.volumenAdministrado > 0 &&
+                           d.porcentajeCaptacion is number)
+                        : (d.lote is string && d.lote.size() > 0 &&
                    (d.tipo == 'paciente'
                      ? (d.mciAdministrados is number && d.mciAdministrados > 0 &&
                         d.pacienteFicha is string && d.pacienteFicha.size() > 0 &&

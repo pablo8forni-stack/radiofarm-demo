@@ -2,18 +2,19 @@ import { useState } from "react";
 import { Sel } from "../components/ui/Sel.jsx";
 import { TabRegistrosI131 } from "./terapiaI131/TabRegistrosI131.jsx";
 import { TabStockViales } from "./terapiaI131/TabStockViales.jsx";
+import { TabResultadosCaptacion } from "./terapiaI131/TabResultadosCaptacion.jsx";
 
-// "Stock de viales" (Parte A del espacio de cálculo I-131) queda gateado
-// completo por accesoTerapiaI131 -- a diferencia de "Registros", que
-// cualquier técnico de la sede puede consultar, acá ni la lectura queda
-// abierta: es inventario de material controlado con cálculo de decaimiento,
-// no un registro de atención puntual. Mismo respaldo server-side en
-// firestore.rules (esTipoStockI131).
+// "Stock de viales" (Parte A) y "Resultados %Captación" (Parte B) del
+// espacio de cálculo I-131 quedan gateados completo por accesoTerapiaI131 --
+// a diferencia de "Registros", que cualquier técnico de la sede puede
+// consultar, acá ni la lectura queda abierta: es inventario de material
+// controlado / resultados derivados de él, no un registro de atención
+// puntual. Mismo respaldo server-side en firestore.rules (esTipoStockI131).
 export function VistaTerapiaI131({ catalogo, usuario, esAdmin, onToast }) {
   const puedeVerStock = esAdmin || !!usuario.accesoTerapiaI131;
   const TABS = [
     { id: "registros", label: "Registros" },
-    ...(puedeVerStock ? [{ id: "stock", label: "Stock de viales" }] : []),
+    ...(puedeVerStock ? [{ id: "stock", label: "Stock de viales" }, { id: "captacion", label: "Resultados %Captación" }] : []),
   ];
   const [tab, setTab] = useState("registros");
 
@@ -44,6 +45,7 @@ export function VistaTerapiaI131({ catalogo, usuario, esAdmin, onToast }) {
 
       {tab === "registros" && <TabRegistrosI131 catalogo={catalogo} usuario={usuario} esAdmin={esAdmin} onToast={onToast} />}
       {tab === "stock" && puedeVerStock && <TabStockViales catalogo={catalogo} usuario={usuario} esAdmin={esAdmin} onToast={onToast} />}
+      {tab === "captacion" && puedeVerStock && <TabResultadosCaptacion catalogo={catalogo} usuario={usuario} esAdmin={esAdmin} onToast={onToast} />}
     </div>
   );
 }

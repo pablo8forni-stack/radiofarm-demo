@@ -12,3 +12,16 @@ export const TIPO_LABEL_I131 = {
   i131_centellograma: { label: "Centellograma I-131", color: "green" },
   i131_captacion_centellograma: { label: "Capt.+Centellograma I-131", color: "purple" },
 };
+
+// Terapéutico (dosis ablativa/hipertiroidismo) vs. diagnóstico (solución de
+// captación, ~10 mCi/100 mL) -- mismo modelo de vial+decaimiento para los
+// dos (ver TabStockViales.jsx), sólo se distinguen por este campo. Viales
+// viejos sin `categoria` (anteriores a este campo) se tratan como
+// terapéutico por ausencia, mismo criterio que isotopoId/unidadActividad
+// faltantes en actas más viejas. Vive acá (no en TabStockViales.jsx) para
+// que VialDetalle.jsx pueda importarlo sin crear un ciclo entre los dos.
+export const CATEGORIA_VIAL_LABEL = {
+  terapeutico: { label: "Terapéutico", color: "blue" },
+  diagnostico: { label: "Diagnóstico", color: "purple" },
+};
+export const categoriaVial = (v) => v.categoria || "terapeutico";

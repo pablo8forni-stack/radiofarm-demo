@@ -479,7 +479,7 @@ test("control positivo: admin SÍ puede crear un registro de Captación y Centel
 function vialBase(overrides = {}) {
   return {
     tipo: "i131_vial", fecha: serverTimestamp(), sedeId: SEDE_A,
-    lote: "TEST-VIAL-1", fechaCalibracion: new Date(),
+    lote: "TEST-VIAL-1", categoria: "terapeutico", fechaCalibracion: new Date(),
     actividadCalibrada: 1000, volumenInicial: 10,
     ...overrides,
   };
@@ -574,6 +574,106 @@ test("control positivo: admin SÍ puede crear una extracción de I-131 combinand
   }));
   const snap = await getDoc(ref);
   assert.equal(snap.data().viales.length, 2);
+});
+
+// Stock diagnóstico (Parte B): mismo tipo i131_vial, distinguido sólo por
+// `categoria` -- no hay tipo de acta aparte, así que lo único que hace falta
+// probar acá es que la regla exige un valor válido de la lista.
+test("vial de I-131 sin categoria es rechazado (incluso siendo admin)", async () => {
+  await loguearComo(PERSONAS.admin);
+  await assertPermissionDenied(() =>
+    addDoc(collection(db, "actas"), {
+      tipo: "i131_vial", fecha: serverTimestamp(), sedeId: SEDE_B,
+      usuarioEmail: PERSONAS.admin.email, lote: "SIN-CATEGORIA",
+      fechaCalibracion: new Date(), actividadCalibrada: 10, volumenInicial: 100,
+    })
+  );
+});
+
+test("vial de I-131 con categoria inválida es rechazado", async () => {
+  await loguearComo(PERSONAS.admin);
+  await assertPermissionDenied(() =>
+    addDoc(collection(db, "actas"), vialBase({ sedeId: SEDE_B, usuarioEmail: PERSONAS.admin.email, categoria: "otra" }))
+  );
+});
+
+test("control positivo: admin SÍ puede crear un vial de I-131 categoría diagnóstico", async () => {
+  await loguearComo(PERSONAS.admin);
+  const ref = await addDoc(collection(db, "actas"), vialBase({
+    sedeId: SEDE_B, usuarioEmail: PERSONAS.admin.email, categoria: "diagnostico", actividadCalibrada: 10, volumenInicial: 100,
+  }));
+  const snap = await getDoc(ref);
+  assert.equal(snap.data().categoria, "diagnostico");
+});
+
+// Resultados de %Captación (Parte B): mismo gate estricto que Stock de
+// viales (lectura y escritura, ver esTipoStockI131), vinculado por
+// dosisActaId al registro diagnóstico original.
+function resultadoCaptacionBase(overrides = {}) {
+  return {
+    tipo: "i131_captacion_resultado", fecha: serverTimestamp(), sedeId: SEDE_A,
+    dosisActaId: "dosis-test", cuentasPaciente: 12500, fondo: 150,
+    cuentasEstandar: 98000, volumenAdministrado: 1.2, porcentajeCaptacion: 13.29,
+    ...overrides,
+  };
+}
+
+test("técnico sin accesoTerapiaI131 NO puede crear un resultado de %Captación", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  await assertPermissionDenied(() =>
+    addDoc(collection(db, "actas"), resultadoCaptacionBase({ usuarioEmail: PERSONAS.tecnicoA.email }))
+  );
+});
+
+test("resultado de %Captación sin dosisActaId es rechazado, aunque sea admin", async () => {
+  await loguearComo(PERSONAS.admin);
+  await assertPermissionDenied(() =>
+    addDoc(collection(db, "actas"), resultadoCaptacionBase({ usuarioEmail: PERSONAS.admin.email, dosisActaId: "" }))
+  );
+});
+
+test("resultado de %Captación con cuentasEstandar 0 es rechazado (denominador)", async () => {
+  await loguearComo(PERSONAS.admin);
+  await assertPermissionDenied(() =>
+    addDoc(collection(db, "actas"), resultadoCaptacionBase({ usuarioEmail: PERSONAS.admin.email, cuentasEstandar: 0 }))
+  );
+});
+
+test("resultado de %Captación con volumenAdministrado 0 es rechazado (denominador)", async () => {
+  await loguearComo(PERSONAS.admin);
+  await assertPermissionDenied(() =>
+    addDoc(collection(db, "actas"), resultadoCaptacionBase({ usuarioEmail: PERSONAS.admin.email, volumenAdministrado: 0 }))
+  );
+});
+
+test("control positivo: resultado de %Captación con cuentasPaciente/fondo en 0 es aceptado", async () => {
+  await loguearComo(PERSONAS.admin);
+  const ref = await addDoc(collection(db, "actas"), resultadoCaptacionBase({
+    sedeId: SEDE_B, usuarioEmail: PERSONAS.admin.email, cuentasPaciente: 0, fondo: 0, porcentajeCaptacion: 0,
+  }));
+  const snap = await getDoc(ref);
+  assert.ok(snap.exists());
+});
+
+test("técnico sin accesoTerapiaI131 NO puede LEER un resultado de %Captación de su propia sede", async () => {
+  await loguearComo(PERSONAS.admin);
+  const ref = await addDoc(collection(db, "actas"), resultadoCaptacionBase({ usuarioEmail: PERSONAS.admin.email }));
+
+  await loguearComo(PERSONAS.tecnicoA); // sede central == SEDE_A
+  await assertPermissionDenied(() => getDoc(ref));
+});
+
+test("control positivo: técnico CON accesoTerapiaI131 SÍ puede crear y leer un resultado de %Captación de su sede", async () => {
+  await loguearComo(PERSONAS.admin);
+  await setDoc(doc(db, "roles", PERSONAS.tecnicoA.email), { accesoTerapiaI131: true }, { merge: true });
+
+  await loguearComo(PERSONAS.tecnicoA);
+  const ref = await addDoc(collection(db, "actas"), resultadoCaptacionBase({ usuarioEmail: PERSONAS.tecnicoA.email }));
+  const snap = await getDoc(ref);
+  assert.ok(snap.exists());
+
+  await loguearComo(PERSONAS.admin);
+  await setDoc(doc(db, "roles", PERSONAS.tecnicoA.email), { accesoTerapiaI131: false }, { merge: true });
 });
 
 // radioisotopos: mismo criterio que proveedores -- lectura para cualquiera
