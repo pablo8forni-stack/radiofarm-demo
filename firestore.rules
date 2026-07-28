@@ -145,7 +145,17 @@ service cloud.firestore {
         'paciente', 'marcacion', 'elucion', 'anulacion',
         'i131_ablativa', 'i131_dosis', 'i131_barrido',
         'i131_captacion', 'i131_centellograma', 'i131_captacion_centellograma',
+        'i131_vial', 'i131_extraccion',
       ];
+    }
+
+    // Espacio de cálculo I-131 (stock de viales + extracciones con
+    // decaimiento) -- a diferencia del resto de los tipos de acta, acá ni
+    // siquiera la LECTURA queda abierta a cualquier técnico de la sede: es
+    // inventario de material controlado, gate completo por tieneAccesoI131()
+    // tanto para crear como para leer (ver match /actas más abajo).
+    function esTipoStockI131(tipo) {
+      return tipo == 'i131_vial' || tipo == 'i131_extraccion';
     }
 
     // 'i131_ablativa' (30-200 mCi, Ca. de tiroides) e 'i131_dosis' (5-15 mCi,
@@ -243,7 +253,18 @@ service cloud.firestore {
                   ? (d.pacienteFicha is string && d.pacienteFicha.size() > 0 &&
                      d.pacienteNombre is string && d.pacienteNombre.size() > 0 &&
                      d.pacienteDni is string && d.pacienteDni.size() > 0)
-                  : (d.lote is string && d.lote.size() > 0 &&
+                  : d.tipo == 'i131_vial'
+                    ? (tieneAccesoI131() &&
+                       d.lote is string && d.lote.size() > 0 &&
+                       d.fechaCalibracion is timestamp &&
+                       d.actividadCalibrada is number && d.actividadCalibrada > 0 &&
+                       d.volumenInicial is number && d.volumenInicial > 0)
+                    : d.tipo == 'i131_extraccion'
+                      ? (tieneAccesoI131() &&
+                         d.viales is list && d.viales.size() > 0 &&
+                         d.actividadCalculada is number && d.actividadCalculada > 0 &&
+                         d.actividadMedida is number && d.actividadMedida > 0)
+                      : (d.lote is string && d.lote.size() > 0 &&
                    (d.tipo == 'paciente'
                      ? (d.mciAdministrados is number && d.mciAdministrados > 0 &&
                         d.pacienteFicha is string && d.pacienteFicha.size() > 0 &&
@@ -256,14 +277,20 @@ service cloud.firestore {
     }
 
     // Las actas tienen nombre y DNI de pacientes (Libro 2) -- Ley 25.326.
-    // Un técnico sólo puede leer las de su propia sede; admin lee todas.
+    // Un técnico sólo puede leer las de su propia sede; admin lee todas. Para
+    // los 2 tipos de stock I-131 (vial/extracción) hay una condición extra:
+    // ni siquiera la lectura queda abierta a cualquier técnico de la sede,
+    // hace falta tieneAccesoI131() también -- es inventario de material
+    // controlado, no un registro de atención puntual (ver esTipoStockI131).
     // El cliente tiene que reflejar esto en la query (ver listenActas /
     // actasPorRango): las reglas no filtran resultados, rechazan la consulta
     // entera si pide más de lo que el técnico puede leer -- por eso un
     // listener sin where(sedeId==) para un técnico rompería con
     // permission-denied en vez de traer sólo lo permitido.
     match /actas/{actaId} {
-      allow read: if isAdmin() || (tieneAcceso() && miRol().sede == resource.data.sedeId);
+      allow read: if isAdmin() ||
+        (tieneAcceso() && miRol().sede == resource.data.sedeId &&
+         (!esTipoStockI131(resource.data.tipo) || tieneAccesoI131()));
       allow create: if tieneAcceso() && actaValida();
       allow update, delete: if false;
     }

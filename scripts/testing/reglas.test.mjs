@@ -470,6 +470,112 @@ test("control positivo: admin SÍ puede crear un registro de Captación y Centel
   assert.ok(snap.exists());
 });
 
+// Stock de viales I-131 (espacio de cálculo, Parte A): a diferencia del
+// resto de las actas, acá ni la LECTURA queda abierta a cualquier técnico de
+// la sede -- hace falta tieneAccesoI131() también (ver esTipoStockI131 y el
+// allow read de /actas). "extraccion" no exige medicoResponsable ni farmId,
+// pero sí una lista `viales` no vacía y los dos campos de actividad
+// (calculada y medida, siempre por separado).
+function vialBase(overrides = {}) {
+  return {
+    tipo: "i131_vial", fecha: serverTimestamp(), sedeId: SEDE_A,
+    lote: "TEST-VIAL-1", fechaCalibracion: new Date(),
+    actividadCalibrada: 1000, volumenInicial: 10,
+    ...overrides,
+  };
+}
+
+function extraccionBase(vialId, overrides = {}) {
+  return {
+    tipo: "i131_extraccion", fecha: serverTimestamp(), sedeId: SEDE_A,
+    viales: [{ vialId, mlExtraidos: 1 }],
+    actividadCalculada: 90, actividadMedida: 88,
+    ...overrides,
+  };
+}
+
+test("técnico sin accesoTerapiaI131 NO puede crear un vial de I-131", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  await assertPermissionDenied(() =>
+    addDoc(collection(db, "actas"), vialBase({ usuarioEmail: PERSONAS.tecnicoA.email }))
+  );
+});
+
+test("control positivo: admin SÍ puede crear un vial de I-131", async () => {
+  await loguearComo(PERSONAS.admin);
+  const ref = await addDoc(collection(db, "actas"), vialBase({ sedeId: SEDE_B, usuarioEmail: PERSONAS.admin.email }));
+  const snap = await getDoc(ref);
+  assert.ok(snap.exists());
+});
+
+test("vial de I-131 con actividadCalibrada 0 es rechazado (incluso siendo admin)", async () => {
+  await loguearComo(PERSONAS.admin);
+  await assertPermissionDenied(() =>
+    addDoc(collection(db, "actas"), vialBase({ sedeId: SEDE_B, usuarioEmail: PERSONAS.admin.email, actividadCalibrada: 0 }))
+  );
+});
+
+test("técnico sin accesoTerapiaI131 NO puede LEER un vial de I-131 de su propia sede", async () => {
+  await loguearComo(PERSONAS.admin);
+  const ref = await addDoc(collection(db, "actas"), vialBase({ usuarioEmail: PERSONAS.admin.email }));
+
+  await loguearComo(PERSONAS.tecnicoA); // sede central == SEDE_A
+  await assertPermissionDenied(() => getDoc(ref));
+});
+
+test("control positivo: técnico CON accesoTerapiaI131 SÍ puede crear y leer un vial de su sede", async () => {
+  await loguearComo(PERSONAS.admin);
+  await setDoc(doc(db, "roles", PERSONAS.tecnicoA.email), { accesoTerapiaI131: true }, { merge: true });
+
+  await loguearComo(PERSONAS.tecnicoA);
+  const ref = await addDoc(collection(db, "actas"), vialBase({ usuarioEmail: PERSONAS.tecnicoA.email }));
+  const snap = await getDoc(ref);
+  assert.ok(snap.exists());
+
+  await loguearComo(PERSONAS.admin);
+  await setDoc(doc(db, "roles", PERSONAS.tecnicoA.email), { accesoTerapiaI131: false }, { merge: true });
+});
+
+test("técnico sin accesoTerapiaI131 NO puede crear una extracción de I-131", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  await assertPermissionDenied(() =>
+    addDoc(collection(db, "actas"), extraccionBase("vial-inexistente", { usuarioEmail: PERSONAS.tecnicoA.email }))
+  );
+});
+
+test("extracción de I-131 sin viales (lista vacía) es rechazada, aunque sea admin", async () => {
+  await loguearComo(PERSONAS.admin);
+  await assertPermissionDenied(() =>
+    addDoc(collection(db, "actas"), extraccionBase("x", { usuarioEmail: PERSONAS.admin.email, viales: [] }))
+  );
+});
+
+test("extracción de I-131 sin actividadMedida es rechazada, aunque sea admin", async () => {
+  await loguearComo(PERSONAS.admin);
+  await assertPermissionDenied(() =>
+    addDoc(collection(db, "actas"), {
+      tipo: "i131_extraccion", fecha: serverTimestamp(), sedeId: SEDE_A,
+      usuarioEmail: PERSONAS.admin.email,
+      viales: [{ vialId: "x", mlExtraidos: 1 }], actividadCalculada: 90,
+      // actividadMedida deliberadamente ausente (no "undefined" -- el SDK
+      // rechaza esa key antes de llegar al servidor con un error distinto).
+    })
+  );
+});
+
+test("control positivo: admin SÍ puede crear una extracción de I-131 combinando dos viales", async () => {
+  await loguearComo(PERSONAS.admin);
+  const v1 = await addDoc(collection(db, "actas"), vialBase({ sedeId: SEDE_B, usuarioEmail: PERSONAS.admin.email, lote: "V1" }));
+  const v2 = await addDoc(collection(db, "actas"), vialBase({ sedeId: SEDE_B, usuarioEmail: PERSONAS.admin.email, lote: "V2" }));
+  const ref = await addDoc(collection(db, "actas"), extraccionBase(v1.id, {
+    sedeId: SEDE_B, usuarioEmail: PERSONAS.admin.email,
+    viales: [{ vialId: v1.id, mlExtraidos: 1 }, { vialId: v2.id, mlExtraidos: 0.5 }],
+    vialIds: [v1.id, v2.id],
+  }));
+  const snap = await getDoc(ref);
+  assert.equal(snap.data().viales.length, 2);
+});
+
 // radioisotopos: mismo criterio que proveedores -- lectura para cualquiera
 // con acceso, escritura sólo admin.
 test("técnico NO puede escribir en radioisotopos", async () => {

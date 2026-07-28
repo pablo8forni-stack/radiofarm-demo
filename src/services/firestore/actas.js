@@ -82,6 +82,18 @@ export const addActaI131Captacion = (data) => addActaI131("i131_captacion", data
 export const addActaI131Centellograma = (data) => addActaI131("i131_centellograma", data);
 export const addActaI131CaptacionCentellograma = (data) => addActaI131("i131_captacion_centellograma", data);
 
+// Stock de viales I-131 (espacio de cálculo, Parte A) -- mismo writeBatch
+// simple, sin lectura previa. "vial" es create-only igual que todo lo demás
+// (corrección de un error de carga = anular + volver a cargar, mismo patrón
+// que el resto de las actas). "extraccion" no bloquea por transacción contra
+// otra extracción concurrente del mismo vial -- decisión explícita, ver nota
+// en TabStockViales.jsx: es un acto manual/supervisado, no un depósito
+// compartido de alta concurrencia. Su desglosePorVial queda congelado con los
+// valores calculados en el momento de guardar, para que una consulta futura
+// nunca recalcule (y por lo tanto nunca cambie) el número ya mostrado/usado.
+export const addActaI131Vial = (data) => addActaI131("i131_vial", data);
+export const addActaI131Extraccion = (data) => addActaI131("i131_extraccion", data);
+
 // Libro 3 (Elución Mo-99/Tc-99m). getDoc directo por id determinístico
 // (sedeId_loteGenerador), no una query -- funciona aunque el lote tenga
 // meses de historial, no depende de estar dentro de los últimos PAGINA
