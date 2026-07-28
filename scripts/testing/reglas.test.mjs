@@ -576,6 +576,69 @@ test("control positivo: admin SÍ puede crear una extracción de I-131 combinand
   assert.equal(snap.data().viales.length, 2);
 });
 
+// Un vial anulado no puede recibir extracciones nuevas (vialesI131NoAnulados)
+// -- ver nota larga en firestore.rules. anularActaTransaction crea el
+// marcador con id determinístico anula_${vialId}, mismo mecanismo que el
+// resto de las actas.
+test("extracción de I-131 sobre un vial anulado es rechazada, aunque sea admin", async () => {
+  await loguearComo(PERSONAS.admin);
+  const v = await addDoc(collection(db, "actas"), vialBase({ sedeId: SEDE_B, usuarioEmail: PERSONAS.admin.email, lote: "ANULADO-1" }));
+  await setDoc(doc(db, "actas", `anula_${v.id}`), {
+    tipo: "anulacion", anulaId: v.id, sedeId: SEDE_B, fecha: serverTimestamp(),
+    motivo: "Test", usuarioEmail: PERSONAS.admin.email, usuarioNombre: "Admin",
+  });
+  await assertPermissionDenied(() =>
+    addDoc(collection(db, "actas"), extraccionBase(v.id, { sedeId: SEDE_B, usuarioEmail: PERSONAS.admin.email }))
+  );
+});
+
+test("extracción de I-131 combinando dos viales donde UNO está anulado es rechazada", async () => {
+  await loguearComo(PERSONAS.admin);
+  const v1 = await addDoc(collection(db, "actas"), vialBase({ sedeId: SEDE_B, usuarioEmail: PERSONAS.admin.email, lote: "OK-1" }));
+  const v2 = await addDoc(collection(db, "actas"), vialBase({ sedeId: SEDE_B, usuarioEmail: PERSONAS.admin.email, lote: "ANULADO-2" }));
+  await setDoc(doc(db, "actas", `anula_${v2.id}`), {
+    tipo: "anulacion", anulaId: v2.id, sedeId: SEDE_B, fecha: serverTimestamp(),
+    motivo: "Test", usuarioEmail: PERSONAS.admin.email, usuarioNombre: "Admin",
+  });
+  await assertPermissionDenied(() =>
+    addDoc(collection(db, "actas"), extraccionBase(v1.id, {
+      sedeId: SEDE_B, usuarioEmail: PERSONAS.admin.email,
+      viales: [{ vialId: v1.id, mlExtraidos: 1 }, { vialId: v2.id, mlExtraidos: 0.5 }],
+      vialIds: [v1.id, v2.id],
+    }))
+  );
+});
+
+test("extracción de I-131 con más de 4 viales combinados es rechazada (tope fijo)", async () => {
+  await loguearComo(PERSONAS.admin);
+  const viales = [];
+  for (let i = 0; i < 5; i++) {
+    viales.push(await addDoc(collection(db, "actas"), vialBase({ sedeId: SEDE_B, usuarioEmail: PERSONAS.admin.email, lote: `TOPE-${i}` })));
+  }
+  await assertPermissionDenied(() =>
+    addDoc(collection(db, "actas"), extraccionBase(viales[0].id, {
+      sedeId: SEDE_B, usuarioEmail: PERSONAS.admin.email,
+      viales: viales.map((v) => ({ vialId: v.id, mlExtraidos: 0.5 })),
+      vialIds: viales.map((v) => v.id),
+    }))
+  );
+});
+
+test("control positivo: extracción de I-131 combinando 4 viales (el tope) es aceptada", async () => {
+  await loguearComo(PERSONAS.admin);
+  const viales = [];
+  for (let i = 0; i < 4; i++) {
+    viales.push(await addDoc(collection(db, "actas"), vialBase({ sedeId: SEDE_B, usuarioEmail: PERSONAS.admin.email, lote: `CUATRO-${i}` })));
+  }
+  const ref = await addDoc(collection(db, "actas"), extraccionBase(viales[0].id, {
+    sedeId: SEDE_B, usuarioEmail: PERSONAS.admin.email,
+    viales: viales.map((v) => ({ vialId: v.id, mlExtraidos: 0.5 })),
+    vialIds: viales.map((v) => v.id),
+  }));
+  const snap = await getDoc(ref);
+  assert.equal(snap.data().viales.length, 4);
+});
+
 // Stock diagnóstico (Parte B): mismo tipo i131_vial, distinguido sólo por
 // `categoria` -- no hay tipo de acta aparte, así que lo único que hace falta
 // probar acá es que la regla exige un valor válido de la lista.

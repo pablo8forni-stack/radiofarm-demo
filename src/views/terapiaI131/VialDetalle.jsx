@@ -156,9 +156,15 @@ export function VialDetalle({ vial, anulacionVial, todosLosViales, extracciones,
         </div>
       </div>
 
-      <div className="flex justify-end">
-        <Btn onClick={() => setMostrarForm(true)} disabled={mostrarForm || volumenRestante <= 0}>+ Nueva extracción</Btn>
-      </div>
+      {anulacionVial ? (
+        <div className="text-xs text-orange-700 font-medium bg-orange-50 border border-orange-200 rounded-xl px-4 py-3">
+          Este vial fue anulado ({anulacionVial.motivo}) — no se pueden registrar nuevas extracciones sobre él.
+        </div>
+      ) : (
+        <div className="flex justify-end">
+          <Btn onClick={() => setMostrarForm(true)} disabled={mostrarForm || volumenRestante <= 0}>+ Nueva extracción</Btn>
+        </div>
+      )}
 
       {mostrarForm && (
         <div className="bg-white border border-blue-100 rounded-2xl p-5 shadow-sm flex flex-col gap-4">

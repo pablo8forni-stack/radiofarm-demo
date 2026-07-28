@@ -174,6 +174,25 @@ service cloud.firestore {
       return tipo == 'i131_captacion' || tipo == 'i131_centellograma' || tipo == 'i131_captacion_centellograma';
     }
 
+    // Un vial anulado no puede recibir extracciones nuevas -- mismo id
+    // determinístico de anulación que el resto de las actas (anula_${id}).
+    // A diferencia de loteGeneradorVisto (un solo id), acá `viales` es una
+    // lista de largo variable (una extracción puede combinar varios) y las
+    // reglas de Firestore no tienen loops para recorrerla de forma genérica
+    // -- se desenrolla hasta un tope fijo de 4 (generoso frente al caso real
+    // de combinar 2). Cualquier extracción con más de 4 viales combinados
+    // se rechaza directamente, nunca queda sin validar.
+    function vialAnuladoI131(vialId) {
+      return exists(/databases/$(database)/documents/actas/$('anula_' + vialId));
+    }
+    function vialesI131NoAnulados(viales) {
+      return viales.size() <= 4 &&
+        !vialAnuladoI131(viales[0].vialId) &&
+        (viales.size() < 2 || !vialAnuladoI131(viales[1].vialId)) &&
+        (viales.size() < 3 || !vialAnuladoI131(viales[2].vialId)) &&
+        (viales.size() < 4 || !vialAnuladoI131(viales[3].vialId));
+    }
+
     // Elución (Libro 3, Mo-99/Tc-99m): la actividad calibrada del generador
     // sólo se carga en la primera elución de cada lote/serie -- generadoresVistos
     // (ver match más abajo) guarda un marcador con id determinístico
@@ -266,7 +285,8 @@ service cloud.firestore {
                       ? (tieneAccesoI131() &&
                          d.viales is list && d.viales.size() > 0 &&
                          d.actividadCalculada is number && d.actividadCalculada > 0 &&
-                         d.actividadMedida is number && d.actividadMedida > 0)
+                         d.actividadMedida is number && d.actividadMedida > 0 &&
+                         vialesI131NoAnulados(d.viales))
                       : d.tipo == 'i131_captacion_resultado'
                         ? (tieneAccesoI131() &&
                            d.dosisActaId is string && d.dosisActaId.size() > 0 &&

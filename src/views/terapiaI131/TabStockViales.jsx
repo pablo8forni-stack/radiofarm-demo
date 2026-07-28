@@ -84,21 +84,38 @@ export function TabStockViales({ catalogo, usuario, esAdmin, onToast }) {
 
   const vialSeleccionado = vialSeleccionadoId ? viales.find((v) => v.id === vialSeleccionadoId) : null;
 
+  // Antes esto era un `if (vialSeleccionado) return <VialDetalle .../>` --
+  // un return temprano separado del resto del JSX. Eso dejaba
+  // ModalAnularActa (más abajo) en una rama que el detalle de vial nunca
+  // alcanzaba: tocar "Anular" ahí actualizaba el estado sin ningún error,
+  // pero el modal nunca llegaba a renderizarse. Ahora todo vive en un único
+  // return, con el modal siempre disponible sin importar qué vista esté
+  // activa.
   if (vialSeleccionado) {
     return (
-      <VialDetalle
-        vial={vialSeleccionado}
-        anulacionVial={anulaciones.get(vialSeleccionado.id)}
-        todosLosViales={viales.filter((v) => v.sedeId === vialSeleccionado.sedeId && !anulaciones.get(v.id))}
-        extracciones={extracciones}
-        anulaciones={anulaciones}
-        catalogo={catalogo}
-        usuario={usuario}
-        esAdmin={esAdmin}
-        onToast={onToast}
-        onVolver={() => setVialSeleccionadoId(null)}
-        onAnular={(acta) => setMAnular(acta)}
-      />
+      <div className="flex flex-col gap-4">
+        <VialDetalle
+          vial={vialSeleccionado}
+          anulacionVial={anulaciones.get(vialSeleccionado.id)}
+          todosLosViales={viales.filter((v) => v.sedeId === vialSeleccionado.sedeId && !anulaciones.get(v.id))}
+          extracciones={extracciones}
+          anulaciones={anulaciones}
+          catalogo={catalogo}
+          usuario={usuario}
+          esAdmin={esAdmin}
+          onToast={onToast}
+          onVolver={() => setVialSeleccionadoId(null)}
+          onAnular={(acta) => setMAnular(acta)}
+        />
+        {mAnular && (
+          <ModalAnularActa
+            acta={mAnular}
+            resumen={mAnular.tipo === "i131_vial" ? `Vial ${mAnular.lote}` : `Extracción — ${mAnular.actividadCalculada?.toFixed(1)} mCi calc.`}
+            onConfirm={confirmarAnulacion}
+            onClose={() => setMAnular(null)}
+          />
+        )}
+      </div>
     );
   }
 
