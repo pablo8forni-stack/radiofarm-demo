@@ -1,4 +1,4 @@
-import { collection, doc, getDoc, getDocs, onSnapshot, orderBy, limit, query, runTransaction, where, serverTimestamp, writeBatch } from "firebase/firestore";
+import { collection, doc, getDoc, getDocs, onSnapshot, orderBy, limit, query, runTransaction, setDoc, where, serverTimestamp, writeBatch } from "firebase/firestore";
 import { db } from "../../firebase.js";
 import { conMensajeDeContingencia } from "../../helpers/erroresRed.js";
 
@@ -41,6 +41,19 @@ export async function actasPorRango(tipo, { desde, hasta, sedeId, esAdmin }) {
     where("fecha", ">=", new Date(`${desde}T00:00:00`)),
     where("fecha", "<=", new Date(`${hasta}T23:59:59.999`)),
   ];
+  if (!esAdmin || sedeId) clausulas.push(where("sedeId", "==", sedeId));
+  const snap = await getDocs(query(actasCol, ...clausulas, orderBy("fecha", "desc")));
+  return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+}
+
+// Historial completo de I-131 por paciente (Parte C, para auditorías ARN) --
+// consulta acotada directamente por pacienteDni + tipo (nunca trae el
+// histórico de otros pacientes). Requiere el índice compuesto
+// (tipo, pacienteDni, fecha desc) -- o (tipo, sedeId, pacienteDni, fecha
+// desc) para técnico -- ver firestore.indexes.json. Mismo criterio de
+// scoping por sede que actasPorRango.
+export async function actasPorPacienteDni(tipo, { dni, sedeId, esAdmin }) {
+  const clausulas = [where("tipo", "==", tipo), where("pacienteDni", "==", dni)];
   if (!esAdmin || sedeId) clausulas.push(where("sedeId", "==", sedeId));
   const snap = await getDocs(query(actasCol, ...clausulas, orderBy("fecha", "desc")));
   return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
@@ -102,7 +115,30 @@ export const addActaI131Extraccion = (data) => addActaI131("i131_extraccion", da
 // decaimiento, esta fórmula no depende de cuándo se consulta, así que no
 // hay riesgo de que "cambie"; se guarda igual para no recalcular en cada
 // render y para que el CSV lo tenga directo.
-export const addActaI131CaptacionResultado = (data) => addActaI131("i131_captacion_resultado", data);
+//
+// Id determinístico `captacion_${dosisActaId}_${momento}` (Parte C, control
+// de secuencia hora/24h/48h) -- mismo truco que anula_${id}/generadoresVistos:
+// si alguien intenta cargar el mismo momento dos veces para el mismo caso,
+// el segundo intento choca con un doc inmutable ya existente y las reglas lo
+// rechazan solas (allow update: false), sin necesitar lógica de dedup aparte.
+const resultadoCaptacionRef = (dosisActaId, momento) => doc(actasCol, `captacion_${dosisActaId}_${momento}`);
+
+export function addActaI131CaptacionResultado(data) {
+  return setDoc(resultadoCaptacionRef(data.dosisActaId, data.momento), { ...data, tipo: "i131_captacion_resultado", fecha: serverTimestamp() });
+}
+
+// "Finalizar seguimiento" (Parte C): evento nuevo e inmutable, nunca una
+// edición del resultado 48h -- el nombre describe exactamente lo que hace,
+// bloquea cargar más resultados de %Captación para ESTE dosisActaId
+// puntual (no cierra nada más amplio del paciente). Id determinístico
+// `fin_${dosisActaId}` -- la regla de i131_captacion_resultado usa
+// exists() contra este mismo path para rechazar altas nuevas una vez
+// finalizado, mismo mecanismo que loteGeneradorVisto en Elución.
+const seguimientoFinRef = (dosisActaId) => doc(actasCol, `fin_${dosisActaId}`);
+
+export function addActaI131SeguimientoFin(data) {
+  return setDoc(seguimientoFinRef(data.dosisActaId), { ...data, tipo: "i131_seguimiento_fin", fecha: serverTimestamp() });
+}
 
 // Libro 3 (Elución Mo-99/Tc-99m). getDoc directo por id determinístico
 // (sedeId_loteGenerador), no una query -- funciona aunque el lote tenga

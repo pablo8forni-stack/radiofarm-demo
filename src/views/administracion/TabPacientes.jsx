@@ -204,6 +204,10 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
       const base = {
         sedeId, sedeNombre: catalogo.sedes[sedeId]?.nombre,
         pacienteFicha: fichaNro.trim(), pacienteNombre: nombre.trim(), pacienteDni: dni.trim(),
+        // Opcionales para I-131 -- se omiten del todo si quedaron vacíos, en
+        // vez de mandar 0 (que se leería como "pesa 0kg", no "sin dato").
+        ...(peso.trim() ? { peso: parseFloat(peso) || 0 } : {}),
+        ...(talla.trim() ? { talla: parseFloat(talla) || 0 } : {}),
         usuarioNombre: usuario.nombre, usuarioEmail: usuario.email, observacion: obs.trim(),
       };
       if (tipoI131Actual.requierePermiso && !puedeCargarDosisI131) return;
@@ -542,31 +546,17 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
             <Input label="N° de Ficha" value={fichaNro} onChange={(e) => setFichaNro(e.target.value)} placeholder="4521" />
             <Input label="Apellido y nombre" value={nombre} onChange={(e) => setNombre(capitalizarPalabras(e.target.value))} placeholder="García Juan" />
             <Input label="DNI" value={dni} onChange={(e) => setDni(e.target.value)} placeholder="28456789" />
-            {!esI131 && (
-              <>
-                <Input label="Peso (kg)" type="number" min={0} value={peso} onChange={(e) => setPeso(e.target.value)} placeholder="78" />
-                <Input label="Talla (cm)" type="number" min={0} value={talla} onChange={(e) => setTalla(e.target.value)} placeholder="172" />
-                <div className="sm:col-span-2">
-                  <Sel label="Estudio" value={estudio} onChange={(e) => { setEstudio(e.target.value); setEstudioOtro(""); }}>
-                    <option value="">Seleccionar estudio...</option>
-                    {(catalogo.estudios || []).map((es) => <option key={es.id} value={es.nombre}>{es.nombre}</option>)}
-                    {/* "Otro" no sale de la colección -- opción fija, siempre
-                        última, revela el campo de texto libre de abajo. */}
-                    <option value="Otro">Otro</option>
-                  </Sel>
-                </div>
-                {estudio === "Otro" && (
-                  <div className="sm:col-span-2">
-                    <Input label="¿Cuál?" value={estudioOtro} onChange={(e) => setEstudioOtro(e.target.value)} placeholder="Ej: Gammagrafía de paratiroides" />
-                  </div>
-                )}
-              </>
-            )}
             {esAdmin && (
               <Sel label="Sede" value={sedeId} onChange={(e) => { setSedeId(e.target.value); setFarmId(""); setLote(""); }}>
                 {sedesActivas(catalogo).map((s) => <option key={s.id} value={s.id}>{s.short}</option>)}
               </Sel>
             )}
+            {/* Peso/Talla se piden siempre, para los 3 casos (Tc-99m/Lutecio/
+                I-131) -- para I-131 son opcionales (no bloquean Guardar, ver
+                el disabled del botón), para Tc-99m/Lutecio quedan igual que
+                siempre (ya eran opcionales ahí también). */}
+            <Input label="Peso (kg)" type="number" min={0} value={peso} onChange={(e) => setPeso(e.target.value)} placeholder="78" />
+            <Input label="Talla (cm)" type="number" min={0} value={talla} onChange={(e) => setTalla(e.target.value)} placeholder="172" />
             {/* Tc-99m es el 99% de los casos -- sin selector visible por
                 defecto, cero fricción. Este link revela el selector de
                 isótopo sólo cuando hace falta (Lutecio-177 o I-131, lista
@@ -587,6 +577,27 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
                 <option value="tc99m">Tc-99m (caso habitual)</option>
                 {isotoposCasoDistinto.map((i) => <option key={i.id} value={i.id}>{i.nombre}</option>)}
               </Sel>
+            )}
+            {/* Estudio genérico: sólo aplica a Tc-99m -- ni I-131 ni
+                Lutecio-177 lo usan (I-131 tiene su propio "Tipo de registro",
+                Lutecio-177 no tiene un equivalente). */}
+            {!esI131 && !esLutecio && (
+              <>
+                <div className="sm:col-span-2">
+                  <Sel label="Estudio" value={estudio} onChange={(e) => { setEstudio(e.target.value); setEstudioOtro(""); }}>
+                    <option value="">Seleccionar estudio...</option>
+                    {(catalogo.estudios || []).map((es) => <option key={es.id} value={es.nombre}>{es.nombre}</option>)}
+                    {/* "Otro" no sale de la colección -- opción fija, siempre
+                        última, revela el campo de texto libre de abajo. */}
+                    <option value="Otro">Otro</option>
+                  </Sel>
+                </div>
+                {estudio === "Otro" && (
+                  <div className="sm:col-span-2">
+                    <Input label="¿Cuál?" value={estudioOtro} onChange={(e) => setEstudioOtro(e.target.value)} placeholder="Ej: Gammagrafía de paratiroides" />
+                  </div>
+                )}
+              </>
             )}
             {/* 6 opciones ya no entran cómodas en pills -- Sel, mismo criterio
                 que usamos en otros lados cuando una lista de opciones crece

@@ -181,19 +181,27 @@ service cloud.firestore {
         'paciente', 'marcacion', 'elucion', 'anulacion',
         'i131_ablativa', 'i131_dosis', 'i131_barrido',
         'i131_captacion', 'i131_centellograma', 'i131_captacion_centellograma',
-        'i131_vial', 'i131_extraccion', 'i131_captacion_resultado',
+        'i131_vial', 'i131_extraccion', 'i131_captacion_resultado', 'i131_seguimiento_fin',
       ];
     }
 
     // Espacio de cálculo I-131 (stock de viales + extracciones con
-    // decaimiento, Parte A; resultados de %Captación, Parte B) -- a
-    // diferencia del resto de los tipos de acta, acá ni siquiera la LECTURA
+    // decaimiento, Parte A; resultados de %Captación y su cierre, Parte B) --
+    // a diferencia del resto de los tipos de acta, acá ni siquiera la LECTURA
     // queda abierta a cualquier técnico de la sede: es inventario de
     // material controlado / resultados derivados de él, gate completo por
     // tieneAccesoI131() tanto para crear como para leer (ver match /actas
     // más abajo).
     function esTipoStockI131(tipo) {
-      return tipo == 'i131_vial' || tipo == 'i131_extraccion' || tipo == 'i131_captacion_resultado';
+      return tipo == 'i131_vial' || tipo == 'i131_extraccion' || tipo == 'i131_captacion_resultado' || tipo == 'i131_seguimiento_fin';
+    }
+
+    // "Finalizar seguimiento" (Parte C): bloquea cargar más resultados de
+    // %Captación para ESTE dosisActaId puntual. Id determinístico
+    // fin_${dosisActaId} (ver services/firestore/actas.js) -- un solo
+    // exists() para saber si el caso ya se cerró.
+    function seguimientoFinalizado(dosisActaId) {
+      return exists(/databases/$(database)/documents/actas/$('fin_' + dosisActaId));
     }
 
     // 'i131_ablativa' (30-200 mCi, Ca. de tiroides) e 'i131_dosis' (5-15 mCi,
@@ -326,12 +334,21 @@ service cloud.firestore {
                       : d.tipo == 'i131_captacion_resultado'
                         ? (tieneAccesoI131() &&
                            d.dosisActaId is string && d.dosisActaId.size() > 0 &&
+                           d.pacienteDni is string && d.pacienteDni.size() > 0 &&
+                           d.pacienteNombre is string && d.pacienteNombre.size() > 0 &&
+                           d.momento in ['hora', '24h', '48h'] &&
+                           !seguimientoFinalizado(d.dosisActaId) &&
                            d.cuentasPaciente is number && d.cuentasPaciente >= 0 &&
                            d.fondo is number && d.fondo >= 0 &&
                            d.cuentasEstandar is number && d.cuentasEstandar > 0 &&
                            d.volumenAdministrado is number && d.volumenAdministrado > 0 &&
                            d.porcentajeCaptacion is number)
-                        : (d.lote is string && d.lote.size() > 0 &&
+                        : d.tipo == 'i131_seguimiento_fin'
+                          ? (tieneAccesoI131() &&
+                             d.dosisActaId is string && d.dosisActaId.size() > 0 &&
+                             d.pacienteDni is string && d.pacienteDni.size() > 0 &&
+                             d.pacienteNombre is string && d.pacienteNombre.size() > 0)
+                          : (d.lote is string && d.lote.size() > 0 &&
                    (d.tipo == 'paciente'
                      ? (d.mciAdministrados is number && d.mciAdministrados > 0 &&
                         d.pacienteFicha is string && d.pacienteFicha.size() > 0 &&

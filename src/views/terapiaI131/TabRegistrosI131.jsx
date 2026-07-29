@@ -4,6 +4,7 @@ import { Btn } from "../../components/ui/Btn.jsx";
 import { Input } from "../../components/ui/Input.jsx";
 import { Sel } from "../../components/ui/Sel.jsx";
 import { ModalAnularActa } from "../../components/actas/ModalAnularActa.jsx";
+import { HistorialPacienteI131 } from "./HistorialPacienteI131.jsx";
 import { fmtF, fmtTs, fmtFechaISO, hoy, agruparPorFecha } from "../../helpers/formato.js";
 import { descargarArchivo } from "../../helpers/descargarArchivo.js";
 import { sedesActivas } from "../../helpers/stock.js";
@@ -45,6 +46,7 @@ export function TabRegistrosI131({ catalogo, usuario, esAdmin, onToast }) {
   const [captCentellogramaTodas, setCaptCentellogramaTodas] = useState([]);
   const [anulacionesRaw, setAnulacionesRaw] = useState([]);
   const [mAnular, setMAnular] = useState(null);
+  const [historialDni, setHistorialDni] = useState(null);
   const [filtroFecha, setFiltroFecha] = useState(hoy());
   const [filtroSede, setFiltroSede] = useState(usuario.sede);
   const [filtroTipo, setFiltroTipo] = useState("");
@@ -67,6 +69,12 @@ export function TabRegistrosI131({ catalogo, usuario, esAdmin, onToast }) {
   useEffect(() => listenAnulacionesActas(setAnulacionesRaw, { esAdmin, sedeId: usuario.sede }), []);
 
   const anulaciones = useMemo(() => new Map(anulacionesRaw.map((a) => [a.anulaId, a])), [anulacionesRaw]);
+
+  // Historial completo por paciente (Parte C, auditorías ARN) -- mismo gate
+  // que Stock de viales/Resultados %Captación: surge datos de
+  // i131_captacion_resultado/i131_seguimiento_fin que un técnico sin
+  // accesoTerapiaI131 no puede leer.
+  const puedeVerHistorial = esAdmin || !!usuario.accesoTerapiaI131;
 
   // Los 6 tipos comparten un solo listado (con badge de tipo por fila) --
   // cada colección ya viene ordenada desc por fecha desde el listener, así
@@ -128,7 +136,11 @@ export function TabRegistrosI131({ catalogo, usuario, esAdmin, onToast }) {
         <td className="px-3 py-2.5">{tipo && <Badge color={tipo.color}>{tipo.label}</Badge>}</td>
         <td className="px-3 py-2.5 text-xs font-mono text-gray-600">{a.pacienteFicha || "—"}</td>
         <td className="px-3 py-2.5 font-semibold text-gray-800 text-xs">
-          {a.pacienteNombre}
+          {puedeVerHistorial ? (
+            <button onClick={() => setHistorialDni(a.pacienteDni)} className="hover:underline hover:text-blue-700 text-left" title="Ver historial completo de I-131">
+              {a.pacienteNombre}
+            </button>
+          ) : a.pacienteNombre}
           {anulacion && <div className="text-xs text-orange-500 font-semibold">ANULADO: {anulacion.motivo}</div>}
         </td>
         <td className="px-3 py-2.5 text-xs font-mono text-gray-500">{a.pacienteDni}</td>
@@ -152,7 +164,11 @@ export function TabRegistrosI131({ catalogo, usuario, esAdmin, onToast }) {
     return (
       <div key={a.id} className={`p-4 flex flex-col gap-1.5 ${anulacion ? "opacity-50" : ""}`}>
         <div className="flex items-center justify-between gap-2">
-          <span className="font-semibold text-gray-800 text-sm">{a.pacienteNombre}</span>
+          {puedeVerHistorial ? (
+            <button onClick={() => setHistorialDni(a.pacienteDni)} className="font-semibold text-gray-800 text-sm hover:underline hover:text-blue-700 text-left" title="Ver historial completo de I-131">
+              {a.pacienteNombre}
+            </button>
+          ) : <span className="font-semibold text-gray-800 text-sm">{a.pacienteNombre}</span>}
           <span className="text-xs text-gray-500 whitespace-nowrap">{fmtTs(a.fecha).split(" ")[1] || ""}</span>
         </div>
         {tipo && <div><Badge color={tipo.color}>{tipo.label}</Badge></div>}
@@ -344,6 +360,17 @@ export function TabRegistrosI131({ catalogo, usuario, esAdmin, onToast }) {
           resumen={`${TIPO_LABEL_I131[mAnular.tipo]?.label || mAnular.tipo} — ${mAnular.pacienteNombre} (DNI ${mAnular.pacienteDni})`}
           onConfirm={confirmarAnulacion}
           onClose={() => setMAnular(null)}
+        />
+      )}
+
+      {puedeVerHistorial && (
+        <HistorialPacienteI131
+          open={!!historialDni}
+          dni={historialDni}
+          sedeId={esAdmin ? (filtroSede || null) : usuario.sede}
+          esAdmin={esAdmin}
+          onClose={() => setHistorialDni(null)}
+          onToast={onToast}
         />
       )}
     </div>

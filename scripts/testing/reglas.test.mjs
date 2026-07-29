@@ -675,7 +675,9 @@ test("control positivo: admin SÍ puede crear un vial de I-131 categoría diagn�
 function resultadoCaptacionBase(overrides = {}) {
   return {
     tipo: "i131_captacion_resultado", fecha: serverTimestamp(), sedeId: SEDE_A,
-    dosisActaId: "dosis-test", cuentasPaciente: 12500, fondo: 150,
+    dosisActaId: "dosis-test", momento: "hora",
+    pacienteDni: "30111222", pacienteNombre: "Paciente Test",
+    cuentasPaciente: 12500, fondo: 150,
     cuentasEstandar: 98000, volumenAdministrado: 1.2, porcentajeCaptacion: 13.29,
     ...overrides,
   };
@@ -737,6 +739,105 @@ test("control positivo: técnico CON accesoTerapiaI131 SÍ puede crear y leer un
 
   await loguearComo(PERSONAS.admin);
   await setDoc(doc(db, "roles", PERSONAS.tecnicoA.email), { accesoTerapiaI131: false }, { merge: true });
+});
+
+test("resultado de %Captación con momento inválido es rechazado", async () => {
+  await loguearComo(PERSONAS.admin);
+  await assertPermissionDenied(() =>
+    addDoc(collection(db, "actas"), resultadoCaptacionBase({ usuarioEmail: PERSONAS.admin.email, momento: "72h" }))
+  );
+});
+
+test("resultado de %Captación sin pacienteDni es rechazado", async () => {
+  await loguearComo(PERSONAS.admin);
+  await assertPermissionDenied(() =>
+    addDoc(collection(db, "actas"), resultadoCaptacionBase({ usuarioEmail: PERSONAS.admin.email, pacienteDni: "" }))
+  );
+});
+
+// Control de secuencia (Parte C): el id determinístico
+// captacion_${dosisActaId}_${momento} + allow update: false es lo que
+// bloquea un segundo intento del mismo momento -- no hay validación de
+// "ya existe" en la regla, es la colisión de id la que lo rechaza.
+test("cargar el mismo momento dos veces para la misma dosis es rechazado (id determinístico)", async () => {
+  await loguearComo(PERSONAS.admin);
+  const dosisActaId = `dosis-dedup-${Date.now()}`;
+  const ref = doc(db, "actas", `captacion_${dosisActaId}_hora`);
+  await setDoc(ref, resultadoCaptacionBase({ usuarioEmail: PERSONAS.admin.email, dosisActaId }));
+  await assertPermissionDenied(() =>
+    setDoc(ref, resultadoCaptacionBase({ usuarioEmail: PERSONAS.admin.email, dosisActaId }))
+  );
+});
+
+test("control positivo: los 3 momentos (hora/24h/48h) de una misma dosis se pueden cargar sin chocar entre sí", async () => {
+  await loguearComo(PERSONAS.admin);
+  const dosisActaId = `dosis-secuencia-${Date.now()}`;
+  for (const momento of ["hora", "24h", "48h"]) {
+    const ref = doc(db, "actas", `captacion_${dosisActaId}_${momento}`);
+    await setDoc(ref, resultadoCaptacionBase({ usuarioEmail: PERSONAS.admin.email, dosisActaId, momento }));
+    const snap = await getDoc(ref);
+    assert.ok(snap.exists());
+  }
+});
+
+// "Finalizar seguimiento" (Parte C): evento nuevo e inmutable vinculado por
+// dosisActaId, nunca una edición del resultado 48h -- ver nota en
+// addActaI131SeguimientoFin (services/firestore/actas.js).
+function seguimientoFinBase(overrides = {}) {
+  return {
+    tipo: "i131_seguimiento_fin", fecha: serverTimestamp(), sedeId: SEDE_A,
+    dosisActaId: "dosis-fin-test", pacienteDni: "30111222", pacienteNombre: "Paciente Test",
+    ...overrides,
+  };
+}
+
+test("técnico sin accesoTerapiaI131 NO puede crear un i131_seguimiento_fin", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  await assertPermissionDenied(() =>
+    addDoc(collection(db, "actas"), seguimientoFinBase({ usuarioEmail: PERSONAS.tecnicoA.email }))
+  );
+});
+
+test("i131_seguimiento_fin sin dosisActaId es rechazado, aunque sea admin", async () => {
+  await loguearComo(PERSONAS.admin);
+  await assertPermissionDenied(() =>
+    addDoc(collection(db, "actas"), seguimientoFinBase({ usuarioEmail: PERSONAS.admin.email, dosisActaId: "" }))
+  );
+});
+
+test("i131_seguimiento_fin sin pacienteNombre es rechazado", async () => {
+  await loguearComo(PERSONAS.admin);
+  await assertPermissionDenied(() =>
+    addDoc(collection(db, "actas"), seguimientoFinBase({ usuarioEmail: PERSONAS.admin.email, pacienteNombre: "" }))
+  );
+});
+
+test("control positivo: admin SÍ puede finalizar el seguimiento de una dosis (id determinístico fin_${dosisActaId})", async () => {
+  await loguearComo(PERSONAS.admin);
+  const dosisActaId = `dosis-fin-ok-${Date.now()}`;
+  const ref = doc(db, "actas", `fin_${dosisActaId}`);
+  await setDoc(ref, seguimientoFinBase({ usuarioEmail: PERSONAS.admin.email, dosisActaId }));
+  const snap = await getDoc(ref);
+  assert.ok(snap.exists());
+});
+
+test("finalizar el seguimiento dos veces para la misma dosis es rechazado (id determinístico)", async () => {
+  await loguearComo(PERSONAS.admin);
+  const dosisActaId = `dosis-fin-dup-${Date.now()}`;
+  const ref = doc(db, "actas", `fin_${dosisActaId}`);
+  await setDoc(ref, seguimientoFinBase({ usuarioEmail: PERSONAS.admin.email, dosisActaId }));
+  await assertPermissionDenied(() =>
+    setDoc(ref, seguimientoFinBase({ usuarioEmail: PERSONAS.admin.email, dosisActaId }))
+  );
+});
+
+test("una vez finalizado el seguimiento de una dosis, no se puede cargar un nuevo resultado de %Captación para esa dosis", async () => {
+  await loguearComo(PERSONAS.admin);
+  const dosisActaId = `dosis-bloqueada-${Date.now()}`;
+  await setDoc(doc(db, "actas", `fin_${dosisActaId}`), seguimientoFinBase({ usuarioEmail: PERSONAS.admin.email, dosisActaId }));
+  await assertPermissionDenied(() =>
+    addDoc(collection(db, "actas"), resultadoCaptacionBase({ usuarioEmail: PERSONAS.admin.email, dosisActaId, momento: "48h" }))
+  );
 });
 
 // Agenda de turnos (Parte C): a diferencia de TODO lo demás en el sistema,
