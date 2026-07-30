@@ -217,20 +217,29 @@ service cloud.firestore {
       ];
     }
 
-    // MIBG (131I-MIBG, neuroblastoma/feocromocitoma/paraganglioma) -- abierto
-    // a CUALQUIER técnico, sin tieneAccesoI131(), mismo criterio que Barrido
-    // corporal. mibg_lote es una colección PROPIA (no vive dentro de actas
-    // como i131_vial) porque no comparte nada de la maquinaria de decaimiento/
-    // balance de volumen de Parte A -- cada vial es una dosis completa para
-    // un único paciente, sin curva ni HAY/SACADO/QUEDAN. "Disponible" se
-    // deriva, nunca se guarda: no existe anulación del lote (mibgLoteAnulado,
-    // reusa el mecanismo `anula_${id}` de actas -- ver
-    // services/firestore/mibgLotes.js, anularActaTransaction no le importa de
-    // qué colección viene el objeto que anula) NI un acta i131_mibg que ya lo
-    // haya usado -- y eso último queda garantizado por el id determinístico
-    // `mibg_${loteId}` de esa acta (allow update: false más abajo bloquea un
-    // segundo uso solo, sin necesitar loop ni query).
-    function mibgLoteAnulado(loteId) {
+    // Lote de dosis única (MIBG y Lutecio-177 -- Libro 4) -- abierto a
+    // CUALQUIER técnico, sin tieneAccesoI131(), mismo criterio que Barrido
+    // corporal. mibg_lote (nombre histórico, quedó así a propósito para no
+    // migrar datos: ver isotopoId abajo) es una colección PROPIA (no vive
+    // dentro de actas como i131_vial) porque no comparte nada de la
+    // maquinaria de decaimiento/balance de volumen de Parte A -- cada vial es
+    // una dosis completa para un único paciente, sin curva ni
+    // HAY/SACADO/QUEDAN. "Disponible" se deriva, nunca se guarda: no existe
+    // anulación del lote (loteDosisUnicaAnulado, reusa el mecanismo
+    // `anula_${id}` de actas -- ver services/firestore/mibgLotes.js,
+    // anularActaTransaction no le importa de qué colección viene el objeto
+    // que anula) NI una acta que ya lo haya usado -- y eso último queda
+    // garantizado por el id determinístico de esa acta (`mibg_${loteId}`
+    // para i131_mibg, `lote_${loteId}` para el 'paciente' de Lutecio-177 --
+    // allow update: false más abajo bloquea un segundo uso solo, sin
+    // necesitar loop ni query).
+    //
+    // isotopoId: campo agregado después de que MIBG ya estaba en producción
+    // -- los docs viejos no lo tienen y se interpretan como 'mibg' por
+    // ausencia en el cliente (mismo criterio que isotopoId ausente = tc99m
+    // en Libro 2). Acá sólo se exige para escrituras NUEVAS, nunca se
+    // revalida contra docs existentes.
+    function loteDosisUnicaAnulado(loteId) {
       return exists(/databases/$(database)/documents/actas/$('anula_' + loteId));
     }
     function mibgLoteValido() {
@@ -243,7 +252,11 @@ service cloud.firestore {
         d.actividadCalibrada is number && d.actividadCalibrada > 0 &&
         d.volumen is number && d.volumen > 0 &&
         d.fechaHoraCalibracion is timestamp &&
-        d.fechaVencimiento is string && d.fechaVencimiento.size() > 0;
+        d.fechaVencimiento is string && d.fechaVencimiento.size() > 0 &&
+        d.isotopoId in ['mibg', 'lutecio177'] &&
+        d.observacion is string &&
+        d.conformidad is bool &&
+        (d.conformidad == true || d.observacion.size() > 0);
     }
     match /mibg_lote/{loteId} {
       allow read: if tieneAcceso() && (isAdmin() || resource.data.sedeId == miRol().sede);
@@ -368,12 +381,16 @@ service cloud.firestore {
         (d.tipo == 'anulacion'
           ? (isAdmin() && d.anulaId is string && d.anulaId.size() > 0 &&
              actaId == 'anula_' + d.anulaId &&
-             // Un lote MIBG ya usado sólo se puede anular junto con la acta
-             // que lo usó (nunca dejarla viva) -- si d.anulaId no es un lote
-             // MIBG, o el lote nunca se usó, ambas cláusulas de abajo quedan
-             // vacías y no afectan nada (auditoría, hallazgo #2/#6b).
+             // Un lote de dosis única (MIBG o Lutecio-177) ya usado sólo se
+             // puede anular junto con la acta que lo usó (nunca dejarla
+             // viva) -- si d.anulaId no es un lote de este tipo, o el lote
+             // nunca se usó, las cláusulas de abajo quedan vacías y no
+             // afectan nada (auditoría, hallazgo #2/#6b; extendido a Lutecio
+             // al agregar Libro 4).
              (!exists(/databases/$(database)/documents/actas/$('mibg_' + d.anulaId)) ||
-               exists(/databases/$(database)/documents/actas/$('anula_mibg_' + d.anulaId))))
+               exists(/databases/$(database)/documents/actas/$('anula_mibg_' + d.anulaId))) &&
+             (!exists(/databases/$(database)/documents/actas/$('lote_' + d.anulaId)) ||
+               exists(/databases/$(database)/documents/actas/$('anula_lote_' + d.anulaId))))
           : d.tipo == 'elucion'
             ? (d.loteGenerador is string && d.loteGenerador.size() > 0 &&
                d.actividadEluida is number && d.actividadEluida > 0 &&
@@ -410,7 +427,7 @@ service cloud.firestore {
                        actaId == 'mibg_' + d.mibgLoteId &&
                        exists(/databases/$(database)/documents/mibg_lote/$(d.mibgLoteId)) &&
                        get(/databases/$(database)/documents/mibg_lote/$(d.mibgLoteId)).data.sedeId == d.sedeId &&
-                       !mibgLoteAnulado(d.mibgLoteId) &&
+                       !loteDosisUnicaAnulado(d.mibgLoteId) &&
                        d.actividadCalibrada is number && d.actividadCalibrada > 0)
                     : d.tipo == 'i131_vial'
                       ? (tieneAccesoI131() &&
@@ -451,7 +468,18 @@ service cloud.firestore {
                         d.isotopoId is string && d.isotopoId.size() > 0 &&
                         (d.isotopoId != 'lu177'
                           ? (d.farmId is string && d.farmId.size() > 0)
-                          : (d.medicoResponsable is string && d.medicoResponsable.size() > 0)))
+                          : (d.medicoResponsable is string && d.medicoResponsable.size() > 0 &&
+                             // Libro 4: administrar Lutecio-177 exige elegir un
+                             // lote registrado (mismo rigor que MIBG) -- ya no
+                             // alcanza con tipear "lote" a mano. actaId forzado
+                             // a lote_${loteDosisUnicaId} (mismo patrón que
+                             // mibg_${mibgLoteId}), prefijo DISTINTO a propósito
+                             // para no tocar el namespace ya usado por MIBG.
+                             d.loteDosisUnicaId is string && d.loteDosisUnicaId.size() > 0 &&
+                             actaId == 'lote_' + d.loteDosisUnicaId &&
+                             exists(/databases/$(database)/documents/mibg_lote/$(d.loteDosisUnicaId)) &&
+                             get(/databases/$(database)/documents/mibg_lote/$(d.loteDosisUnicaId)).data.sedeId == d.sedeId &&
+                             !loteDosisUnicaAnulado(d.loteDosisUnicaId))))
                      : (d.farmId is string && d.farmId.size() > 0 &&
                         d.mciMarcacion is number && d.mciMarcacion > 0))));
     }

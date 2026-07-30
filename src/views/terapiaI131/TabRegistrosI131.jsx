@@ -9,7 +9,7 @@ import { fmtF, fmtTs, fmtFechaISO, hoy, agruparPorFecha } from "../../helpers/fo
 import { descargarArchivo } from "../../helpers/descargarArchivo.js";
 import { sedesActivas } from "../../helpers/stock.js";
 import { listenActas, actasPorRango, anularActaTransaction, listenAnulacionesActas } from "../../services/firestore/actas.js";
-import { anularActaMibgYLote } from "../../services/firestore/mibgLotes.js";
+import { anularActaConLote } from "../../services/firestore/mibgLotes.js";
 import { TIPO_LABEL_I131 } from "../../constants/tipoI131.js";
 
 const TIPOS_I131 = ["i131_ablativa", "i131_dosis", "i131_barrido", "i131_mibg", "i131_captacion", "i131_centellograma", "i131_captacion_centellograma"];
@@ -96,7 +96,7 @@ export function TabRegistrosI131({ catalogo, usuario, esAdmin, onToast }) {
   async function confirmarAnulacion(acta, motivo) {
     try {
       if (acta.tipo === "i131_mibg") {
-        await anularActaMibgYLote(acta, motivo, usuario);
+        await anularActaConLote(acta, acta.mibgLoteId, motivo, usuario);
         onToast(
           "MIBG anulado (el lote también quedó anulado, no se reutiliza). Para corregir: registrá el lote de nuevo en la pestaña MIBG y cargá el acta correcta en Libro 2.",
           "info", 10000

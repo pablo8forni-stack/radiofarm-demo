@@ -133,15 +133,18 @@ test("acta de paciente Lutecio-177 sin médico responsable es rechazada", async 
   );
 });
 
-test("control positivo: acta de paciente Lutecio-177 con médico responsable no necesita farmId", async () => {
+// Libro 4: Lutecio-177 ya no acepta lote de texto libre -- exige un lote
+// registrado (mismo rigor que MIBG, ver mibgLoteBase/mibgActaBase más abajo
+// para el flujo completo con id determinístico lote_${loteId}).
+test("acta de paciente Lutecio-177 con médico responsable pero SIN loteDosisUnicaId es rechazada", async () => {
   await loguearComo(PERSONAS.tecnicoA);
-  const ref = await addDoc(collection(db, "actas"), {
-    tipo: "paciente", fecha: serverTimestamp(), sedeId: SEDE_A, lote: "LU177-TEST",
-    usuarioEmail: PERSONAS.tecnicoA.email, mciAdministrados: 10, pacienteFicha: "4521", isotopoId: "lu177",
-    medicoResponsable: "Dra. Test", pacienteNombre: "Test", pacienteDni: "1", estudio: "Test",
-  });
-  const snap = await getDoc(ref);
-  assert.ok(snap.exists());
+  await assertPermissionDenied(() =>
+    addDoc(collection(db, "actas"), {
+      tipo: "paciente", fecha: serverTimestamp(), sedeId: SEDE_A, lote: "LU177-TEST",
+      usuarioEmail: PERSONAS.tecnicoA.email, mciAdministrados: 10, pacienteFicha: "4521", isotopoId: "lu177",
+      medicoResponsable: "Dra. Test", pacienteNombre: "Test", pacienteDni: "1", estudio: "Test",
+    })
+  );
 });
 
 test("acta con mciMarcacion 0 es rechazada", async () => {
@@ -1148,18 +1151,20 @@ test("técnico CON accesoAgendaI131 NO puede eliminar un pedidoSemanal de otra s
   await setDoc(doc(db, "roles", PERSONAS.tecnicoA.email), { accesoAgendaI131: false }, { merge: true });
 });
 
-// MIBG (131I-MIBG, neuroblastoma/feocromocitoma/paraganglioma) -- a
-// diferencia del resto del espacio de cálculo I-131 (Parte A: vial/
-// extracción), abierto a CUALQUIER técnico con rol válido en su sede, SIN
+// Lote de dosis única -- MIBG (131I-MIBG, neuroblastoma/feocromocitoma/
+// paraganglioma) y Lutecio-177 (Libro 4, Teragnosis) comparten la misma
+// colección mibg_lote (nombre histórico) y el mismo modelo, distinguidos por
+// isotopoId. Abierto a CUALQUIER técnico con rol válido en su sede, SIN
 // tieneAccesoI131() -- mismo criterio que Barrido corporal. mibg_lote es
-// create-only (sin update/delete), y la administración a un paciente es un
-// 7° tipo de acta (i131_mibg) con id determinístico mibg_${loteId} -- un
-// segundo intento de usar el mismo lote choca con allow update:false.
+// create-only (sin update/delete); la administración a un paciente usa un id
+// determinístico -- mibg_${loteId} (tipo i131_mibg) para MIBG, lote_${loteId}
+// (tipo paciente) para Lutecio-177 -- un segundo intento de usar el mismo
+// lote choca con allow update:false.
 function mibgLoteBase(overrides = {}) {
   return {
     sedeId: SEDE_A, numeroLote: loteDePrueba(), proveedor: "IPEN",
     actividadCalibrada: 150, volumen: 10, fechaHoraCalibracion: new Date(),
-    fechaVencimiento: "2027-01-01",
+    fechaVencimiento: "2027-01-01", isotopoId: "mibg", conformidad: true, observacion: "",
     ...overrides,
   };
 }
@@ -1197,6 +1202,51 @@ test("lote de MIBG con fechaHoraCalibracion que no es timestamp es rechazado", a
   await assertPermissionDenied(() =>
     addDoc(collection(db, "mibg_lote"), mibgLoteBase({ usuarioEmail: PERSONAS.admin.email, usuarioNombre: "Admin", fechaHoraCalibracion: "2026-08-06T10:00" }))
   );
+});
+
+test("lote sin isotopoId es rechazado, aunque sea admin", async () => {
+  await loguearComo(PERSONAS.admin);
+  // undefined no es un valor válido para el SDK de Firestore (tira excepción
+  // propia, no permission-denied) -- hay que OMITIR la clave, no pasarla en
+  // undefined.
+  const { isotopoId: _isotopoId, ...sinIsotopoId } = mibgLoteBase({ usuarioEmail: PERSONAS.admin.email, usuarioNombre: "Admin" });
+  await assertPermissionDenied(() => addDoc(collection(db, "mibg_lote"), sinIsotopoId));
+});
+
+test("lote con isotopoId inválido es rechazado", async () => {
+  await loguearComo(PERSONAS.admin);
+  await assertPermissionDenied(() =>
+    addDoc(collection(db, "mibg_lote"), mibgLoteBase({ usuarioEmail: PERSONAS.admin.email, usuarioNombre: "Admin", isotopoId: "otro" }))
+  );
+});
+
+test("control positivo: lote con isotopoId 'lutecio177' es aceptado", async () => {
+  await loguearComo(PERSONAS.admin);
+  const ref = await addDoc(collection(db, "mibg_lote"), mibgLoteBase({ usuarioEmail: PERSONAS.admin.email, usuarioNombre: "Admin", isotopoId: "lutecio177" }));
+  const snap = await getDoc(ref);
+  assert.ok(snap.exists());
+});
+
+test("lote 'No conforme' sin observación es rechazado", async () => {
+  await loguearComo(PERSONAS.admin);
+  await assertPermissionDenied(() =>
+    addDoc(collection(db, "mibg_lote"), mibgLoteBase({ usuarioEmail: PERSONAS.admin.email, usuarioNombre: "Admin", conformidad: false, observacion: "" }))
+  );
+});
+
+test("control positivo: lote 'No conforme' CON observación es aceptado", async () => {
+  await loguearComo(PERSONAS.admin);
+  const ref = await addDoc(collection(db, "mibg_lote"), mibgLoteBase({
+    usuarioEmail: PERSONAS.admin.email, usuarioNombre: "Admin", conformidad: false, observacion: "Vino con actividad menor a la pedida",
+  }));
+  const snap = await getDoc(ref);
+  assert.ok(snap.exists());
+});
+
+test("lote sin conformidad (ni sí ni no) es rechazado", async () => {
+  await loguearComo(PERSONAS.admin);
+  const { conformidad: _conformidad, ...sinConformidad } = mibgLoteBase({ usuarioEmail: PERSONAS.admin.email, usuarioNombre: "Admin" });
+  await assertPermissionDenied(() => addDoc(collection(db, "mibg_lote"), sinConformidad));
 });
 
 test("técnico NO puede LEER un lote de MIBG de otra sede", async () => {
@@ -1334,8 +1384,92 @@ test("control positivo: anular un lote de MIBG ya usado SÍ se acepta si la acta
   const lote = await addDoc(collection(db, "mibg_lote"), mibgLoteBase({ usuarioEmail: PERSONAS.admin.email, usuarioNombre: "Admin" }));
   await setDoc(doc(db, "actas", `mibg_${lote.id}`), mibgActaBase(lote.id, { usuarioEmail: PERSONAS.admin.email, usuarioNombre: "Admin" }));
 
-  // Paso 1: anular la acta (anularActaMibgYLote lo hace primero).
+  // Paso 1: anular la acta (anularActaConLote lo hace primero).
   await setDoc(doc(db, "actas", `anula_mibg_${lote.id}`), anulacionDoc(`mibg_${lote.id}`, SEDE_A, "Test"));
+  // Paso 2: recién ahora se puede anular el lote.
+  const ref = doc(db, "actas", `anula_${lote.id}`);
+  await setDoc(ref, anulacionDoc(lote.id, SEDE_A, "Test"));
+  const snap = await getDoc(ref);
+  assert.ok(snap.exists());
+});
+
+// Libro 4 -- Lutecio-177: mismo lote de dosis única que MIBG (misma
+// colección mibg_lote, isotopoId 'lutecio177'), pero la acta que lo
+// "usa" es el 'paciente' de siempre (isotopoId 'lu177'), con su propio
+// namespace de id determinístico -- lote_${loteId}, campo loteDosisUnicaId --
+// para no compartir el namespace mibg_${loteId} ya usado por MIBG en
+// producción. Mismas garantías: bypass del id, sede, anulado, doble uso,
+// cascada de anulación.
+function lutecioActaBase(loteId, overrides = {}) {
+  return {
+    tipo: "paciente", fecha: serverTimestamp(), sedeId: SEDE_A, isotopoId: "lu177",
+    pacienteFicha: "9002", pacienteNombre: "Paciente Lutecio", pacienteDni: "2",
+    medicoResponsable: "Dra. Test", mciAdministrados: 150, lote: "LU177-TEST",
+    loteDosisUnicaId: loteId,
+    ...overrides,
+  };
+}
+
+test("control positivo: técnico SIN accesoTerapiaI131 SÍ puede administrar Lutecio-177 (Libro 4)", async () => {
+  await loguearComo(PERSONAS.tecnicoA); // sede central == SEDE_A
+  const lote = await addDoc(collection(db, "mibg_lote"), mibgLoteBase({ isotopoId: "lutecio177", usuarioEmail: PERSONAS.tecnicoA.email, usuarioNombre: PERSONAS.tecnicoA.nombre }));
+  const ref = doc(db, "actas", `lote_${lote.id}`);
+  await setDoc(ref, lutecioActaBase(lote.id, { usuarioEmail: PERSONAS.tecnicoA.email, usuarioNombre: PERSONAS.tecnicoA.nombre }));
+  const snap = await getDoc(ref);
+  assert.ok(snap.exists());
+});
+
+test("acta de Lutecio-177 con id que no es lote_${loteDosisUnicaId} es rechazada (bypass del id determinístico)", async () => {
+  await loguearComo(PERSONAS.admin);
+  const lote = await addDoc(collection(db, "mibg_lote"), mibgLoteBase({ isotopoId: "lutecio177", usuarioEmail: PERSONAS.admin.email, usuarioNombre: "Admin" }));
+  await assertPermissionDenied(() =>
+    addDoc(collection(db, "actas"), lutecioActaBase(lote.id, { usuarioEmail: PERSONAS.admin.email, usuarioNombre: "Admin" }))
+  );
+});
+
+test("acta de Lutecio-177 con loteDosisUnicaId de un lote de OTRA sede es rechazada", async () => {
+  await loguearComo(PERSONAS.admin);
+  const loteDeB = await addDoc(collection(db, "mibg_lote"), mibgLoteBase({ isotopoId: "lutecio177", sedeId: SEDE_B, usuarioEmail: PERSONAS.admin.email, usuarioNombre: "Admin" }));
+  await assertPermissionDenied(() =>
+    setDoc(doc(db, "actas", `lote_${loteDeB.id}`), lutecioActaBase(loteDeB.id, { sedeId: SEDE_A, usuarioEmail: PERSONAS.admin.email, usuarioNombre: "Admin" }))
+  );
+});
+
+test("un lote de Lutecio-177 ya usado no se puede volver a administrar (id determinístico, choca con el primero)", async () => {
+  await loguearComo(PERSONAS.admin);
+  const lote = await addDoc(collection(db, "mibg_lote"), mibgLoteBase({ isotopoId: "lutecio177", usuarioEmail: PERSONAS.admin.email, usuarioNombre: "Admin" }));
+  const ref = doc(db, "actas", `lote_${lote.id}`);
+  await setDoc(ref, lutecioActaBase(lote.id, { usuarioEmail: PERSONAS.admin.email, usuarioNombre: "Admin" }));
+  await assertPermissionDenied(() =>
+    setDoc(ref, lutecioActaBase(lote.id, { pacienteNombre: "Otro Paciente", usuarioEmail: PERSONAS.admin.email, usuarioNombre: "Admin" }))
+  );
+});
+
+test("un lote de Lutecio-177 anulado no se puede administrar", async () => {
+  await loguearComo(PERSONAS.admin);
+  const lote = await addDoc(collection(db, "mibg_lote"), mibgLoteBase({ isotopoId: "lutecio177", usuarioEmail: PERSONAS.admin.email, usuarioNombre: "Admin" }));
+  await setDoc(doc(db, "actas", `anula_${lote.id}`), anulacionDoc(lote.id, SEDE_A, "Test: lote mal cargado"));
+  await assertPermissionDenied(() =>
+    setDoc(doc(db, "actas", `lote_${lote.id}`), lutecioActaBase(lote.id, { usuarioEmail: PERSONAS.admin.email, usuarioNombre: "Admin" }))
+  );
+});
+
+test("anular directamente un lote de Lutecio-177 ya usado, sin haber anulado antes la acta, es rechazado", async () => {
+  await loguearComo(PERSONAS.admin);
+  const lote = await addDoc(collection(db, "mibg_lote"), mibgLoteBase({ isotopoId: "lutecio177", usuarioEmail: PERSONAS.admin.email, usuarioNombre: "Admin" }));
+  await setDoc(doc(db, "actas", `lote_${lote.id}`), lutecioActaBase(lote.id, { usuarioEmail: PERSONAS.admin.email, usuarioNombre: "Admin" }));
+  await assertPermissionDenied(() =>
+    setDoc(doc(db, "actas", `anula_${lote.id}`), anulacionDoc(lote.id, SEDE_A, "Intento de anular sólo el lote"))
+  );
+});
+
+test("control positivo: anular un lote de Lutecio-177 ya usado SÍ se acepta si la acta que lo usó ya fue anulada primero", async () => {
+  await loguearComo(PERSONAS.admin);
+  const lote = await addDoc(collection(db, "mibg_lote"), mibgLoteBase({ isotopoId: "lutecio177", usuarioEmail: PERSONAS.admin.email, usuarioNombre: "Admin" }));
+  await setDoc(doc(db, "actas", `lote_${lote.id}`), lutecioActaBase(lote.id, { usuarioEmail: PERSONAS.admin.email, usuarioNombre: "Admin" }));
+
+  // Paso 1: anular la acta (anularActaConLote lo hace primero).
+  await setDoc(doc(db, "actas", `anula_lote_${lote.id}`), anulacionDoc(`lote_${lote.id}`, SEDE_A, "Test"));
   // Paso 2: recién ahora se puede anular el lote.
   const ref = doc(db, "actas", `anula_${lote.id}`);
   await setDoc(ref, anulacionDoc(lote.id, SEDE_A, "Test"));

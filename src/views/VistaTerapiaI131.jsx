@@ -4,7 +4,7 @@ import { TabRegistrosI131 } from "./terapiaI131/TabRegistrosI131.jsx";
 import { TabStockViales } from "./terapiaI131/TabStockViales.jsx";
 import { TabResultadosCaptacion } from "./terapiaI131/TabResultadosCaptacion.jsx";
 import { TabAgendaI131 } from "./terapiaI131/TabAgendaI131.jsx";
-import { TabMibg } from "./terapiaI131/TabMibg.jsx";
+import { TabLoteDosisUnica } from "./terapiaI131/TabLoteDosisUnica.jsx";
 
 // "Stock de viales" (Parte A) y "Resultados %Captación" (Parte B) del
 // espacio de cálculo I-131 quedan gateados completo por accesoTerapiaI131 --
@@ -16,7 +16,10 @@ import { TabMibg } from "./terapiaI131/TabMibg.jsx";
 // (accesoAgendaI131) -- pensado para poder dárselo a personal
 // administrativo sin exponer los cálculos clínicos de las otras dos.
 // "MIBG" (131I-MIBG) va SIN gate, como "Registros" -- abierto a cualquier
-// técnico, igual que Barrido corporal (ver TabMibg.jsx/firestore.rules).
+// técnico, igual que Barrido corporal (ver TabLoteDosisUnica.jsx/
+// firestore.rules). Comparte componente con Libro 4 -- Lutecio-177 (Actas
+// ARN, VistaAdministracion.jsx), parametrizado por isotopoId; nunca se
+// mezclan en la navegación aunque compartan modelo de datos.
 export function VistaTerapiaI131({ catalogo, usuario, esAdmin, onToast }) {
   const puedeVerStock = esAdmin || !!usuario.accesoTerapiaI131;
   const puedeVerAgenda = esAdmin || !!usuario.accesoAgendaI131;
@@ -56,7 +59,13 @@ export function VistaTerapiaI131({ catalogo, usuario, esAdmin, onToast }) {
       {tab === "registros" && <TabRegistrosI131 catalogo={catalogo} usuario={usuario} esAdmin={esAdmin} onToast={onToast} />}
       {tab === "stock" && puedeVerStock && <TabStockViales catalogo={catalogo} usuario={usuario} esAdmin={esAdmin} onToast={onToast} />}
       {tab === "captacion" && puedeVerStock && <TabResultadosCaptacion catalogo={catalogo} usuario={usuario} esAdmin={esAdmin} onToast={onToast} />}
-      {tab === "mibg" && <TabMibg catalogo={catalogo} usuario={usuario} esAdmin={esAdmin} onToast={onToast} />}
+      {tab === "mibg" && (
+        <TabLoteDosisUnica
+          catalogo={catalogo} usuario={usuario} esAdmin={esAdmin} onToast={onToast}
+          isotopoId="mibg" titulo="MIBG" placeholderLote="Ej: MIBG-2026-014"
+          descripcion={'131I-MIBG (neuroblastoma/feocromocitoma/paraganglioma) -- cada lote es una dosis completa para un único paciente, se administra al llegar. Sin curva de decaimiento ni balance de volumen: para eso está "Stock de viales", que es otro material. La administración a un paciente se carga en Libro 2, eligiendo "MIBG" como tipo de registro.'}
+        />
+      )}
       {tab === "agenda" && puedeVerAgenda && <TabAgendaI131 catalogo={catalogo} usuario={usuario} esAdmin={esAdmin} onToast={onToast} />}
     </div>
   );

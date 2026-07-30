@@ -10,7 +10,7 @@ import { listenActas, anularActaTransaction, listenAnulacionesActas } from "../.
 import { addMibgLote, listenMibgLotes } from "../../services/firestore/mibgLotes.js";
 import { estadoMibgLote } from "../../helpers/mibgLote.js";
 
-const VACIO = { numeroLote: "", proveedor: "", actividadCalibrada: "", volumen: "", fechaHoraCalibracion: "", fechaVencimiento: "", obs: "" };
+const VACIO = { numeroLote: "", proveedor: "", actividadCalibrada: "", volumen: "", fechaHoraCalibracion: "", fechaVencimiento: "", conformidad: null, obs: "" };
 
 const ESTADO_LOTE = {
   disponible: { label: "Disponible", color: "green" },
@@ -18,18 +18,31 @@ const ESTADO_LOTE = {
   anulado: { label: "Anulado", color: "red" },
 };
 
-// MIBG (131I-MIBG) -- neuroblastoma/feocromocitoma/paraganglioma, sobre todo
-// en niños. A diferencia de Stock de viales (Parte A), SIN curva de
-// decaimiento ni balance HAY/SACADO/QUEDAN: cada vial es una dosis completa
-// para un único paciente, se administra apenas llega. Abierta a CUALQUIER
-// técnico (sin accesoTerapiaI131/accesoAgendaI131) -- ver VistaTerapiaI131.jsx.
-// "Disponible" se deriva acá mismo (nunca se guarda un contador): un lote
-// deja de estarlo apenas existe una i131_mibg no anulada que lo usa, o si el
-// lote mismo se anula -- ambos vía listeners en vivo, nunca queda "vencido"
-// por refrescar la pantalla.
-export function TabMibg({ catalogo, usuario, esAdmin, onToast }) {
-  const [lotes, setLotes] = useState([]);
-  const [usos, setUsos] = useState([]);
+// Qué tipo de acta "usa" un lote de dosis única, y en qué campo queda el
+// vínculo -- distinto según isótopo porque MIBG ya estaba en producción con
+// su propio namespace (tipo i131_mibg, campo mibgLoteId) cuando se agregó
+// Lutecio-177 (que reusa el 'paciente' de siempre, campo loteDosisUnicaId,
+// ver TabPacientes.jsx). Ver administrarLoteDosisUnicaTransaction en
+// mibgLotes.js -- misma asimetría, mismo motivo.
+const TIPO_USO = { mibg: "i131_mibg", lutecio177: "paciente" };
+const CAMPO_LOTE_ID = { mibg: "mibgLoteId", lutecio177: "loteDosisUnicaId" };
+
+// Lote de dosis única -- componente COMPARTIDO entre "Gestión I-131 > MIBG"
+// (isotopoId="mibg") y "Actas ARN > Libro 4 — Lutecio-177"
+// (isotopoId="lutecio177"): mismo modelo de datos y mismos principios
+// (create-only, sin curva de decaimiento ni balance HAY/SACADO/QUEDAN --
+// cada vial es una dosis completa para un único paciente, se administra al
+// llegar), pero DOS pestañas separadas y visualmente distintas a propósito
+// -- I-131 y Lutecio-177 nunca deben mezclarse en la navegación aunque
+// compartan la colección mibg_lote por debajo (nombre histórico, ver nota en
+// mibgLotes.js). Abierta a CUALQUIER técnico (sin accesoTerapiaI131/
+// accesoAgendaI131). "Disponible" se deriva acá mismo (nunca se guarda un
+// contador): un lote deja de estarlo apenas existe un acta no anulada que lo
+// usa, o si el lote mismo se anula -- ambos vía listeners en vivo, nunca
+// queda "vencido" por refrescar la pantalla.
+export function TabLoteDosisUnica({ catalogo, usuario, esAdmin, onToast, isotopoId, titulo, descripcion, placeholderLote }) {
+  const [lotesTodos, setLotesTodos] = useState([]);
+  const [usosRaw, setUsosRaw] = useState([]);
   const [anulacionesRaw, setAnulacionesRaw] = useState([]);
   const [mAnular, setMAnular] = useState(null);
   const [filtroSede, setFiltroSede] = useState(usuario.sede);
@@ -37,12 +50,25 @@ export function TabMibg({ catalogo, usuario, esAdmin, onToast }) {
   const [form, setForm] = useState(VACIO);
   const [guardando, setGuardando] = useState(false);
 
-  useEffect(() => listenMibgLotes(setLotes, { esAdmin, sedeId: usuario.sede }), []);
-  useEffect(() => listenActas("i131_mibg", setUsos, { esAdmin, sedeId: usuario.sede }), []);
+  useEffect(() => listenMibgLotes(setLotesTodos, { esAdmin, sedeId: usuario.sede }), []);
+  useEffect(() => listenActas(TIPO_USO[isotopoId], setUsosRaw, { esAdmin, sedeId: usuario.sede }), [isotopoId]);
   useEffect(() => listenAnulacionesActas(setAnulacionesRaw, { esAdmin, sedeId: usuario.sede }), []);
 
   const anulaciones = useMemo(() => new Map(anulacionesRaw.map((a) => [a.anulaId, a])), [anulacionesRaw]);
-  const usoPorLoteId = useMemo(() => new Map(usos.map((u) => [u.mibgLoteId, u])), [usos]);
+
+  // Filtro por isótopo SIEMPRE client-side (nunca en la query) -- ver nota en
+  // mibgLotes.js#listenMibgLotes: los lotes de MIBG ya en producción no
+  // tienen isotopoId, y se interpretan como 'mibg' por ausencia.
+  const lotes = useMemo(() => lotesTodos.filter((l) => (l.isotopoId || "mibg") === isotopoId), [lotesTodos, isotopoId]);
+  // 'paciente' trae los 3 isótopos mezclados (tc99m/lu177/i131) -- para
+  // Lutecio-177 hay que filtrar además por isotopoId=='lu177' antes de armar
+  // el mapa de usos (para MIBG, TIPO_USO ya scopeó la consulta a i131_mibg
+  // exclusivamente, no hace falta filtrar de nuevo).
+  const usos = useMemo(
+    () => (isotopoId === "lutecio177" ? usosRaw.filter((u) => u.isotopoId === "lu177" && u.loteDosisUnicaId) : usosRaw),
+    [usosRaw, isotopoId]
+  );
+  const usoPorLoteId = useMemo(() => new Map(usos.map((u) => [u[CAMPO_LOTE_ID[isotopoId]], u])), [usos, isotopoId]);
 
   function estadoDe(lote) {
     return estadoMibgLote(lote.id, { anulaciones, usoPorLoteId });
@@ -66,18 +92,21 @@ export function TabMibg({ catalogo, usuario, esAdmin, onToast }) {
 
   async function guardar() {
     if (!form.numeroLote.trim() || !form.proveedor.trim() || !form.actividadCalibrada || !form.volumen || !form.fechaHoraCalibracion || !form.fechaVencimiento) return;
+    if (form.conformidad === null) return;
+    if (!form.conformidad && !form.obs.trim()) return;
     setGuardando(true);
     try {
       await addMibgLote({
         sedeId: usuario.sede, sedeNombre: catalogo.sedes[usuario.sede]?.nombre,
-        numeroLote: form.numeroLote.trim(), proveedor: form.proveedor.trim(),
+        isotopoId, numeroLote: form.numeroLote.trim(), proveedor: form.proveedor.trim(),
         actividadCalibrada: parseFloat(form.actividadCalibrada) || 0,
         volumen: parseFloat(form.volumen) || 0,
         fechaHoraCalibracion: new Date(form.fechaHoraCalibracion),
         fechaVencimiento: form.fechaVencimiento,
+        conformidad: form.conformidad,
         usuarioNombre: usuario.nombre, usuarioEmail: usuario.email, observacion: form.obs.trim(),
       });
-      onToast("Lote de MIBG registrado");
+      onToast("Lote registrado");
       setMostrarForm(false);
       setForm(VACIO);
     } catch (e) {
@@ -90,7 +119,7 @@ export function TabMibg({ catalogo, usuario, esAdmin, onToast }) {
   return (
     <div className="flex flex-col gap-4">
       <div className="bg-blue-50 border border-blue-100 rounded-xl px-4 py-3 text-xs text-blue-700">
-        131I-MIBG (neuroblastoma/feocromocitoma/paraganglioma) -- cada lote es una dosis completa para un único paciente, se administra al llegar. Sin curva de decaimiento ni balance de volumen: para eso está "Stock de viales", que es otro material. La administración a un paciente se carga en Libro 2, eligiendo "MIBG" como tipo de registro.
+        {descripcion}
       </div>
 
       <div className="flex flex-col md:flex-row gap-3 md:items-center md:justify-between">
@@ -108,23 +137,36 @@ export function TabMibg({ catalogo, usuario, esAdmin, onToast }) {
       {mostrarForm && (
         <div className="bg-white border border-blue-100 rounded-2xl p-5 shadow-sm flex flex-col gap-4">
           <div className="flex items-center justify-between">
-            <h3 className="text-sm font-bold text-gray-800">Nuevo lote de MIBG</h3>
+            <h3 className="text-sm font-bold text-gray-800">Nuevo lote de {titulo}</h3>
             <button onClick={() => setMostrarForm(false)} className="text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-100 transition min-w-11 min-h-11 md:min-w-0 md:min-h-0 flex items-center justify-center">
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
             </button>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <Input label="N° de lote" value={form.numeroLote} onChange={(e) => setForm((f) => ({ ...f, numeroLote: e.target.value }))} placeholder="Ej: MIBG-2026-014" />
+            <Input label="N° de lote" value={form.numeroLote} onChange={(e) => setForm((f) => ({ ...f, numeroLote: e.target.value }))} placeholder={placeholderLote} />
             <Input label="Proveedor" value={form.proveedor} onChange={(e) => setForm((f) => ({ ...f, proveedor: e.target.value }))} placeholder="Ej: IPEN" />
             <Input label="Actividad calibrada (mCi)" type="number" min={0} step={0.1} value={form.actividadCalibrada} onChange={(e) => setForm((f) => ({ ...f, actividadCalibrada: e.target.value }))} placeholder="150" />
             <Input label="Volumen (mL)" type="number" min={0} step={0.1} value={form.volumen} onChange={(e) => setForm((f) => ({ ...f, volumen: e.target.value }))} placeholder="10" />
             <Input label="Fecha/hora de calibración" type="datetime-local" value={form.fechaHoraCalibracion} onChange={(e) => setForm((f) => ({ ...f, fechaHoraCalibracion: e.target.value }))} />
             <Input label="Fecha de vencimiento" type="date" value={form.fechaVencimiento} onChange={(e) => setForm((f) => ({ ...f, fechaVencimiento: e.target.value }))} />
           </div>
-          <Input label="Observación (opcional)" value={form.obs} onChange={(e) => setForm((f) => ({ ...f, obs: e.target.value }))} />
+          <div>
+            <label className="text-xs font-semibold text-gray-600 mb-1.5 block">¿Lo recibido coincide con lo pedido?</label>
+            <div className="flex gap-2">
+              <Btn size="sm" variant={form.conformidad === true ? "primary" : "outline"} onClick={() => setForm((f) => ({ ...f, conformidad: true }))}>Sí, conforme</Btn>
+              <Btn size="sm" variant={form.conformidad === false ? "danger" : "outline"} onClick={() => setForm((f) => ({ ...f, conformidad: false }))}>No conforme</Btn>
+            </div>
+          </div>
+          <Input
+            label={`Observación${form.conformidad === false ? " (obligatoria -- detallá la no conformidad)" : " (opcional)"}`}
+            value={form.obs} onChange={(e) => setForm((f) => ({ ...f, obs: e.target.value }))}
+          />
           <div className="flex gap-2 justify-end">
             <Btn variant="outline" onClick={() => setMostrarForm(false)} disabled={guardando}>Cancelar</Btn>
-            <Btn onClick={guardar} disabled={guardando || !form.numeroLote.trim() || !form.proveedor.trim() || !form.actividadCalibrada || !form.volumen || !form.fechaHoraCalibracion || !form.fechaVencimiento}>
+            <Btn onClick={guardar} disabled={
+              guardando || !form.numeroLote.trim() || !form.proveedor.trim() || !form.actividadCalibrada || !form.volumen ||
+              !form.fechaHoraCalibracion || !form.fechaVencimiento || form.conformidad === null || (!form.conformidad && !form.obs.trim())
+            }>
               {guardando ? "Guardando..." : "Guardar lote"}
             </Btn>
           </div>
@@ -133,7 +175,7 @@ export function TabMibg({ catalogo, usuario, esAdmin, onToast }) {
 
       <div className="bg-white rounded-2xl shadow-sm border border-gray-100">
         <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
-          <span className="text-xs font-bold text-gray-500 uppercase tracking-wide">Lotes de MIBG</span>
+          <span className="text-xs font-bold text-gray-500 uppercase tracking-wide">Lotes de {titulo}</span>
           <Badge color="blue">{lotesFiltrados.length}</Badge>
         </div>
         <div className="divide-y divide-gray-50">
@@ -153,6 +195,7 @@ export function TabMibg({ catalogo, usuario, esAdmin, onToast }) {
                 <div className="text-xs text-gray-700">
                   {l.actividadCalibrada} mCi en {l.volumen} mL · Calibrado {fmtTs(l.fechaHoraCalibracion)} · Vence {fmtF(l.fechaVencimiento)}
                 </div>
+                {l.conformidad === false && <div className="text-xs text-red-600 font-semibold">No conforme</div>}
                 {uso && <div className="text-xs text-gray-500">Usado en: Ficha {uso.pacienteFicha || "—"} · {uso.pacienteNombre} · {fmtTs(uso.fecha)}</div>}
                 {l.observacion && <div className="text-xs text-gray-400 italic">{l.observacion}</div>}
                 {anulacion && <div className="text-xs text-orange-500 font-semibold">ANULADO: {anulacion.motivo}</div>}
@@ -168,7 +211,7 @@ export function TabMibg({ catalogo, usuario, esAdmin, onToast }) {
             );
           })}
           {lotesFiltrados.length === 0 && (
-            <div className="text-center py-12 text-gray-400 text-sm">Sin lotes de MIBG registrados todavía.</div>
+            <div className="text-center py-12 text-gray-400 text-sm">Sin lotes de {titulo} registrados todavía.</div>
           )}
         </div>
       </div>
@@ -176,7 +219,7 @@ export function TabMibg({ catalogo, usuario, esAdmin, onToast }) {
       {mAnular && (
         <ModalAnularActa
           acta={mAnular}
-          resumen={`Lote MIBG ${mAnular.numeroLote} — ${mAnular.actividadCalibrada} mCi`}
+          resumen={`Lote ${mAnular.numeroLote} — ${mAnular.actividadCalibrada} mCi`}
           onConfirm={confirmarAnulacion}
           onClose={() => setMAnular(null)}
         />
