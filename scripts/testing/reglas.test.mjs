@@ -945,6 +945,104 @@ test("control positivo: técnico CON accesoAgendaI131 SÍ puede eliminar un turn
   await setDoc(doc(db, "roles", PERSONAS.tecnicoA.email), { accesoAgendaI131: false }, { merge: true });
 });
 
+// Simulación "Pedido semanal" (Agenda, Parte C) -- PROYECCIÓN de material
+// que todavía no llegó, un solo doc por sede+semana con id determinístico
+// sedeId_semana (no addDoc), mutable como turnos. Mismo gate/scoping que
+// turnos (accesoAgendaI131), pero campos todos opcionales salvo sedeId/
+// semana -- el pedido se completa de a poco durante la semana.
+function pedidoSemanalRef(sedeId, semana) {
+  return doc(db, "pedidosSemanales", `${sedeId}_${semana}`);
+}
+function pedidoSemanalBase(overrides = {}) {
+  return { sedeId: SEDE_A, semana: "2026-08-03", ...overrides };
+}
+
+test("técnico sin accesoAgendaI131 NO puede crear un pedidoSemanal", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  await assertPermissionDenied(() =>
+    setDoc(pedidoSemanalRef(SEDE_A, "2026-08-03"), pedidoSemanalBase())
+  );
+});
+
+test("pedidoSemanal sin semana es rechazado, aunque sea admin", async () => {
+  await loguearComo(PERSONAS.admin);
+  await assertPermissionDenied(() =>
+    setDoc(pedidoSemanalRef(SEDE_B, "2026-08-03"), pedidoSemanalBase({ sedeId: SEDE_B, semana: "" }))
+  );
+});
+
+test("pedidoSemanal con actividadEsperadaMartes no numérica es rechazado", async () => {
+  await loguearComo(PERSONAS.admin);
+  await assertPermissionDenied(() =>
+    setDoc(pedidoSemanalRef(SEDE_B, "2026-08-03"), pedidoSemanalBase({ sedeId: SEDE_B, actividadEsperadaMartes: "500" }))
+  );
+});
+
+test("pedidoSemanal con fechaHoraLlegadaJueves que no es timestamp es rechazado", async () => {
+  await loguearComo(PERSONAS.admin);
+  await assertPermissionDenied(() =>
+    setDoc(pedidoSemanalRef(SEDE_B, "2026-08-03"), pedidoSemanalBase({ sedeId: SEDE_B, fechaHoraLlegadaJueves: "2026-08-06T10:00" }))
+  );
+});
+
+test("control positivo: admin SÍ puede crear un pedidoSemanal con sólo sedeId+semana (resto opcional)", async () => {
+  await loguearComo(PERSONAS.admin);
+  const ref = pedidoSemanalRef(SEDE_B, "2026-08-03");
+  await setDoc(ref, pedidoSemanalBase({ sedeId: SEDE_B }));
+  const snap = await getDoc(ref);
+  assert.ok(snap.exists());
+});
+
+test("técnico sin accesoAgendaI131 NO puede LEER un pedidoSemanal de su propia sede", async () => {
+  await loguearComo(PERSONAS.admin);
+  const ref = pedidoSemanalRef(SEDE_A, "2026-08-03");
+  await setDoc(ref, pedidoSemanalBase());
+
+  await loguearComo(PERSONAS.tecnicoA); // sede central == SEDE_A
+  await assertPermissionDenied(() => getDoc(ref));
+});
+
+test("técnico CON accesoAgendaI131 NO puede editar un pedidoSemanal de otra sede", async () => {
+  await loguearComo(PERSONAS.admin);
+  await setDoc(doc(db, "roles", PERSONAS.tecnicoA.email), { accesoAgendaI131: true }, { merge: true });
+  const ref = pedidoSemanalRef(SEDE_B, "2026-08-03");
+  await setDoc(ref, pedidoSemanalBase({ sedeId: SEDE_B }));
+
+  await loguearComo(PERSONAS.tecnicoA); // sede central == SEDE_A
+  await assertPermissionDenied(() => setDoc(ref, { actividadEsperadaMartes: 300 }, { merge: true }));
+
+  await loguearComo(PERSONAS.admin);
+  await setDoc(doc(db, "roles", PERSONAS.tecnicoA.email), { accesoAgendaI131: false }, { merge: true });
+});
+
+test("control positivo: técnico CON accesoAgendaI131 SÍ puede crear y luego corregir el pedidoSemanal de su sede (mutable, no create-only)", async () => {
+  await loguearComo(PERSONAS.admin);
+  await setDoc(doc(db, "roles", PERSONAS.tecnicoA.email), { accesoAgendaI131: true }, { merge: true });
+
+  await loguearComo(PERSONAS.tecnicoA);
+  const ref = pedidoSemanalRef(SEDE_A, "2026-08-03");
+  await setDoc(ref, pedidoSemanalBase({ actividadEsperadaMartes: 400, fechaHoraLlegadaMartes: new Date() }), { merge: true });
+  await setDoc(ref, { actividadEsperadaMartes: 350 }, { merge: true }); // corrige el número a medida que se conoce mejor la demanda
+  const snap = await getDoc(ref);
+  assert.equal(snap.data().actividadEsperadaMartes, 350);
+
+  await loguearComo(PERSONAS.admin);
+  await setDoc(doc(db, "roles", PERSONAS.tecnicoA.email), { accesoAgendaI131: false }, { merge: true });
+});
+
+test("técnico CON accesoAgendaI131 NO puede eliminar un pedidoSemanal de otra sede", async () => {
+  await loguearComo(PERSONAS.admin);
+  await setDoc(doc(db, "roles", PERSONAS.tecnicoA.email), { accesoAgendaI131: true }, { merge: true });
+  const ref = pedidoSemanalRef(SEDE_B, "2026-08-10");
+  await setDoc(ref, pedidoSemanalBase({ sedeId: SEDE_B, semana: "2026-08-10" }));
+
+  await loguearComo(PERSONAS.tecnicoA); // sede central == SEDE_A
+  await assertPermissionDenied(() => deleteDoc(ref));
+
+  await loguearComo(PERSONAS.admin);
+  await setDoc(doc(db, "roles", PERSONAS.tecnicoA.email), { accesoAgendaI131: false }, { merge: true });
+});
+
 // radioisotopos: mismo criterio que proveedores -- lectura para cualquiera
 // con acceso, escritura sólo admin.
 test("técnico NO puede escribir en radioisotopos", async () => {

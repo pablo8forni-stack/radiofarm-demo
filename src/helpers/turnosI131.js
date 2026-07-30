@@ -23,3 +23,14 @@ export function unidadDe(tipoDosis) {
 }
 
 export const TIPOS_TURNO = TIPOS_TURNO_VALIDOS.map((id) => ({ id, ...TIPO_LABEL_I131[id] }));
+
+// Suma de actividadPrevista (sólo tipos mCi) de una lista de turnos --
+// excluyeId se usa al editar, para no contar el propio turno dos veces. NO
+// filtra por estado (un turno "cancelado" sigue contando para el tope
+// semanal del proveedor, a propósito -- ver TabAgendaI131.jsx). Compartida
+// también por PedidoSemanalI131.jsx: mismo criterio de qué "gasta" mCi.
+export function sumaMci(turnos, excluyeId) {
+  return turnos
+    .filter((t) => esTipoMci(t.tipoDosis) && t.id !== excluyeId)
+    .reduce((s, t) => s + (t.actividadPrevista || 0), 0);
+}

@@ -39,3 +39,13 @@ export function semanaAnterior(fechaISO) {
   d.setDate(d.getDate() - 7);
   return aISO(d);
 }
+
+// Un día puntual de la semana que empieza en inicioISO (que ya tiene que ser
+// un lunes, ver inicioSemana) -- offset 0=lunes, 1=martes, 3=jueves, etc.
+// Usado por el Pedido semanal (Agenda) para saber la fecha de "el jueves de
+// esta semana" sin reimplementar la aritmética de fechas.
+export function diaDeSemana(inicioISO, offset) {
+  const d = aFechaLocal(inicioISO);
+  d.setDate(d.getDate() + offset);
+  return aISO(d);
+}

@@ -105,6 +105,33 @@ service cloud.firestore {
       allow delete: if tieneAccesoAgendaI131() && (isAdmin() || resource.data.sedeId == miRol().sede);
     }
 
+    // Simulación "Pedido semanal" (Agenda, Parte C) -- PROYECCIÓN de material
+    // que todavía no llegó, un doc por sede+semana (id determinístico
+    // sedeId_semana, ver services/firestore/pedidosSemanales.js) que se va
+    // completando de a poco: todos los campos salvo sedeId/semana son
+    // opcionales, así que la validación sólo exige el TIPO cuando el campo
+    // está presente, no que estén todos. Mismo gate/scoping que turnos
+    // (tieneAccesoAgendaI131(), sede propia salvo admin) -- a propósito NO es
+    // la misma colección que turnos ni que actas: nunca debe mezclarse con
+    // material real registrado (Stock de viales, esTipoStockI131).
+    function pedidoSemanalValido() {
+      let d = request.resource.data;
+      return d.sedeId is string && d.sedeId.size() > 0 &&
+        (isAdmin() || miRol().sede == d.sedeId) &&
+        d.semana is string && d.semana.size() > 0 &&
+        (!('actividadEsperadaMartes' in d) || d.actividadEsperadaMartes is number) &&
+        (!('fechaHoraLlegadaMartes' in d) || d.fechaHoraLlegadaMartes is timestamp) &&
+        (!('actividadEsperadaJueves' in d) || d.actividadEsperadaJueves is number) &&
+        (!('fechaHoraLlegadaJueves' in d) || d.fechaHoraLlegadaJueves is timestamp);
+    }
+    match /pedidosSemanales/{id} {
+      allow read: if tieneAccesoAgendaI131() && (isAdmin() || resource.data.sedeId == miRol().sede);
+      allow create: if tieneAccesoAgendaI131() && pedidoSemanalValido();
+      allow update: if tieneAccesoAgendaI131() && pedidoSemanalValido() &&
+        (isAdmin() || resource.data.sedeId == miRol().sede);
+      allow delete: if tieneAccesoAgendaI131() && (isAdmin() || resource.data.sedeId == miRol().sede);
+    }
+
     // sedes: config (activo/farmIds/puntosReorden) sólo la edita un admin.
     match /sedes/{sedeId} {
       allow read: if tieneAcceso();

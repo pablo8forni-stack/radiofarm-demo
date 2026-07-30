@@ -9,8 +9,9 @@ import { sedesActivas } from "../../helpers/stock.js";
 import { inicioSemana, finSemana, semanaSiguiente, semanaAnterior } from "../../helpers/semanaI131.js";
 import { listenTurnosSemana, turnosDeSemana, addTurno, updateTurno, deleteTurno } from "../../services/firestore/turnos.js";
 import { TIPO_LABEL_I131 } from "../../constants/tipoI131.js";
-import { TOPE_SEMANAL_MCI, esTipoMci, unidadDe, TIPOS_TURNO } from "../../helpers/turnosI131.js";
+import { TOPE_SEMANAL_MCI, unidadDe, TIPOS_TURNO, sumaMci } from "../../helpers/turnosI131.js";
 import { ImportarTurnosI131 } from "./ImportarTurnosI131.jsx";
+import { PedidoSemanalI131 } from "./PedidoSemanalI131.jsx";
 
 const ESTADO_LABEL = {
   confirmado: { label: "Confirmado", color: "green" },
@@ -18,14 +19,6 @@ const ESTADO_LABEL = {
   cancelado: { label: "Cancelado", color: "red" },
   reprogramado: { label: "Reprogramado", color: "orange" },
 };
-
-// Suma de actividadPrevista (sólo tipos mCi) de una lista de turnos --
-// excluyeId se usa al editar, para no contar el propio turno dos veces.
-function sumaMci(turnos, excluyeId) {
-  return turnos
-    .filter((t) => esTipoMci(t.tipoDosis) && t.id !== excluyeId)
-    .reduce((s, t) => s + (t.actividadPrevista || 0), 0);
-}
 
 const VACIO = {
   fechaTurno: hoy(), pacienteNombre: "", pacienteDni: "", telefono: "",
@@ -255,6 +248,10 @@ export function TabAgendaI131({ catalogo, usuario, esAdmin, onToast }) {
           <div className="text-center py-12 text-gray-400 text-sm">Sin turnos agendados esta semana.</div>
         )}
       </div>
+
+      {sedeEfectiva && (
+        <PedidoSemanalI131 sedeId={sedeEfectiva} semana={inicio} turnosSemana={turnosSemana} onToast={onToast} />
+      )}
 
       <Modal open={!!mForm} title={mForm === "editar" ? "Editar turno" : "Nuevo turno"} onClose={() => setMForm(null)} size="lg">
         <div className="flex flex-col gap-3">
