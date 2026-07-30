@@ -275,7 +275,7 @@ test("control positivo: admin SÍ puede crear una anulación de acta", async () 
   const actaRef = await addDoc(collection(db, "actas"), actaBase({ sedeId: SEDE_A, usuarioEmail: PERSONAS.tecnicoA.email }));
 
   await loguearComo(PERSONAS.admin);
-  await addDoc(collection(db, "actas"), {
+  await setDoc(doc(db, "actas", `anula_${actaRef.id}`), {
     tipo: "anulacion", fecha: serverTimestamp(), sedeId: SEDE_A,
     anulaId: actaRef.id, motivo: "Test", usuarioEmail: PERSONAS.admin.email,
   });
@@ -287,6 +287,21 @@ test("anulación de acta sin anulaId es rechazada (incluso siendo admin)", async
     addDoc(collection(db, "actas"), {
       tipo: "anulacion", fecha: serverTimestamp(), sedeId: SEDE_A,
       motivo: "Test", usuarioEmail: PERSONAS.admin.email,
+    })
+  );
+});
+
+// Auditoría de seguridad, hallazgo #4b: antes la regla validaba anulaId
+// (contenido) pero nunca el id DEL DOCUMENTO en sí -- vía SDK directo
+// (addDoc, id al azar) se podía crear una anulación con forma válida que
+// exists('anula_' + id) de las otras reglas nunca iba a encontrar.
+test("anulación de acta con id que no es anula_${anulaId} es rechazada (bypass del id determinístico)", async () => {
+  await loguearComo(PERSONAS.admin);
+  const actaRef = await addDoc(collection(db, "actas"), actaBase({ sedeId: SEDE_A, usuarioEmail: PERSONAS.admin.email }));
+  await assertPermissionDenied(() =>
+    addDoc(collection(db, "actas"), {
+      tipo: "anulacion", fecha: serverTimestamp(), sedeId: SEDE_A,
+      anulaId: actaRef.id, motivo: "Test", usuarioEmail: PERSONAS.admin.email,
     })
   );
 });
@@ -313,11 +328,26 @@ test("control positivo: elución de un lote nuevo CON actividadCalibrada se acep
   await addDoc(collection(db, "actas"), elucionBase({ actividadCalibrada: 1850 }));
 });
 
+// Auditoría de seguridad, hallazgo #6a: el toggle "Elución habilitada" de
+// Configuración > Sedes activas sólo se chequeaba en la UI (puedeAbrirForm
+// en TabElucion.jsx) -- una sede con eluye=false (recibe por delivery, no
+// eluye su propio generador) podía igual crear actas de elución vía SDK
+// directo. SEDE_B tiene eluye=false en los fixtures (sólo Central eluye,
+// igual que en producción).
+test("elución en una sede que no eluye (eluye=false) es rechazada, aunque sea admin", async () => {
+  await loguearComo(PERSONAS.admin);
+  await assertPermissionDenied(() =>
+    addDoc(collection(db, "actas"), elucionBase({
+      sedeId: SEDE_B, actividadCalibrada: 1850, usuarioEmail: PERSONAS.admin.email,
+    }))
+  );
+});
+
 test("control positivo: elución de un lote YA visto no necesita actividadCalibrada", async () => {
   await loguearComo(PERSONAS.admin);
   const lote = `GEN-${loteDePrueba()}`;
   await setDoc(doc(db, "generadoresVistos", `${SEDE_A}_${lote.toUpperCase()}`), {
-    sedeId: SEDE_A, loteGenerador: lote, usuarioEmail: PERSONAS.admin.email,
+    sedeId: SEDE_A, loteGenerador: lote, usuarioEmail: PERSONAS.admin.email, actividadCalibrada: 1850,
   });
 
   await loguearComo(PERSONAS.tecnicoA);
@@ -333,7 +363,7 @@ test("control positivo: elución de un lote ya visto con otra capitalización ta
   await loguearComo(PERSONAS.admin);
   const lote = `Gen${loteDePrueba()}`;
   await setDoc(doc(db, "generadoresVistos", `${SEDE_A}_${lote.toUpperCase()}`), {
-    sedeId: SEDE_A, loteGenerador: lote, usuarioEmail: PERSONAS.admin.email,
+    sedeId: SEDE_A, loteGenerador: lote, usuarioEmail: PERSONAS.admin.email, actividadCalibrada: 1850,
   });
 
   await loguearComo(PERSONAS.tecnicoA);
@@ -346,6 +376,33 @@ test("técnico NO puede crear un marcador generadoresVistos de otra sede", async
   await assertPermissionDenied(() =>
     setDoc(doc(db, "generadoresVistos", `${SEDE_B}_${lote}`), {
       sedeId: SEDE_B, loteGenerador: lote, usuarioEmail: PERSONAS.tecnicoA.email,
+    })
+  );
+});
+
+// Auditoría de seguridad, hallazgo #5 (mitigación, no cierre total -- ver
+// nota larga en firestore.rules#generadorValido): antes el marcador sólo
+// exigía sede propia, así que se podía pre-crear vía SDK directo y saltear
+// la actividadCalibrada obligatoria de la primera elución real de ese
+// generador. Ahora el marcador exige su PROPIA actividadCalibrada > 0
+// (denormalizada, ver addActaElucion) y que el id tenga el formato exacto
+// sedeId_LOTE -- sube el costo de fabricar uno falso, no lo hace imposible.
+test("marcador generadoresVistos sin actividadCalibrada es rechazado, aunque sea admin", async () => {
+  await loguearComo(PERSONAS.admin);
+  const lote = `GEN-${loteDePrueba()}`;
+  await assertPermissionDenied(() =>
+    setDoc(doc(db, "generadoresVistos", `${SEDE_A}_${lote.toUpperCase()}`), {
+      sedeId: SEDE_A, loteGenerador: lote, usuarioEmail: PERSONAS.admin.email,
+    })
+  );
+});
+
+test("marcador generadoresVistos con id que no matchea sedeId_LOTE es rechazado", async () => {
+  await loguearComo(PERSONAS.admin);
+  const lote = `GEN-${loteDePrueba()}`;
+  await assertPermissionDenied(() =>
+    setDoc(doc(db, "generadoresVistos", `${SEDE_A}_no-matchea`), {
+      sedeId: SEDE_A, loteGenerador: lote, usuarioEmail: PERSONAS.admin.email, actividadCalibrada: 1850,
     })
   );
 });
@@ -713,8 +770,10 @@ test("resultado de %Captación con volumenAdministrado 0 es rechazado (denominad
 
 test("control positivo: resultado de %Captación con cuentasPaciente/fondo en 0 es aceptado", async () => {
   await loguearComo(PERSONAS.admin);
-  const ref = await addDoc(collection(db, "actas"), resultadoCaptacionBase({
-    sedeId: SEDE_B, usuarioEmail: PERSONAS.admin.email, cuentasPaciente: 0, fondo: 0, porcentajeCaptacion: 0,
+  const dosisActaId = `dosis-ceros-${Date.now()}`;
+  const ref = doc(db, "actas", `captacion_${dosisActaId}_hora`);
+  await setDoc(ref, resultadoCaptacionBase({
+    sedeId: SEDE_B, usuarioEmail: PERSONAS.admin.email, dosisActaId, cuentasPaciente: 0, fondo: 0, porcentajeCaptacion: 0,
   }));
   const snap = await getDoc(ref);
   assert.ok(snap.exists());
@@ -722,7 +781,9 @@ test("control positivo: resultado de %Captación con cuentasPaciente/fondo en 0 
 
 test("técnico sin accesoTerapiaI131 NO puede LEER un resultado de %Captación de su propia sede", async () => {
   await loguearComo(PERSONAS.admin);
-  const ref = await addDoc(collection(db, "actas"), resultadoCaptacionBase({ usuarioEmail: PERSONAS.admin.email }));
+  const dosisActaId = `dosis-lectura-${Date.now()}`;
+  const ref = doc(db, "actas", `captacion_${dosisActaId}_hora`);
+  await setDoc(ref, resultadoCaptacionBase({ usuarioEmail: PERSONAS.admin.email, dosisActaId }));
 
   await loguearComo(PERSONAS.tecnicoA); // sede central == SEDE_A
   await assertPermissionDenied(() => getDoc(ref));
@@ -733,7 +794,9 @@ test("control positivo: técnico CON accesoTerapiaI131 SÍ puede crear y leer un
   await setDoc(doc(db, "roles", PERSONAS.tecnicoA.email), { accesoTerapiaI131: true }, { merge: true });
 
   await loguearComo(PERSONAS.tecnicoA);
-  const ref = await addDoc(collection(db, "actas"), resultadoCaptacionBase({ usuarioEmail: PERSONAS.tecnicoA.email }));
+  const dosisActaId = `dosis-crear-leer-${Date.now()}`;
+  const ref = doc(db, "actas", `captacion_${dosisActaId}_hora`);
+  await setDoc(ref, resultadoCaptacionBase({ usuarioEmail: PERSONAS.tecnicoA.email, dosisActaId }));
   const snap = await getDoc(ref);
   assert.ok(snap.exists());
 
@@ -780,6 +843,18 @@ test("control positivo: los 3 momentos (hora/24h/48h) de una misma dosis se pued
   }
 });
 
+// Auditoría de seguridad, hallazgo #4a: la regla validaba dosisActaId/
+// momento (contenido) pero nunca el id DEL DOCUMENTO -- vía SDK directo
+// (addDoc, id al azar) se podía crear un resultado con forma válida que
+// esquivaba la protección real de "un momento por dosis" (choque de id).
+test("resultado de %Captación con id que no es captacion_${dosisActaId}_${momento} es rechazado (bypass del id determinístico)", async () => {
+  await loguearComo(PERSONAS.admin);
+  const dosisActaId = `dosis-bypass-${Date.now()}`;
+  await assertPermissionDenied(() =>
+    addDoc(collection(db, "actas"), resultadoCaptacionBase({ usuarioEmail: PERSONAS.admin.email, dosisActaId }))
+  );
+});
+
 // "Finalizar seguimiento" (Parte C): evento nuevo e inmutable vinculado por
 // dosisActaId, nunca una edición del resultado 48h -- ver nota en
 // addActaI131SeguimientoFin (services/firestore/actas.js).
@@ -819,6 +894,18 @@ test("control positivo: admin SÍ puede finalizar el seguimiento de una dosis (i
   await setDoc(ref, seguimientoFinBase({ usuarioEmail: PERSONAS.admin.email, dosisActaId }));
   const snap = await getDoc(ref);
   assert.ok(snap.exists());
+});
+
+// Mismo patrón de una línea que #4a/#1, agregado al cierre de la tanda: sin
+// esto, un cierre con id al azar se ve "finalizado" en pantalla (la acta
+// existe con forma válida) pero exists('fin_' + dosisActaId) de la regla
+// nunca lo ve, dejando pasar resultados de %Captación después del cierre.
+test("i131_seguimiento_fin con id que no es fin_${dosisActaId} es rechazado (bypass del id determinístico)", async () => {
+  await loguearComo(PERSONAS.admin);
+  const dosisActaId = `dosis-fin-bypass-${Date.now()}`;
+  await assertPermissionDenied(() =>
+    addDoc(collection(db, "actas"), seguimientoFinBase({ usuarioEmail: PERSONAS.admin.email, dosisActaId }))
+  );
 });
 
 test("finalizar el seguimiento dos veces para la misma dosis es rechazado (id determinístico)", async () => {
@@ -993,6 +1080,24 @@ test("control positivo: admin SÍ puede crear un pedidoSemanal con sólo sedeId+
   assert.ok(snap.exists());
 });
 
+// Auditoría de seguridad, hallazgo #3: resource.data.sedeId sobre un
+// resource inexistente (semana sin pedido cargado todavía) daba
+// permission-denied en vez de "no existe" para un técnico -- sólo se había
+// probado como admin, porque isAdmin() cortocircuita antes de evaluar esa
+// cláusula.
+test("control positivo: técnico CON accesoAgendaI131 SÍ puede LEER (como 'no existe') un pedidoSemanal de una semana sin cargar en su sede", async () => {
+  await loguearComo(PERSONAS.admin);
+  await setDoc(doc(db, "roles", PERSONAS.tecnicoA.email), { accesoAgendaI131: true }, { merge: true });
+
+  await loguearComo(PERSONAS.tecnicoA);
+  const ref = pedidoSemanalRef(SEDE_A, "2026-09-14"); // semana sin doc cargado
+  const snap = await getDoc(ref);
+  assert.equal(snap.exists(), false);
+
+  await loguearComo(PERSONAS.admin);
+  await setDoc(doc(db, "roles", PERSONAS.tecnicoA.email), { accesoAgendaI131: false }, { merge: true });
+});
+
 test("técnico sin accesoAgendaI131 NO puede LEER un pedidoSemanal de su propia sede", async () => {
   await loguearComo(PERSONAS.admin);
   const ref = pedidoSemanalRef(SEDE_A, "2026-08-03");
@@ -1131,6 +1236,20 @@ test("control positivo: técnico SIN accesoTerapiaI131 SÍ puede administrar MIB
   assert.ok(releido.exists());
 });
 
+// Auditoría de seguridad, hallazgo #1: la regla validaba que el lote
+// existiera/no estuviera anulado/fuera de la sede correcta, pero NUNCA que
+// el id del ACTA fuera mibg_${mibgLoteId} -- toda la garantía anti-doble-
+// administración descansa en ese id (allow update: false), pero antes de
+// este fix sólo el cliente lo construía. Vía SDK directo (addDoc, id al
+// azar) se podían crear N actas apuntando al mismo lote.
+test("i131_mibg con id que no es mibg_${mibgLoteId} es rechazado (bypass del id determinístico)", async () => {
+  await loguearComo(PERSONAS.admin);
+  const lote = await addDoc(collection(db, "mibg_lote"), mibgLoteBase({ usuarioEmail: PERSONAS.admin.email, usuarioNombre: "Admin" }));
+  await assertPermissionDenied(() =>
+    addDoc(collection(db, "actas"), mibgActaBase(lote.id, { usuarioEmail: PERSONAS.admin.email, usuarioNombre: "Admin" }))
+  );
+});
+
 test("i131_mibg sin mibgLoteId es rechazado, aunque sea admin", async () => {
   await loguearComo(PERSONAS.admin);
   const lote = await addDoc(collection(db, "mibg_lote"), mibgLoteBase({ usuarioEmail: PERSONAS.admin.email, usuarioNombre: "Admin" }));
@@ -1190,6 +1309,38 @@ test("técnico sin rol NO puede anular un lote de MIBG (admin-only, mismo patró
       motivo: "Intento sin ser admin", usuarioNombre: PERSONAS.tecnicoA.nombre, usuarioEmail: PERSONAS.tecnicoA.email,
     })
   );
+});
+
+// Auditoría de seguridad, hallazgo #2/#6b: anular un acta MIBG tiene que
+// anular TAMBIÉN el lote (flujo oficial, ver anularActaMibgYLote) -- estos
+// dos tests verifican que la regla no deja anular el LOTE solo, dejando
+// viva la acta que lo usó, cuando alguien se salta el flujo oficial vía SDK.
+function anulacionDoc(id, sedeId, motivo) {
+  return { tipo: "anulacion", anulaId: id, sedeId, fecha: serverTimestamp(), motivo, usuarioNombre: "Admin", usuarioEmail: PERSONAS.admin.email };
+}
+
+test("anular directamente un lote de MIBG ya usado, sin haber anulado antes la acta, es rechazado", async () => {
+  await loguearComo(PERSONAS.admin);
+  const lote = await addDoc(collection(db, "mibg_lote"), mibgLoteBase({ usuarioEmail: PERSONAS.admin.email, usuarioNombre: "Admin" }));
+  await setDoc(doc(db, "actas", `mibg_${lote.id}`), mibgActaBase(lote.id, { usuarioEmail: PERSONAS.admin.email, usuarioNombre: "Admin" }));
+
+  await assertPermissionDenied(() =>
+    setDoc(doc(db, "actas", `anula_${lote.id}`), anulacionDoc(lote.id, SEDE_A, "Intento de anular sólo el lote"))
+  );
+});
+
+test("control positivo: anular un lote de MIBG ya usado SÍ se acepta si la acta que lo usó ya fue anulada primero", async () => {
+  await loguearComo(PERSONAS.admin);
+  const lote = await addDoc(collection(db, "mibg_lote"), mibgLoteBase({ usuarioEmail: PERSONAS.admin.email, usuarioNombre: "Admin" }));
+  await setDoc(doc(db, "actas", `mibg_${lote.id}`), mibgActaBase(lote.id, { usuarioEmail: PERSONAS.admin.email, usuarioNombre: "Admin" }));
+
+  // Paso 1: anular la acta (anularActaMibgYLote lo hace primero).
+  await setDoc(doc(db, "actas", `anula_mibg_${lote.id}`), anulacionDoc(`mibg_${lote.id}`, SEDE_A, "Test"));
+  // Paso 2: recién ahora se puede anular el lote.
+  const ref = doc(db, "actas", `anula_${lote.id}`);
+  await setDoc(ref, anulacionDoc(lote.id, SEDE_A, "Test"));
+  const snap = await getDoc(ref);
+  assert.ok(snap.exists());
 });
 
 // radioisotopos: mismo criterio que proveedores -- lectura para cualquiera

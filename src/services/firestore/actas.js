@@ -155,13 +155,19 @@ export async function loteGeneradorYaRegistrado(sedeId, loteGenerador) {
 // offline-safe). Si es la primera elución de este lote/serie en la sede, el
 // mismo batch crea el marcador -- la regla exige actividadCalibrada
 // exactamente cuando ese marcador todavía no existe, así que hay que
-// crearlo en el mismo batch que la propia acta, no después.
+// crearlo en el mismo batch que la propia acta, no después. El marcador
+// también lleva su PROPIA actividadCalibrada (denormalizada de la acta) --
+// mitigación de la auditoría (hallazgo #5): sin backend no se puede exigir
+// "este write ocurre en el mismo batch que una elución válida", así que en
+// cambio se sube el costo de pre-crear un marcador falso vía SDK directo
+// (además del id exacto, ahora hace falta un número > 0 plausible).
 export function addActaElucion(data, esPrimeraVez) {
   const batch = writeBatch(db);
   batch.set(doc(actasCol), { ...data, tipo: "elucion", fecha: serverTimestamp() });
   if (esPrimeraVez) {
     batch.set(generadorRef(data.sedeId, data.loteGenerador), {
       sedeId: data.sedeId, loteGenerador: data.loteGenerador, primeraFecha: serverTimestamp(), usuarioEmail: data.usuarioEmail,
+      actividadCalibrada: data.actividadCalibrada,
     });
   }
   return batch.commit();

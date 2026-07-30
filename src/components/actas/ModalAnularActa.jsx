@@ -6,7 +6,7 @@ import { fmtTs } from "../../helpers/formato.js";
 
 // Más simple que ModalAnular.jsx (movimientos): un acta no tiene efecto de
 // stock que revertir ni caso de transferencia, sólo motivo obligatorio.
-export function ModalAnularActa({ acta, resumen, onConfirm, onClose }) {
+export function ModalAnularActa({ acta, resumen, notaExtra, onConfirm, onClose }) {
   const [motivo, setMotivo] = useState("");
   const [enviando, setEnviando] = useState(false);
 
@@ -28,6 +28,11 @@ export function ModalAnularActa({ acta, resumen, onConfirm, onClose }) {
         <div className="bg-gray-50 rounded-xl px-3 py-2 text-xs text-gray-600">
           El acta original queda en el listado marcada como ANULADA junto con el motivo -- nunca se edita ni se borra. Después de confirmar se abre el formulario precargado con estos mismos datos para que corrijas sólo lo que estaba mal.
         </div>
+        {notaExtra && (
+          <div className="bg-orange-50 border border-orange-100 rounded-xl px-3 py-2 text-xs text-orange-800">
+            {notaExtra}
+          </div>
+        )}
         <Input label="Motivo de la anulación (obligatorio)" value={motivo} onChange={(e) => setMotivo(e.target.value)} placeholder="Ej: Error en la dosis cargada, paciente equivocado..." />
         <div className="flex gap-2 justify-end">
           <Btn variant="outline" onClick={onClose} disabled={enviando}>Cancelar</Btn>

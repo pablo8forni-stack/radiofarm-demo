@@ -16,6 +16,7 @@ import {
   addActaI131Captacion, addActaI131Centellograma, addActaI131CaptacionCentellograma,
 } from "../../services/firestore/actas.js";
 import { listenMibgLotes, administrarMibgTransaction } from "../../services/firestore/mibgLotes.js";
+import { estadoMibgLote } from "../../helpers/mibgLote.js";
 
 const TIMEOUT_BUSQUEDA_MS = 20000;
 const MSJ_TIMEOUT_BUSQUEDA = "La consulta tardó demasiado, puede haber un problema de conexión -- intentá cerrar las otras pestañas de RadioFarm que tengas abiertas y reintentá.";
@@ -145,15 +146,16 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
   // porque el listado necesita mostrar el motivo, no sólo saber que existe.
   const anulaciones = useMemo(() => new Map(anulacionesRaw.map((a) => [a.anulaId, a])), [anulacionesRaw]);
 
-  // "Disponible" para el picker de abajo, en tiempo real: ni anulado (el
-  // lote se cargó mal) ni ya usado (una i131_mibg no anulada lo referencia)
-  // -- ver nota junto al listener de mibgLotes. Filtra por la sede elegida
-  // en el FORMULARIO (sedeId), no por usuario.sede -- admin puede cambiarla.
-  const mibgUsadosIds = useMemo(() => new Set(mibgI131.filter((u) => !anulaciones.has(u.id)).map((u) => u.mibgLoteId)), [mibgI131, anulaciones]);
+  // "Disponible" para el picker de abajo, en tiempo real -- misma derivación
+  // que TabMibg.jsx (estadoMibgLote, ver helpers/mibgLote.js: antes cada
+  // pantalla tenía su propia lógica y divergieron, auditoría #12). Filtra
+  // por la sede elegida en el FORMULARIO (sedeId), no por usuario.sede --
+  // admin puede cambiarla.
+  const usoPorLoteId = useMemo(() => new Map(mibgI131.map((u) => [u.mibgLoteId, u])), [mibgI131]);
   const lotesMibgDisponibles = useMemo(
-    () => mibgLotes.filter((l) => l.sedeId === sedeId && !anulaciones.has(l.id) && !mibgUsadosIds.has(l.id))
+    () => mibgLotes.filter((l) => l.sedeId === sedeId && estadoMibgLote(l.id, { anulaciones, usoPorLoteId }) === "disponible")
       .sort((a, b) => tsMillis(b.fecha) - tsMillis(a.fecha)),
-    [mibgLotes, sedeId, anulaciones, mibgUsadosIds]
+    [mibgLotes, sedeId, anulaciones, usoPorLoteId]
   );
 
   async function confirmarAnulacion(acta, motivo) {

@@ -164,11 +164,11 @@ export async function prepararFixturesGlobales() {
   }
 
   await setDoc(doc(db, "sedes", SEDE_A), {
-    nombre: "FUESMEN Central", short: "Central", activo: true,
+    nombre: "FUESMEN Central", short: "Central", activo: true, eluye: true,
     farmIds: SEDE_FARMS_DEFAULT[SEDE_A], puntosReorden: {},
   }, { merge: true });
   await setDoc(doc(db, "sedes", SEDE_B), {
-    nombre: "C. Gamma Hospital Italiano", short: "Italiano", activo: true,
+    nombre: "C. Gamma Hospital Italiano", short: "Italiano", activo: true, eluye: false,
     farmIds: SEDE_FARMS_DEFAULT[SEDE_B], puntosReorden: {},
   }, { merge: true });
 

@@ -125,7 +125,12 @@ service cloud.firestore {
         (!('fechaHoraLlegadaJueves' in d) || d.fechaHoraLlegadaJueves is timestamp);
     }
     match /pedidosSemanales/{id} {
-      allow read: if tieneAccesoAgendaI131() && (isAdmin() || resource.data.sedeId == miRol().sede);
+      // resource == null: la semana todavía no tiene doc cargado -- sin esto,
+      // resource.data.sedeId sobre un resource inexistente daba
+      // permission-denied para cualquier técnico (isAdmin() era el único
+      // camino que no evaluaba esa cláusula), así que sólo se había probado
+      // como admin (auditoría, hallazgo #3).
+      allow read: if tieneAccesoAgendaI131() && (isAdmin() || resource == null || resource.data.sedeId == miRol().sede);
       allow create: if tieneAccesoAgendaI131() && pedidoSemanalValido();
       allow update: if tieneAccesoAgendaI131() && pedidoSemanalValido() &&
         (isAdmin() || resource.data.sedeId == miRol().sede);
@@ -346,18 +351,36 @@ service cloud.firestore {
     // isotopoId=='lu177' (Teragnosis) el lote también es texto libre y en
     // cambio exige medicoResponsable; con cualquier otro valor (tc99m, el
     // caso de siempre) sigue exigiendo farmId como hasta ahora.
-    function actaValida() {
+    // actaId: pasado por el match block -- necesario para forzar que el id
+    // del documento coincida con el patrón determinístico esperado en las
+    // ramas que dependen de uno (anulacion, i131_mibg, i131_captacion_resultado,
+    // i131_seguimiento_fin). Antes de esto, esas ramas validaban CONTENIDO
+    // pero nunca el id en sí -- vía SDK directo (addDoc, id al azar) se podía
+    // crear un doc con forma válida pero fuera del id que exists()/allow
+    // update:false usan para dar la garantía real (auditoría de seguridad,
+    // hallazgos #1/#4).
+    function actaValida(actaId) {
       let d = request.resource.data;
       return d.usuarioEmail == request.auth.token.email &&
         d.tipo in tiposActa() &&
         d.sedeId is string && d.sedeId.size() > 0 &&
         (isAdmin() || miRol().sede == d.sedeId) &&
         (d.tipo == 'anulacion'
-          ? (isAdmin() && d.anulaId is string && d.anulaId.size() > 0)
+          ? (isAdmin() && d.anulaId is string && d.anulaId.size() > 0 &&
+             actaId == 'anula_' + d.anulaId &&
+             // Un lote MIBG ya usado sólo se puede anular junto con la acta
+             // que lo usó (nunca dejarla viva) -- si d.anulaId no es un lote
+             // MIBG, o el lote nunca se usó, ambas cláusulas de abajo quedan
+             // vacías y no afectan nada (auditoría, hallazgo #2/#6b).
+             (!exists(/databases/$(database)/documents/actas/$('mibg_' + d.anulaId)) ||
+               exists(/databases/$(database)/documents/actas/$('anula_mibg_' + d.anulaId))))
           : d.tipo == 'elucion'
             ? (d.loteGenerador is string && d.loteGenerador.size() > 0 &&
                d.actividadEluida is number && d.actividadEluida > 0 &&
                d.volumen is number && d.volumen > 0 &&
+               // Toggle de sede (config > Sedes activas) respaldado del lado
+               // servidor -- antes sólo lo chequeaba la UI (auditoría, #6a).
+               get(/databases/$(database)/documents/sedes/$(d.sedeId)).data.eluye == true &&
                (loteGeneradorVisto(d.sedeId, d.loteGenerador) ||
                  (d.actividadCalibrada is number && d.actividadCalibrada > 0)))
             : esTipoDosisI131(d.tipo)
@@ -384,6 +407,7 @@ service cloud.firestore {
                        d.pacienteNombre is string && d.pacienteNombre.size() > 0 &&
                        d.pacienteDni is string && d.pacienteDni.size() > 0 &&
                        d.mibgLoteId is string && d.mibgLoteId.size() > 0 &&
+                       actaId == 'mibg_' + d.mibgLoteId &&
                        exists(/databases/$(database)/documents/mibg_lote/$(d.mibgLoteId)) &&
                        get(/databases/$(database)/documents/mibg_lote/$(d.mibgLoteId)).data.sedeId == d.sedeId &&
                        !mibgLoteAnulado(d.mibgLoteId) &&
@@ -407,6 +431,7 @@ service cloud.firestore {
                            d.pacienteDni is string && d.pacienteDni.size() > 0 &&
                            d.pacienteNombre is string && d.pacienteNombre.size() > 0 &&
                            d.momento in ['hora', '24h', '48h'] &&
+                           actaId == 'captacion_' + d.dosisActaId + '_' + d.momento &&
                            !seguimientoFinalizado(d.dosisActaId) &&
                            d.cuentasPaciente is number && d.cuentasPaciente >= 0 &&
                            d.fondo is number && d.fondo >= 0 &&
@@ -417,7 +442,8 @@ service cloud.firestore {
                           ? (tieneAccesoI131() &&
                              d.dosisActaId is string && d.dosisActaId.size() > 0 &&
                              d.pacienteDni is string && d.pacienteDni.size() > 0 &&
-                             d.pacienteNombre is string && d.pacienteNombre.size() > 0)
+                             d.pacienteNombre is string && d.pacienteNombre.size() > 0 &&
+                             actaId == 'fin_' + d.dosisActaId)
                           : (d.lote is string && d.lote.size() > 0 &&
                    (d.tipo == 'paciente'
                      ? (d.mciAdministrados is number && d.mciAdministrados > 0 &&
@@ -445,23 +471,36 @@ service cloud.firestore {
       allow read: if isAdmin() ||
         (tieneAcceso() && miRol().sede == resource.data.sedeId &&
          (!esTipoStockI131(resource.data.tipo) || tieneAccesoI131()));
-      allow create: if tieneAcceso() && actaValida();
+      allow create: if tieneAcceso() && actaValida(actaId);
       allow update, delete: if false;
     }
 
     // Marcador de "primera elución de este lote/serie" -- ver
     // loteGeneradorVisto arriba. No tiene datos de pacientes, no necesita la
     // restricción de lectura por sede que sí tiene actas.
-    function generadorValido() {
+    // Mitigación (no cierre total -- ver nota de la auditoría, hallazgo #5):
+    // Firestore Rules no puede validar "este write ocurre en el mismo batch
+    // que una elución válida" (exists()/get() sólo ven estado ya confirmado
+    // en el servidor, nunca writes hermanos todavía en vuelo). Antes, el
+    // marcador sólo exigía sede propia -- se podía pre-crear vía SDK directo
+    // y saltear la actividadCalibrada obligatoria de la primera elución de un
+    // generador. Ahora exige (a) su PROPIA actividadCalibrada > 0
+    // (denormalizada -- ver addActaElucion en services/firestore/actas.js) y
+    // (b) que el id tenga el formato exacto sedeId_LOTE (mayúsculas). Sube el
+    // costo de fabricar un marcador falso (hay que inventar un número
+    // plausible Y acertar el id), pero no lo hace imposible sin backend.
+    function generadorValido(generadorId) {
       let d = request.resource.data;
       return d.sedeId is string && d.sedeId.size() > 0 &&
         d.loteGenerador is string && d.loteGenerador.size() > 0 &&
-        (isAdmin() || miRol().sede == d.sedeId);
+        (isAdmin() || miRol().sede == d.sedeId) &&
+        d.actividadCalibrada is number && d.actividadCalibrada > 0 &&
+        generadorId == d.sedeId + '_' + d.loteGenerador.upper();
     }
 
     match /generadoresVistos/{id} {
       allow read: if tieneAcceso();
-      allow create: if tieneAcceso() && generadorValido();
+      allow create: if tieneAcceso() && generadorValido(id);
       allow update, delete: if false;
     }
 

@@ -1,6 +1,7 @@
 import { addDoc, collection, doc, onSnapshot, query, runTransaction, serverTimestamp, where } from "firebase/firestore";
 import { db } from "../../firebase.js";
 import { conMensajeDeContingencia } from "../../helpers/erroresRed.js";
+import { anularActaTransaction } from "./actas.js";
 
 const mibgLoteCol = collection(db, "mibg_lote");
 const actasCol = collection(db, "actas");
@@ -45,5 +46,20 @@ export function administrarMibgTransaction(loteId, dataActa) {
       tx.set(usoRef, { ...dataActa, tipo: "i131_mibg", mibgLoteId: loteId, fecha: serverTimestamp() });
     })
   );
+}
+
+// Anular un acta i131_mibg tiene que anular TAMBIÉN el lote (dos pasos
+// secuenciales, no una transacción nueva): anularActaTransaction ya sirve
+// para cualquier objeto con .id/.sedeId, sin importar de qué colección viene
+// -- se reusa dos veces. Sin esto, el lote reaparecía como "disponible" en
+// el picker (anulaciones sólo filtraba por el id del ACTA, no del lote) pero
+// administrarMibgTransaction rechazaba para siempre porque mibg_${loteId}
+// seguía ocupado -- picker y transacción en desacuerdo (auditoría, #2).
+// Si el segundo paso falla (ej. se corta la conexión entre medio), el acta
+// queda anulada pero el lote no todavía -- estado recuperable (reintentar),
+// nunca inseguro: mibg_${loteId} sigue ocupado de todos modos.
+export async function anularActaMibgYLote(acta, motivo, usuario) {
+  await anularActaTransaction(acta, motivo, usuario);
+  await anularActaTransaction({ id: acta.mibgLoteId, sedeId: acta.sedeId }, motivo, usuario);
 }
 

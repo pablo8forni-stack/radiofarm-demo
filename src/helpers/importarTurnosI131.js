@@ -89,9 +89,10 @@ function validarFilaTurno(cols, idx, numeroFila) {
   };
 }
 
-// Primeros 2 bytes de cualquier .xlsx/.docx/.zip real ("PK") -- si alguien
-// hace "Guardar como > Libro de Excel" en vez de un Ctrl+S simple sobre la
-// plantilla de texto, el archivo que sube es un ZIP binario, no el texto
+// Primeros 2 bytes de cualquier .xlsx/.docx/.zip real ("PK") -- la plantilla
+// SÍ es un .xlsx real (para completarse cómodo en Excel), pero el paso
+// correcto antes de subirla es "Guardar como" > Texto Unicode (*.txt): si
+// alguien sube el .xlsx tal cual, el archivo es un ZIP binario, no el texto
 // tab-delimited que este parser entiende. Mensaje específico en vez de
 // basura ilegible.
 function esZipBinario(bytes) {
@@ -101,7 +102,7 @@ function esZipBinario(bytes) {
 export async function parsearArchivoTurnosI131(file) {
   const bytes = new Uint8Array(await file.arrayBuffer());
   if (esZipBinario(bytes)) {
-    throw new Error("Este archivo es un Excel real (.xlsx), no el archivo de texto que descargamos. Abrí la plantilla, completá los datos y guardala con Ctrl+S sin usar \"Guardar como\" ni cambiar el tipo de archivo.");
+    throw new Error("Este archivo es el .xlsx tal cual, no el archivo de texto que espera el importador. En Excel: \"Guardar como\" → Texto Unicode (*.txt), y subí ese archivo.");
   }
   const texto = new TextDecoder("utf-16le").decode(bytes);
   const lineas = texto.split(/\r\n|\n/).filter((l) => l.trim() !== "");

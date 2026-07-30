@@ -43,6 +43,14 @@
         { "fieldPath": "pacienteDni", "order": "ASCENDING" },
         { "fieldPath": "fecha", "order": "DESCENDING" }
       ]
+    },
+    {
+      "collectionGroup": "turnos",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "sedeId", "order": "ASCENDING" },
+        { "fieldPath": "fechaTurno", "order": "ASCENDING" }
+      ]
     }
   ],
   "fieldOverrides": []

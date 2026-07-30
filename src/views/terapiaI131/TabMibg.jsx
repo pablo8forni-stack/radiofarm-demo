@@ -8,6 +8,7 @@ import { fmtF, fmtTs } from "../../helpers/formato.js";
 import { sedesActivas } from "../../helpers/stock.js";
 import { listenActas, anularActaTransaction, listenAnulacionesActas } from "../../services/firestore/actas.js";
 import { addMibgLote, listenMibgLotes } from "../../services/firestore/mibgLotes.js";
+import { estadoMibgLote } from "../../helpers/mibgLote.js";
 
 const VACIO = { numeroLote: "", proveedor: "", actividadCalibrada: "", volumen: "", fechaHoraCalibracion: "", fechaVencimiento: "", obs: "" };
 
@@ -44,9 +45,7 @@ export function TabMibg({ catalogo, usuario, esAdmin, onToast }) {
   const usoPorLoteId = useMemo(() => new Map(usos.map((u) => [u.mibgLoteId, u])), [usos]);
 
   function estadoDe(lote) {
-    if (anulaciones.has(lote.id)) return "anulado";
-    if (usoPorLoteId.has(lote.id)) return "usado";
-    return "disponible";
+    return estadoMibgLote(lote.id, { anulaciones, usoPorLoteId });
   }
 
   const lotesFiltrados = useMemo(
