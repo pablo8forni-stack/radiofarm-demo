@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { Badge } from "../../components/ui/Badge.jsx";
 import { Btn } from "../../components/ui/Btn.jsx";
 import { Input } from "../../components/ui/Input.jsx";
@@ -62,6 +62,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
   const [captCentellogramaI131, setCaptCentellogramaI131] = useState([]);
   const [anulacionesRaw, setAnulacionesRaw] = useState([]);
   const [mAnular, setMAnular] = useState(null);
+  const [loteExpandidoId, setLoteExpandidoId] = useState(null);
   const [mostrarForm, setMostrarForm] = useState(false);
   const [mostrarQR, setMostrarQR] = useState(false);
   const [filtroFecha, setFiltroFecha] = useState(hoy());
@@ -173,6 +174,15 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
       .sort((a, b) => tsMillis(b.fecha) - tsMillis(a.fecha)),
     [mibgLotes, sedeId, anulaciones, usoLutecioPorLoteId]
   );
+
+  // Ver el lote vinculado (MIBG o Lutecio-177) al consultar el registro --
+  // mibgLotes YA está completo en memoria (sin límite, sin filtro de fecha:
+  // listenMibgLotes trae TODOS los lotes de la sede, siempre, porque el
+  // picker de arriba lo necesita) así que un lookup por id alcanza, sin
+  // get() nuevo ni denormalizar nada en el acta. El lote es inmutable, no
+  // hay riesgo de mostrar un dato desactualizado.
+  const mibgLotesPorId = useMemo(() => new Map(mibgLotes.map((l) => [l.id, l])), [mibgLotes]);
+  const loteVinculadoDe = (a) => mibgLotesPorId.get(a.mibgLoteId || a.loteDosisUnicaId) || null;
 
   async function confirmarAnulacion(acta, motivo) {
     try {
@@ -405,45 +415,81 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
     return null;
   }
 
+  // Panel de detalle del lote vinculado (MIBG/Lutecio-177) -- mismo contenido
+  // para desktop (fila extra) y mobile (bloque dentro de la tarjeta). Sólo
+  // datos del lote en sí (ver loteVinculadoDe); "Usado en" no aplica acá,
+  // ya se sabe -- es justo esta acta.
+  function DetalleLote({ lote }) {
+    return (
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-1.5 text-xs">
+        <div><span className="text-gray-400">Ingreso: </span><span className="text-gray-700">{fmtTs(lote.fecha)}</span></div>
+        <div><span className="text-gray-400">N° de lote: </span><span className="text-gray-700 font-mono">{lote.numeroLote}</span></div>
+        <div><span className="text-gray-400">Proveedor: </span><span className="text-gray-700">{lote.proveedor}</span></div>
+        <div><span className="text-gray-400">Actividad calibrada: </span><span className="text-gray-700">{lote.actividadCalibrada} mCi</span></div>
+        <div><span className="text-gray-400">Volumen: </span><span className="text-gray-700">{lote.volumen} mL</span></div>
+        <div><span className="text-gray-400">Calibración: </span><span className="text-gray-700">{fmtTs(lote.fechaHoraCalibracion)}</span></div>
+        <div><span className="text-gray-400">Vencimiento: </span><span className="text-gray-700">{fmtF(lote.fechaVencimiento)}</span></div>
+        <div><span className="text-gray-400">Conformidad: </span><span className={lote.conformidad ? "text-gray-700" : "text-red-600 font-semibold"}>{lote.conformidad ? "Sí" : "No"}</span></div>
+        <div><span className="text-gray-400">Registrado por: </span><span className="text-gray-700">{lote.usuarioNombre}</span></div>
+        {lote.observacion && (
+          <div className="col-span-2 sm:col-span-3"><span className="text-gray-400">Observación: </span><span className="text-gray-700 italic">{lote.observacion}</span></div>
+        )}
+      </div>
+    );
+  }
+
   function filaPaciente(a) {
     const anulacion = anulaciones.get(a.id);
     const tipo = tipoInfo(a);
     const { principal, sub } = detalleRegistro(a);
     const dosis = dosisRegistro(a);
+    const lote = loteVinculadoDe(a);
+    const expandido = loteExpandidoId === a.id;
     return (
-      <tr key={a.id} className={`border-b border-gray-50 last:border-0 hover:bg-gray-50/30 ${anulacion ? "opacity-50" : ""}`}>
-        <td className="px-3 py-2.5 text-xs text-gray-500 whitespace-nowrap">{fmtTs(a.fecha).split(" ")[1] || ""}</td>
-        <td className="px-3 py-2.5">{tipo && <Badge color={tipo.color}>{tipo.label}</Badge>}</td>
-        <td className="px-3 py-2.5 text-xs font-mono text-gray-600">{a.pacienteFicha || "—"}</td>
-        <td className="px-3 py-2.5 font-semibold text-gray-800 text-xs">
-          {a.pacienteNombre}
-          {(a.peso || a.talla) && <div className="text-xs font-normal text-gray-400">{a.peso && `${a.peso}kg`}{a.talla && ` · ${a.talla}cm`}</div>}
-          {a.medicoResponsable && <div className="text-xs font-normal text-gray-400">Médico: {a.medicoResponsable}</div>}
-          {anulacion && <div className="text-xs text-orange-500 font-semibold">ANULADO: {anulacion.motivo}</div>}
-        </td>
-        <td className="px-3 py-2.5 text-xs font-mono text-gray-500">{a.pacienteDni}</td>
-        <td className="px-3 py-2.5 text-xs text-gray-700">{a.estudio || "—"}</td>
-        <td className="px-3 py-2.5 text-xs text-gray-700">
-          {principal}
-          {sub && <div className="text-xs text-gray-400 font-mono mt-0.5">{sub}</div>}
-        </td>
-        <td className="px-3 py-2.5">
-          {dosis ? (
-            <>
-              <span className="font-bold text-blue-700 text-sm">{dosis.valor}</span>
-              <span className="text-xs text-gray-400 ml-1">{dosis.unidad}</span>
-            </>
-          ) : <span className="text-xs text-gray-300">—</span>}
-        </td>
-        <td className="px-3 py-2.5 text-xs text-gray-500">{a.usuarioNombre}</td>
-        <td className="px-3 py-2.5 text-right">
-          {esAdmin && a.tipo === "paciente" && !anulacion && (
-            <button onClick={() => setMAnular(a)} className="text-xs text-orange-500 hover:text-orange-700 font-semibold px-2 py-1 rounded-lg hover:bg-orange-50 transition min-h-11 md:min-h-0">
-              Anular
-            </button>
-          )}
-        </td>
-      </tr>
+      <Fragment key={a.id}>
+        <tr className={`border-b border-gray-50 last:border-0 hover:bg-gray-50/30 ${anulacion ? "opacity-50" : ""}`}>
+          <td className="px-3 py-2.5 text-xs text-gray-500 whitespace-nowrap">{fmtTs(a.fecha).split(" ")[1] || ""}</td>
+          <td className="px-3 py-2.5">{tipo && <Badge color={tipo.color}>{tipo.label}</Badge>}</td>
+          <td className="px-3 py-2.5 text-xs font-mono text-gray-600">{a.pacienteFicha || "—"}</td>
+          <td className="px-3 py-2.5 font-semibold text-gray-800 text-xs">
+            {lote ? (
+              <button onClick={() => setLoteExpandidoId(expandido ? null : a.id)} className="hover:underline hover:text-blue-700 text-left">
+                {a.pacienteNombre} {expandido ? "▲" : "▼"}
+              </button>
+            ) : a.pacienteNombre}
+            {(a.peso || a.talla) && <div className="text-xs font-normal text-gray-400">{a.peso && `${a.peso}kg`}{a.talla && ` · ${a.talla}cm`}</div>}
+            {a.medicoResponsable && <div className="text-xs font-normal text-gray-400">Médico: {a.medicoResponsable}</div>}
+            {anulacion && <div className="text-xs text-orange-500 font-semibold">ANULADO: {anulacion.motivo}</div>}
+          </td>
+          <td className="px-3 py-2.5 text-xs font-mono text-gray-500">{a.pacienteDni}</td>
+          <td className="px-3 py-2.5 text-xs text-gray-700">{a.estudio || "—"}</td>
+          <td className="px-3 py-2.5 text-xs text-gray-700">
+            {principal}
+            {sub && <div className="text-xs text-gray-400 font-mono mt-0.5">{sub}</div>}
+          </td>
+          <td className="px-3 py-2.5">
+            {dosis ? (
+              <>
+                <span className="font-bold text-blue-700 text-sm">{dosis.valor}</span>
+                <span className="text-xs text-gray-400 ml-1">{dosis.unidad}</span>
+              </>
+            ) : <span className="text-xs text-gray-300">—</span>}
+          </td>
+          <td className="px-3 py-2.5 text-xs text-gray-500">{a.usuarioNombre}</td>
+          <td className="px-3 py-2.5 text-right">
+            {esAdmin && a.tipo === "paciente" && !anulacion && (
+              <button onClick={() => setMAnular(a)} className="text-xs text-orange-500 hover:text-orange-700 font-semibold px-2 py-1 rounded-lg hover:bg-orange-50 transition min-h-11 md:min-h-0">
+                Anular
+              </button>
+            )}
+          </td>
+        </tr>
+        {expandido && lote && (
+          <tr className="bg-gray-50/60 border-b border-gray-50">
+            <td colSpan={10} className="px-3 py-3"><DetalleLote lote={lote} /></td>
+          </tr>
+        )}
+      </Fragment>
     );
   }
 
@@ -452,10 +498,16 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
     const tipo = tipoInfo(a);
     const { principal, sub } = detalleRegistro(a);
     const dosis = dosisRegistro(a);
+    const lote = loteVinculadoDe(a);
+    const expandido = loteExpandidoId === a.id;
     return (
       <div key={a.id} className={`p-4 flex flex-col gap-1.5 ${anulacion ? "opacity-50" : ""}`}>
         <div className="flex items-center justify-between gap-2">
-          <span className="font-semibold text-gray-800 text-sm">{a.pacienteNombre}</span>
+          {lote ? (
+            <button onClick={() => setLoteExpandidoId(expandido ? null : a.id)} className="font-semibold text-gray-800 text-sm hover:underline hover:text-blue-700 text-left">
+              {a.pacienteNombre} {expandido ? "▲" : "▼"}
+            </button>
+          ) : <span className="font-semibold text-gray-800 text-sm">{a.pacienteNombre}</span>}
           <span className="text-xs text-gray-500 whitespace-nowrap">{fmtTs(a.fecha).split(" ")[1] || ""}</span>
         </div>
         {tipo && <div><Badge color={tipo.color}>{tipo.label}</Badge></div>}
@@ -471,6 +523,9 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
         <div className="text-xs text-gray-500">Técnico: {a.usuarioNombre}</div>
         {a.observacion && <div className="text-xs text-gray-400 italic">{a.observacion}</div>}
         {anulacion && <div className="text-xs text-orange-500 font-semibold">ANULADO: {anulacion.motivo}</div>}
+        {expandido && lote && (
+          <div className="bg-gray-50 rounded-xl p-3 mt-1"><DetalleLote lote={lote} /></div>
+        )}
         {esAdmin && a.tipo === "paciente" && !anulacion && (
           <div className="flex justify-end mt-0.5">
             <button onClick={() => setMAnular(a)} className="text-xs text-orange-500 hover:text-orange-700 font-semibold px-2 py-1 rounded-lg hover:bg-orange-50 transition min-h-11 md:min-h-0">
@@ -489,15 +544,22 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
   function filaCSV(a) {
     const d = a.fecha?.toDate ? a.fecha.toDate() : new Date(a.fecha);
     const dosis = dosisRegistro(a);
+    const lote = loteVinculadoDe(a);
     return [d.toLocaleDateString("es-AR"), d.toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" }),
       a.sedeNombre, tipoTextoCSV(a), a.pacienteFicha || "—", a.pacienteNombre, a.pacienteDni, a.medicoResponsable || "—",
       a.peso ?? "—", a.talla ?? "—", a.estudio || "—", a.farmNombre || "—", a.lote || a.numeroLote || "—",
-      dosis?.valor ?? "—", dosis?.unidad ?? "—", a.indicacion || "—", a.dosisActaId || "—", a.usuarioNombre, a.observacion || "—"];
+      dosis?.valor ?? "—", dosis?.unidad ?? "—", a.indicacion || "—", a.dosisActaId || "—", a.usuarioNombre, a.observacion || "—",
+      // Lote vinculado (MIBG/Lutecio-177) -- "—" en las filas sin lote (Tc-99m
+      // y cualquier otro registro sin este dato), ver loteVinculadoDe.
+      lote?.numeroLote ?? "—", lote?.actividadCalibrada ?? "—", lote?.volumen ?? "—",
+      lote ? fmtTs(lote.fechaHoraCalibracion) : "—", lote ? fmtF(lote.fechaVencimiento) : "—",
+      lote?.proveedor ?? "—", lote ? (lote.conformidad ? "Sí" : "No") : "—"];
   }
 
   function descargarCSV(lista, nombreArchivo) {
     const filas = [
-      ["Fecha", "Hora", "Sede", "Tipo de registro", "N° Ficha", "Paciente", "DNI", "Médico responsable", "Peso (kg)", "Talla (cm)", "Estudio", "Radiofármaco", "Lote", "Dosis/Actividad", "Unidad", "Indicación", "Dosis vinculada (id)", "Técnico", "Observación"],
+      ["Fecha", "Hora", "Sede", "Tipo de registro", "N° Ficha", "Paciente", "DNI", "Médico responsable", "Peso (kg)", "Talla (cm)", "Estudio", "Radiofármaco", "Lote", "Dosis/Actividad", "Unidad", "Indicación", "Dosis vinculada (id)", "Técnico", "Observación",
+       "N° Lote vinculado", "Actividad calibrada (mCi)", "Volumen (mL)", "Fecha/hora calibración", "Vencimiento", "Proveedor", "Conformidad"],
       ...lista.map(filaCSV),
     ];
     const csv = filas.map((r) => r.map((x) => String(x).replace(/[\t\r\n]/g, " ")).join("\t")).join("\r\n");
