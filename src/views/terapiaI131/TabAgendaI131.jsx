@@ -9,15 +9,8 @@ import { sedesActivas } from "../../helpers/stock.js";
 import { inicioSemana, finSemana, semanaSiguiente, semanaAnterior } from "../../helpers/semanaI131.js";
 import { listenTurnosSemana, turnosDeSemana, addTurno, updateTurno, deleteTurno } from "../../services/firestore/turnos.js";
 import { TIPO_LABEL_I131 } from "../../constants/tipoI131.js";
-
-const TOPE_SEMANAL_MCI = 500;
-
-// Sólo ablativa/dosis (mCi) cuentan para el tope semanal del proveedor --
-// los 3 diagnósticos son µCi (otra unidad, no comparable sin conversión) y
-// barrido no administra actividad nueva. Confirmado explícitamente.
-const esTipoMci = (tipoDosis) => tipoDosis === "i131_ablativa" || tipoDosis === "i131_dosis";
-
-const TIPOS_TURNO = Object.keys(TIPO_LABEL_I131).map((id) => ({ id, ...TIPO_LABEL_I131[id] }));
+import { TOPE_SEMANAL_MCI, esTipoMci, unidadDe, TIPOS_TURNO } from "../../helpers/turnosI131.js";
+import { ImportarTurnosI131 } from "./ImportarTurnosI131.jsx";
 
 const ESTADO_LABEL = {
   confirmado: { label: "Confirmado", color: "green" },
@@ -25,11 +18,6 @@ const ESTADO_LABEL = {
   cancelado: { label: "Cancelado", color: "red" },
   reprogramado: { label: "Reprogramado", color: "orange" },
 };
-
-function unidadDe(tipoDosis) {
-  if (!esTipoMci(tipoDosis)) return tipoDosis && tipoDosis !== "i131_barrido" ? "uCi" : null;
-  return "mCi";
-}
 
 // Suma de actividadPrevista (sólo tipos mCi) de una lista de turnos --
 // excluyeId se usa al editar, para no contar el propio turno dos veces.
@@ -63,6 +51,7 @@ export function TabAgendaI131({ catalogo, usuario, esAdmin, onToast }) {
   const [mEliminar, setMEliminar] = useState(null);
   const [eliminando, setEliminando] = useState(false);
   const [previaSemana, setPreviaSemana] = useState({ total: 0, cargando: false });
+  const [mImportar, setMImportar] = useState(false);
 
   const sedeEfectiva = esAdmin ? filtroSede : usuario.sede;
   const inicio = inicioSemana(semanaBase);
@@ -186,7 +175,8 @@ export function TabAgendaI131({ catalogo, usuario, esAdmin, onToast }) {
         {superaTope && " — supera el tope semanal del proveedor"}
       </div>
 
-      <div className="flex justify-end">
+      <div className="flex justify-end gap-2">
+        <Btn size="sm" variant="outline" onClick={() => setMImportar(true)} disabled={!sedeEfectiva}>Importar desde Excel</Btn>
         <Btn size="sm" onClick={abrirNuevo} disabled={!sedeEfectiva}>+ Nuevo turno</Btn>
       </div>
 
@@ -316,6 +306,15 @@ export function TabAgendaI131({ catalogo, usuario, esAdmin, onToast }) {
           </div>
         </div>
       </Modal>
+
+      <ImportarTurnosI131
+        open={mImportar}
+        onClose={() => setMImportar(false)}
+        sedeId={sedeEfectiva}
+        sedeNombre={catalogo.sedes[sedeEfectiva]?.nombre}
+        usuario={usuario}
+        onToast={onToast}
+      />
     </div>
   );
 }

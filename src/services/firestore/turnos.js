@@ -1,4 +1,4 @@
-import { addDoc, collection, deleteDoc, doc, getDocs, onSnapshot, query, serverTimestamp, updateDoc, where } from "firebase/firestore";
+import { addDoc, collection, deleteDoc, doc, getDocs, limit, onSnapshot, query, serverTimestamp, updateDoc, where, writeBatch } from "firebase/firestore";
 import { db } from "../../firebase.js";
 
 const turnosCol = collection(db, "turnos");
@@ -42,4 +42,36 @@ export function updateTurno(id, data) {
 
 export function deleteTurno(id) {
   return deleteDoc(turnoRef(id));
+}
+
+// Aviso de posible duplicado en la importación desde Excel (Parte C) -- 3
+// cláusulas de igualdad pura (sedeId, fechaTurno, pacienteDni), sin rango ni
+// orderBy, así que Firestore la resuelve con los índices automáticos de
+// campo único: no hace falta agregar nada a firestore.indexes.json. limit(1)
+// porque sólo importa si existe al menos uno, no cuántos.
+export async function existeTurno({ sedeId, fechaTurno, pacienteDni }) {
+  const snap = await getDocs(query(
+    turnosCol,
+    where("sedeId", "==", sedeId), where("fechaTurno", "==", fechaTurno), where("pacienteDni", "==", pacienteDni),
+    limit(1)
+  ));
+  return !snap.empty;
+}
+
+// Importación desde Excel (Parte C, uso regular) -- un solo writeBatch, todo
+// o nada: si una fila choca con turnoValido() del lado servidor, ninguna se
+// crea, en vez de dejar la importación a medias sin que quede claro cuál
+// entró y cuál no. 400 en vez del límite real de Firestore (500) para dejar
+// margen; una importación así de grande de todos modos conviene dividirla.
+const TOPE_TURNOS_POR_IMPORTACION = 400;
+
+export function addTurnosBatch(turnos) {
+  if (turnos.length > TOPE_TURNOS_POR_IMPORTACION) {
+    throw new Error(`Máximo ${TOPE_TURNOS_POR_IMPORTACION} turnos por importación -- dividí el archivo en tandas más chicas.`);
+  }
+  const batch = writeBatch(db);
+  for (const data of turnos) {
+    batch.set(doc(turnosCol), { ...data, fechaCreacion: serverTimestamp() });
+  }
+  return batch.commit();
 }
