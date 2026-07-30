@@ -72,7 +72,7 @@ export function addActaMarcacion(data) {
   return batch.commit();
 }
 
-// Terapia I-131: 6 tipos planos (mismo criterio que transferencia_salida/
+// Gestión I-131: 6 tipos planos (mismo criterio que transferencia_salida/
 // transferencia_entrada en movimientos, no un campo "subtipo") -- cada uno
 // tiene su propio requisito de campos y de permiso en actaValida(). Dosis
 // ablativa/terapéutica y los 3 diagnósticos (Captación/Centellograma/

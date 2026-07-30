@@ -3,7 +3,7 @@ import { db } from "../../firebase.js";
 import { slugify } from "../../helpers/formato.js";
 
 // Esta colección controla SOLO qué nombres existen/aparecen en selectores de
-// isótopo (Libro 2, Terapia I-131). El comportamiento especial de cada uno
+// isótopo (Libro 2, Gestión I-131). El comportamiento especial de cada uno
 // (campos extra, pestaña propia, permisos) sigue atado en el código al id
 // fijo del documento (ej. if (isotopoId === 'lu177')), no es genérico ni
 // configurable. Agregar una fila nueva acá NO le da automáticamente ningún

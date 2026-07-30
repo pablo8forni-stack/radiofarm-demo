@@ -19,7 +19,7 @@ const VACIO_VIAL = { lote: "", categoria: "terapeutico", fechaCalibracion: "", a
 // escritura) queda gateada por accesoTerapiaI131 desde el wrapper
 // (VistaTerapiaI131.jsx) y respaldado server-side (ver esTipoStockI131 en
 // firestore.rules) -- es inventario de material controlado, no un registro
-// de atención puntual como el resto de Terapia I-131.
+// de atención puntual como el resto de Gestión I-131.
 export function TabStockViales({ catalogo, usuario, esAdmin, onToast }) {
   const [viales, setViales] = useState([]);
   const [extracciones, setExtracciones] = useState([]);

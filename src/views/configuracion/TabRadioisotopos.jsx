@@ -74,11 +74,11 @@ export function TabRadioisotopos({ catalogo, onToast }) {
   return (
     <div className="flex flex-col gap-4">
       <div className="bg-blue-50 border border-blue-100 rounded-xl px-4 py-3 text-xs text-blue-700">
-        Nombres de isótopo disponibles en los selectores de la app (Libro 2, Terapia I-131). Agregar uno acá sólo lo hace aparecer en la lista -- cualquier comportamiento especial (campos propios, permisos) sigue necesitando cambios de código aparte.
+        Nombres de isótopo disponibles en los selectores de la app (Libro 2, Gestión I-131). Agregar uno acá sólo lo hace aparecer en la lista -- cualquier comportamiento especial (campos propios, permisos) sigue necesitando cambios de código aparte.
       </div>
 
       <div className="bg-amber-50 border border-amber-100 rounded-xl px-4 py-3 text-xs text-amber-700">
-        Tc-99m, Lutecio-177 e I-131 necesitan un id interno fijo (no el que genera "+ Nuevo isótopo") para que el selector de Libro 2/Terapia I-131 los reconozca. Si no aparecen ahí aunque estén en esta lista, usá "Restaurar isótopos base" -- es seguro tocarlo aunque ya existan, sólo corrige esos 3.
+        Tc-99m, Lutecio-177 e I-131 necesitan un id interno fijo (no el que genera "+ Nuevo isótopo") para que el selector de Libro 2/Gestión I-131 los reconozca. Si no aparecen ahí aunque estén en esta lista, usá "Restaurar isótopos base" -- es seguro tocarlo aunque ya existan, sólo corrige esos 3.
       </div>
 
       <div className="flex justify-end gap-2">

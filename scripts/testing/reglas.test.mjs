@@ -350,7 +350,7 @@ test("técnico NO puede crear un marcador generadoresVistos de otra sede", async
   );
 });
 
-// Terapia I-131: 6 tipos planos, no un campo "subtipo" -- ver nota larga en
+// Gestión I-131: 6 tipos planos, no un campo "subtipo" -- ver nota larga en
 // firestore.rules#actaValida. Ablativa/Dosis (mCi) y los 3 diagnósticos (µCi)
 // exigen tieneAccesoI131() (admin o técnico con el flag accesoTerapiaI131);
 // Barrido corporal no, cualquier técnico de la sede puede cargarlo. Médico

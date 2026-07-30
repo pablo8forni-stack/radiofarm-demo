@@ -1,6 +1,6 @@
 // Badge (label + color) de cada tipo de registro de I-131 -- lo usan tanto
 // el listado unificado de Libro 2 (Pacientes) como la vista de consulta
-// "Terapia I-131", para no mantener las mismas 6 etiquetas en dos archivos.
+// "Gestión I-131", para no mantener las mismas 6 etiquetas en dos archivos.
 // Colores distintos entre Ablativa (30-200 mCi) y Dosis terapéutica
 // (5-15 mCi) a propósito: son rangos de actividad muy distintos, no
 // deberían confundirse a simple vista en un listado compartido.

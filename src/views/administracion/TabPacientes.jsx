@@ -118,7 +118,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
   // diario único compartido por todos los pacientes del servicio, así que
   // "Registros del día" tiene que mostrar los 7 tipos intercalados por hora
   // para no dejar saltos de ficha sin explicación visible. La pestaña
-  // "Terapia I-131" (consulta) sigue siendo el filtro específico de estos
+  // "Gestión I-131" (consulta) sigue siendo el filtro específico de estos
   // mismos 7 tipos, sin cambios.
   useEffect(() => listenActas("i131_ablativa", setAblativaI131, { esAdmin, sedeId: usuario.sede }), []);
   useEffect(() => listenActas("i131_dosis", setDosisI131, { esAdmin, sedeId: usuario.sede }), []);
@@ -206,7 +206,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
   // services/firestore/radioisotopos.js). I-131 ya no tiene pestaña propia de
   // carga -- toda la carga de pacientes (sea cual sea el isótopo) vive acá,
   // porque el N° de Ficha es un correlativo diario único compartido por
-  // todos; Terapia I-131 pasó a ser sólo una vista de consulta de estos
+  // todos; Gestión I-131 pasó a ser sólo una vista de consulta de estos
   // mismos registros (6 tipos, sin cambios de modelo).
   const isotoposCasoDistinto = (catalogo.radioisotopos || []).filter((i) => i.id === "lu177" || i.id === "i131");
 
@@ -240,12 +240,12 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
         if (!actividadAdministrada || !lote.trim()) return;
         tipoI131Actual.fn({ ...base, actividadAdministrada: parseFloat(actividadAdministrada) || 0, unidadActividad: "mCi", lote: lote.trim(), indicacion: indicacion.trim() })
           .catch((e) => onToast(e.message || "No se pudo guardar el registro", "error"));
-        onToast(`${tipoI131Actual.label} registrada — consultala en la pestaña Terapia I-131`);
+        onToast(`${tipoI131Actual.label} registrada — consultala en la pestaña Gestión I-131`);
       } else if (tipoI131Actual.categoria === "diagnostico") {
         if (!actividadAdministrada) return;
         tipoI131Actual.fn({ ...base, actividadAdministrada: parseFloat(actividadAdministrada) || 0, unidadActividad: "uCi", dosisActaId: dosisVinculada || null })
           .catch((e) => onToast(e.message || "No se pudo guardar el registro", "error"));
-        onToast(`${tipoI131Actual.label} registrado — consultalo en la pestaña Terapia I-131`);
+        onToast(`${tipoI131Actual.label} registrado — consultalo en la pestaña Gestión I-131`);
       } else if (tipoI131Actual.categoria === "mibg") {
         // A diferencia del resto (fire-and-forget, offline-safe), esto es
         // una transacción real -- puede fallar de verdad si otra técnica
@@ -257,12 +257,12 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
         administrarMibgTransaction(mibgLoteSeleccionado, {
           ...base, numeroLote: loteElegido.numeroLote, actividadCalibrada: loteElegido.actividadCalibrada, volumen: loteElegido.volumen,
         })
-          .then(() => onToast("MIBG registrado — consultalo en la pestaña Terapia I-131"))
+          .then(() => onToast("MIBG registrado — consultalo en la pestaña Gestión I-131"))
           .catch((e) => onToast(e.message || "No se pudo registrar la administración de MIBG", "error"));
       } else {
         tipoI131Actual.fn(base)
           .catch((e) => onToast(e.message || "No se pudo guardar el barrido", "error"));
-        onToast("Barrido corporal registrado — consultalo en la pestaña Terapia I-131");
+        onToast("Barrido corporal registrado — consultalo en la pestaña Gestión I-131");
       }
       limpiarForm(); setMostrarForm(false);
       return;
@@ -605,7 +605,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
                 blanca explícita más arriba). I-131 no tiene pestaña propia de
                 carga: el N° de Ficha es un correlativo diario único
                 compartido por todos los pacientes del servicio, así que toda
-                la carga vive acá sin importar el isótopo -- Terapia I-131 es
+                la carga vive acá sin importar el isótopo -- Gestión I-131 es
                 sólo una vista de consulta de estos mismos registros. */}
             {!mostrarIsotopo && isotoposCasoDistinto.length > 0 && (
               <div className="sm:col-span-2">
@@ -690,7 +690,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
                   ))}
                 </Sel>
                 {lotesMibgDisponibles.length === 0 && (
-                  <p className="text-xs text-orange-500 mt-1">No hay lotes de MIBG disponibles en esta sede -- registrá uno nuevo en la pestaña "MIBG" de Terapia I-131.</p>
+                  <p className="text-xs text-orange-500 mt-1">No hay lotes de MIBG disponibles en esta sede -- registrá uno nuevo en la pestaña "MIBG" de Gestión I-131.</p>
                 )}
               </div>
             )}

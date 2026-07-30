@@ -211,7 +211,7 @@ export function TabRegistrosI131({ catalogo, usuario, esAdmin, onToast }) {
 
   function exportarCSV() {
     descargarCSV(actas, `terapia_i131_${filtroFecha || hoy()}.csv`);
-    onToast("Terapia I-131 exportada");
+    onToast("Gestión I-131 exportada");
   }
 
   // Buscar y descargar son dos pasos separados a propósito -- ver nota
@@ -241,7 +241,7 @@ export function TabRegistrosI131({ catalogo, usuario, esAdmin, onToast }) {
   function descargarResultadoRango() {
     if (!resultadoRango?.length) return;
     descargarCSV(resultadoRango, `terapia_i131_${rangoDesde}_a_${rangoHasta}.csv`);
-    onToast(`Terapia I-131 exportada: ${resultadoRango.length} registro${resultadoRango.length !== 1 ? "s" : ""}`);
+    onToast(`Gestión I-131 exportada: ${resultadoRango.length} registro${resultadoRango.length !== 1 ? "s" : ""}`);
   }
 
   return (

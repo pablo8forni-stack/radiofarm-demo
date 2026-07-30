@@ -31,7 +31,7 @@ export function VistaTerapiaI131({ catalogo, usuario, esAdmin, onToast }) {
   return (
     <div className="flex flex-col gap-4">
       <div>
-        <h2 className="text-base font-bold text-gray-800">Terapia I-131</h2>
+        <h2 className="text-base font-bold text-gray-800">Gestión I-131</h2>
         <p className="text-xs text-gray-400 mt-0.5">Registros de dosis/estudios y stock de viales con cálculo de decaimiento</p>
       </div>
 

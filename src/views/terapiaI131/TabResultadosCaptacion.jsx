@@ -43,7 +43,7 @@ function DesglosePorcentaje({ cuentasPaciente, fondo, cuentasEstandar, volumenAd
 
 // Resultado de %Captación -- Parte B del espacio de cálculo I-131, vinculado
 // al registro original de Captación/Centellograma/Captación y Centellograma
-// (Terapia I-131 > Registros) vía dosisActaId. Mismo gate estricto que Stock
+// (Gestión I-131 > Registros) vía dosisActaId. Mismo gate estricto que Stock
 // de viales: lectura y escritura sólo con accesoTerapiaI131 (o admin) --
 // quien puede crear un estudio diagnóstico es quien puede cargar su
 // resultado, no hay técnico que necesite ver uno sin poder ver el otro.

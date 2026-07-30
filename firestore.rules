@@ -63,7 +63,7 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
     // Sólo controla qué nombres aparecen en los selectores de isótopo (Libro
-    // 2, Terapia I-131) -- ver comentario largo en services/firestore/
+    // 2, Gestión I-131) -- ver comentario largo en services/firestore/
     // radioisotopos.js. El comportamiento especial de cada uno sigue atado al
     // id fijo en el código, no a nada de esta colección.
     match /radioisotopos/{isotopoId} {
@@ -325,7 +325,7 @@ service cloud.firestore {
     // acta nueva vinculada por anulaId, nunca una edición de la original --
     // mismo espíritu de inmutabilidad que ya usa `movimientos`.
     //
-    // I-131 (Terapia I-131 / Libro 2): 6 tipos planos, mismo criterio que
+    // I-131 (Gestión I-131 / Libro 2): 6 tipos planos, mismo criterio que
     // transferencia_salida/transferencia_entrada en movimientos, no un campo
     // "subtipo". Ninguno usa farmId/stock: lote/cápsula es texto libre, igual
     // que loteGenerador en elución (no son radiofármacos con stock rotativo).

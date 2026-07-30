@@ -27,7 +27,7 @@ const VACIO = {
 };
 
 // Agenda de turnos I-131 (espacio de cálculo, Parte C) -- a diferencia de
-// TODO lo demás en Terapia I-131 (y del sistema en general), turnos es una
+// TODO lo demás en Gestión I-131 (y del sistema en general), turnos es una
 // colección mutable de verdad: se reprograma/cancela/corrige libremente, sin
 // el patrón de inmutabilidad+anulación del resto. Gate por
 // accesoAgendaI131, permiso separado de accesoTerapiaI131 (ver
