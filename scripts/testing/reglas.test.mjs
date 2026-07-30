@@ -1043,6 +1043,155 @@ test("técnico CON accesoAgendaI131 NO puede eliminar un pedidoSemanal de otra s
   await setDoc(doc(db, "roles", PERSONAS.tecnicoA.email), { accesoAgendaI131: false }, { merge: true });
 });
 
+// MIBG (131I-MIBG, neuroblastoma/feocromocitoma/paraganglioma) -- a
+// diferencia del resto del espacio de cálculo I-131 (Parte A: vial/
+// extracción), abierto a CUALQUIER técnico con rol válido en su sede, SIN
+// tieneAccesoI131() -- mismo criterio que Barrido corporal. mibg_lote es
+// create-only (sin update/delete), y la administración a un paciente es un
+// 7° tipo de acta (i131_mibg) con id determinístico mibg_${loteId} -- un
+// segundo intento de usar el mismo lote choca con allow update:false.
+function mibgLoteBase(overrides = {}) {
+  return {
+    sedeId: SEDE_A, numeroLote: loteDePrueba(), proveedor: "IPEN",
+    actividadCalibrada: 150, volumen: 10, fechaHoraCalibracion: new Date(),
+    fechaVencimiento: "2027-01-01",
+    ...overrides,
+  };
+}
+
+test("control positivo: técnico SIN accesoTerapiaI131 SÍ puede crear un lote de MIBG en su sede", async () => {
+  await loguearComo(PERSONAS.tecnicoA); // sede central == SEDE_A
+  const ref = await addDoc(collection(db, "mibg_lote"), mibgLoteBase({ usuarioEmail: PERSONAS.tecnicoA.email, usuarioNombre: PERSONAS.tecnicoA.nombre }));
+  const snap = await getDoc(ref);
+  assert.ok(snap.exists());
+});
+
+test("técnico NO puede crear un lote de MIBG en otra sede", async () => {
+  await loguearComo(PERSONAS.tecnicoA); // sede central == SEDE_A
+  await assertPermissionDenied(() =>
+    addDoc(collection(db, "mibg_lote"), mibgLoteBase({ sedeId: SEDE_B, usuarioEmail: PERSONAS.tecnicoA.email, usuarioNombre: PERSONAS.tecnicoA.nombre }))
+  );
+});
+
+test("lote de MIBG sin numeroLote es rechazado, aunque sea admin", async () => {
+  await loguearComo(PERSONAS.admin);
+  await assertPermissionDenied(() =>
+    addDoc(collection(db, "mibg_lote"), mibgLoteBase({ usuarioEmail: PERSONAS.admin.email, usuarioNombre: "Admin", numeroLote: "" }))
+  );
+});
+
+test("lote de MIBG con actividadCalibrada 0 es rechazado", async () => {
+  await loguearComo(PERSONAS.admin);
+  await assertPermissionDenied(() =>
+    addDoc(collection(db, "mibg_lote"), mibgLoteBase({ usuarioEmail: PERSONAS.admin.email, usuarioNombre: "Admin", actividadCalibrada: 0 }))
+  );
+});
+
+test("lote de MIBG con fechaHoraCalibracion que no es timestamp es rechazado", async () => {
+  await loguearComo(PERSONAS.admin);
+  await assertPermissionDenied(() =>
+    addDoc(collection(db, "mibg_lote"), mibgLoteBase({ usuarioEmail: PERSONAS.admin.email, usuarioNombre: "Admin", fechaHoraCalibracion: "2026-08-06T10:00" }))
+  );
+});
+
+test("técnico NO puede LEER un lote de MIBG de otra sede", async () => {
+  await loguearComo(PERSONAS.admin);
+  const ref = await addDoc(collection(db, "mibg_lote"), mibgLoteBase({ sedeId: SEDE_B, usuarioEmail: PERSONAS.admin.email, usuarioNombre: "Admin" }));
+
+  await loguearComo(PERSONAS.tecnicoA); // sede central == SEDE_A
+  await assertPermissionDenied(() => getDoc(ref));
+});
+
+test("mibg_lote no admite update ni delete (create-only)", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  const ref = await addDoc(collection(db, "mibg_lote"), mibgLoteBase({ usuarioEmail: PERSONAS.tecnicoA.email, usuarioNombre: PERSONAS.tecnicoA.nombre }));
+  await assertPermissionDenied(() => updateDoc(ref, { actividadCalibrada: 999 }));
+  await assertPermissionDenied(() => deleteDoc(ref));
+});
+
+function mibgActaBase(loteId, overrides = {}) {
+  return {
+    tipo: "i131_mibg", fecha: serverTimestamp(), sedeId: SEDE_A,
+    pacienteFicha: "9001", pacienteNombre: "Paciente MIBG", pacienteDni: "1",
+    mibgLoteId: loteId, actividadCalibrada: 150,
+    ...overrides,
+  };
+}
+
+test("control positivo: técnico SIN accesoTerapiaI131 SÍ puede administrar MIBG (crear i131_mibg)", async () => {
+  await loguearComo(PERSONAS.tecnicoA); // sede central == SEDE_A
+  const lote = await addDoc(collection(db, "mibg_lote"), mibgLoteBase({ usuarioEmail: PERSONAS.tecnicoA.email, usuarioNombre: PERSONAS.tecnicoA.nombre }));
+  const ref = doc(db, "actas", `mibg_${lote.id}`);
+  await setDoc(ref, mibgActaBase(lote.id, { usuarioEmail: PERSONAS.tecnicoA.email, usuarioNombre: PERSONAS.tecnicoA.nombre }));
+  const snap = await getDoc(ref);
+  assert.ok(snap.exists());
+
+  // Y cualquier técnico de la sede puede LEERLA de vuelta, sin accesoTerapiaI131.
+  const releido = await getDoc(ref);
+  assert.ok(releido.exists());
+});
+
+test("i131_mibg sin mibgLoteId es rechazado, aunque sea admin", async () => {
+  await loguearComo(PERSONAS.admin);
+  const lote = await addDoc(collection(db, "mibg_lote"), mibgLoteBase({ usuarioEmail: PERSONAS.admin.email, usuarioNombre: "Admin" }));
+  await assertPermissionDenied(() =>
+    setDoc(doc(db, "actas", `mibg_${lote.id}`), mibgActaBase("", { usuarioEmail: PERSONAS.admin.email, usuarioNombre: "Admin" }))
+  );
+});
+
+test("i131_mibg con mibgLoteId de un lote inexistente es rechazado", async () => {
+  await loguearComo(PERSONAS.admin);
+  await assertPermissionDenied(() =>
+    setDoc(doc(db, "actas", "mibg_no-existe"), mibgActaBase("no-existe", { usuarioEmail: PERSONAS.admin.email, usuarioNombre: "Admin" }))
+  );
+});
+
+test("i131_mibg con mibgLoteId de un lote de OTRA sede es rechazado", async () => {
+  await loguearComo(PERSONAS.admin);
+  const loteDeB = await addDoc(collection(db, "mibg_lote"), mibgLoteBase({ sedeId: SEDE_B, usuarioEmail: PERSONAS.admin.email, usuarioNombre: "Admin" }));
+  // sedeId de la acta declarado como SEDE_A, pero el lote es de SEDE_B.
+  await assertPermissionDenied(() =>
+    setDoc(doc(db, "actas", `mibg_${loteDeB.id}`), mibgActaBase(loteDeB.id, { sedeId: SEDE_A, usuarioEmail: PERSONAS.admin.email, usuarioNombre: "Admin" }))
+  );
+});
+
+test("un lote de MIBG ya usado no se puede volver a administrar (id determinístico, choca con el primero)", async () => {
+  await loguearComo(PERSONAS.admin);
+  const lote = await addDoc(collection(db, "mibg_lote"), mibgLoteBase({ usuarioEmail: PERSONAS.admin.email, usuarioNombre: "Admin" }));
+  const ref = doc(db, "actas", `mibg_${lote.id}`);
+  await setDoc(ref, mibgActaBase(lote.id, { usuarioEmail: PERSONAS.admin.email, usuarioNombre: "Admin" }));
+  await assertPermissionDenied(() =>
+    setDoc(ref, mibgActaBase(lote.id, { pacienteNombre: "Otro Paciente", usuarioEmail: PERSONAS.admin.email, usuarioNombre: "Admin" }))
+  );
+});
+
+test("un lote de MIBG anulado no se puede administrar", async () => {
+  await loguearComo(PERSONAS.admin);
+  const lote = await addDoc(collection(db, "mibg_lote"), mibgLoteBase({ usuarioEmail: PERSONAS.admin.email, usuarioNombre: "Admin" }));
+  // Anulación del lote -- mismo mecanismo anula_${id} que el resto del sistema,
+  // admin-only (ver rama 'anulacion' de actaValida()).
+  await setDoc(doc(db, "actas", `anula_${lote.id}`), {
+    tipo: "anulacion", anulaId: lote.id, sedeId: SEDE_A, fecha: serverTimestamp(),
+    motivo: "Test: lote mal cargado", usuarioNombre: "Admin", usuarioEmail: PERSONAS.admin.email,
+  });
+  await assertPermissionDenied(() =>
+    setDoc(doc(db, "actas", `mibg_${lote.id}`), mibgActaBase(lote.id, { usuarioEmail: PERSONAS.admin.email, usuarioNombre: "Admin" }))
+  );
+});
+
+test("técnico sin rol NO puede anular un lote de MIBG (admin-only, mismo patrón que todo el sistema)", async () => {
+  await loguearComo(PERSONAS.admin);
+  const lote = await addDoc(collection(db, "mibg_lote"), mibgLoteBase({ usuarioEmail: PERSONAS.admin.email, usuarioNombre: "Admin" }));
+
+  await loguearComo(PERSONAS.tecnicoA);
+  await assertPermissionDenied(() =>
+    setDoc(doc(db, "actas", `anula_${lote.id}`), {
+      tipo: "anulacion", anulaId: lote.id, sedeId: SEDE_A, fecha: serverTimestamp(),
+      motivo: "Intento sin ser admin", usuarioNombre: PERSONAS.tecnicoA.nombre, usuarioEmail: PERSONAS.tecnicoA.email,
+    })
+  );
+});
+
 // radioisotopos: mismo criterio que proveedores -- lectura para cualquiera
 // con acceso, escritura sólo admin.
 test("técnico NO puede escribir en radioisotopos", async () => {

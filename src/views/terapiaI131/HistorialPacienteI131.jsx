@@ -10,11 +10,13 @@ import { TIPO_LABEL_I131, MOMENTO_LABEL } from "../../constants/tipoI131.js";
 // Historial completo de I-131 por paciente (Parte C, para auditorías ARN) --
 // agrupado por pacienteDni (identificador estable, a diferencia del N° de
 // Ficha que cambia por visita). Consulta acotada directamente por
-// pacienteDni + tipo, en paralelo por cada uno de los 8 tipos posibles --
+// pacienteDni + tipo, en paralelo por cada uno de los 9 tipos posibles --
 // nunca trae el histórico de otros pacientes. Ver actasPorPacienteDni en
-// services/firestore/actas.js.
+// services/firestore/actas.js. i131_mibg entra acá igual que el resto (es
+// una acta más de Libro 2) -- mibg_lote en cambio NO tiene pacienteDni, así
+// que el lote físico en sí queda fuera de este historial por paciente.
 const TIPOS_HISTORIAL_I131 = [
-  "i131_ablativa", "i131_dosis", "i131_barrido",
+  "i131_ablativa", "i131_dosis", "i131_barrido", "i131_mibg",
   "i131_captacion", "i131_centellograma", "i131_captacion_centellograma",
   "i131_captacion_resultado", "i131_seguimiento_fin",
 ];
@@ -36,6 +38,7 @@ function tsMillis(fecha) {
 
 function detalleFila(a) {
   if (a.tipo === "i131_ablativa" || a.tipo === "i131_dosis") return `${a.actividadAdministrada} mCi · Lote ${a.lote}`;
+  if (a.tipo === "i131_mibg") return `${a.actividadCalibrada} mCi · Lote ${a.numeroLote}`;
   if (a.tipo === "i131_captacion" || a.tipo === "i131_centellograma" || a.tipo === "i131_captacion_centellograma") {
     const base = a.actividadAdministrada != null ? `${a.actividadAdministrada} ${a.unidadActividad === "mCi" ? "mCi" : "µCi"}` : "—";
     return a.dosisActaId ? `${base} · Vinculado a dosis` : base;
@@ -51,7 +54,7 @@ function filaCSV(a) {
     d.toLocaleDateString("es-AR"), d.toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" }),
     a.sedeNombre, TIPO_LABEL_I131[a.tipo]?.label || a.tipo,
     a.pacienteFicha || "—", a.pacienteNombre, a.pacienteDni, a.medicoResponsable || "—",
-    a.actividadAdministrada ?? "—", a.unidadActividad || "—", a.lote || "—", a.indicacion || "—",
+    a.actividadAdministrada ?? a.actividadCalibrada ?? "—", a.unidadActividad || (a.tipo === "i131_mibg" ? "mCi" : "—"), a.lote || a.numeroLote || "—", a.indicacion || "—",
     a.dosisActaId || "—", a.momento ? (MOMENTO_LABEL[a.momento] || a.momento) : "—",
     a.porcentajeCaptacion != null ? `${a.porcentajeCaptacion.toFixed(2)}%` : "—",
     a.usuarioNombre, a.observacion || "—",

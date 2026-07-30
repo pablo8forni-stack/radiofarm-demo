@@ -15,6 +15,7 @@ import {
   addActaI131Ablativa, addActaI131Dosis, addActaI131Barrido,
   addActaI131Captacion, addActaI131Centellograma, addActaI131CaptacionCentellograma,
 } from "../../services/firestore/actas.js";
+import { listenMibgLotes, administrarMibgTransaction } from "../../services/firestore/mibgLotes.js";
 
 const TIMEOUT_BUSQUEDA_MS = 20000;
 const MSJ_TIMEOUT_BUSQUEDA = "La consulta tardó demasiado, puede haber un problema de conexión -- intentá cerrar las otras pestañas de RadioFarm que tengas abiertas y reintentá.";
@@ -38,10 +39,14 @@ function tsMillis(fecha) {
 // decide el gate de accesoTerapiaI131, tanto acá (deshabilita la opción)
 // como en la regla de Firestore (tieneAccesoI131(), respaldo server-side).
 // Barrido corporal es el único sin permiso especial.
+// MIBG (131I-MIBG) es su propia categoria -- sin fn genérica: no es un alta
+// simple, es administrarMibgTransaction(loteId, data) (ver guardar()), la
+// única de las 7 que necesita leer el lote elegido antes de escribir.
 const TIPOS_I131 = [
   { id: "ablativa", label: "Dosis ablativa", categoria: "dosis", requierePermiso: true, fn: addActaI131Ablativa },
   { id: "dosis", label: "Dosis terapéutica", categoria: "dosis", requierePermiso: true, fn: addActaI131Dosis },
   { id: "barrido", label: "Barrido corporal", categoria: "barrido", requierePermiso: false, fn: addActaI131Barrido },
+  { id: "mibg", label: "MIBG", categoria: "mibg", requierePermiso: false, fn: null },
   { id: "captacion", label: "Captación", categoria: "diagnostico", requierePermiso: true, fn: addActaI131Captacion },
   { id: "centellograma", label: "Centellograma", categoria: "diagnostico", requierePermiso: true, fn: addActaI131Centellograma },
   { id: "capt_centellograma", label: "Captación y Centellograma", categoria: "diagnostico", requierePermiso: true, fn: addActaI131CaptacionCentellograma },
@@ -100,6 +105,9 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
   const [indicacion, setIndicacion] = useState("");
   const [dosisVinculada, setDosisVinculada] = useState("");
   const [dosisI131, setDosisI131] = useState([]);
+  const [mibgI131, setMibgI131] = useState([]);
+  const [mibgLotes, setMibgLotes] = useState([]);
+  const [mibgLoteSeleccionado, setMibgLoteSeleccionado] = useState("");
 
   useEffect(() => listenActas("paciente", setPacientesTodas, { esAdmin, sedeId: usuario.sede }), []);
   useEffect(() => listenAnulacionesActas(setAnulacionesRaw, { esAdmin, sedeId: usuario.sede }), []);
@@ -108,28 +116,45 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
   // relacionada" de los 3 diagnósticos (ver dosisParaVincular). Todos se
   // mezclan en el listado principal -- el N° de Ficha es un correlativo
   // diario único compartido por todos los pacientes del servicio, así que
-  // "Registros del día" tiene que mostrar los 6 tipos intercalados por hora
+  // "Registros del día" tiene que mostrar los 7 tipos intercalados por hora
   // para no dejar saltos de ficha sin explicación visible. La pestaña
   // "Terapia I-131" (consulta) sigue siendo el filtro específico de estos
-  // mismos 6 tipos, sin cambios.
+  // mismos 7 tipos, sin cambios.
   useEffect(() => listenActas("i131_ablativa", setAblativaI131, { esAdmin, sedeId: usuario.sede }), []);
   useEffect(() => listenActas("i131_dosis", setDosisI131, { esAdmin, sedeId: usuario.sede }), []);
   useEffect(() => listenActas("i131_barrido", setBarridosI131, { esAdmin, sedeId: usuario.sede }), []);
+  useEffect(() => listenActas("i131_mibg", setMibgI131, { esAdmin, sedeId: usuario.sede }), []);
   useEffect(() => listenActas("i131_captacion", setCaptacionI131, { esAdmin, sedeId: usuario.sede }), []);
   useEffect(() => listenActas("i131_centellograma", setCentellogramaI131, { esAdmin, sedeId: usuario.sede }), []);
   useEffect(() => listenActas("i131_captacion_centellograma", setCaptCentellogramaI131, { esAdmin, sedeId: usuario.sede }), []);
+  // mibgLotes/mibgUsos no se mezclan en actasTodas (mibg_lote no es una
+  // acta) -- alimentan sólo el picker "Lote disponible" de abajo, filtrado
+  // en tiempo real: un lote usado por otra técnica desaparece para todos al
+  // instante, sin importar el día (ver lotesMibgDisponibles).
+  useEffect(() => listenMibgLotes(setMibgLotes, { esAdmin, sedeId: usuario.sede }), []);
 
   // Cada colección ya viene ordenada desc por fecha desde el listener, así
   // que sólo hace falta mezclar y volver a ordenar, no reordenar cada una.
   const actasTodas = useMemo(
-    () => [...pacientesTodas, ...ablativaI131, ...dosisI131, ...barridosI131, ...captacionI131, ...centellogramaI131, ...captCentellogramaI131]
+    () => [...pacientesTodas, ...ablativaI131, ...dosisI131, ...barridosI131, ...mibgI131, ...captacionI131, ...centellogramaI131, ...captCentellogramaI131]
       .sort((a, b) => tsMillis(b.fecha) - tsMillis(a.fecha)),
-    [pacientesTodas, ablativaI131, dosisI131, barridosI131, captacionI131, centellogramaI131, captCentellogramaI131]
+    [pacientesTodas, ablativaI131, dosisI131, barridosI131, mibgI131, captacionI131, centellogramaI131, captCentellogramaI131]
   );
 
   // anulaId -> acta de anulación (motivo, fecha, quién) -- Map en vez de Set
   // porque el listado necesita mostrar el motivo, no sólo saber que existe.
   const anulaciones = useMemo(() => new Map(anulacionesRaw.map((a) => [a.anulaId, a])), [anulacionesRaw]);
+
+  // "Disponible" para el picker de abajo, en tiempo real: ni anulado (el
+  // lote se cargó mal) ni ya usado (una i131_mibg no anulada lo referencia)
+  // -- ver nota junto al listener de mibgLotes. Filtra por la sede elegida
+  // en el FORMULARIO (sedeId), no por usuario.sede -- admin puede cambiarla.
+  const mibgUsadosIds = useMemo(() => new Set(mibgI131.filter((u) => !anulaciones.has(u.id)).map((u) => u.mibgLoteId)), [mibgI131, anulaciones]);
+  const lotesMibgDisponibles = useMemo(
+    () => mibgLotes.filter((l) => l.sedeId === sedeId && !anulaciones.has(l.id) && !mibgUsadosIds.has(l.id))
+      .sort((a, b) => tsMillis(b.fecha) - tsMillis(a.fecha)),
+    [mibgLotes, sedeId, anulaciones, mibgUsadosIds]
+  );
 
   async function confirmarAnulacion(acta, motivo) {
     try {
@@ -167,7 +192,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
   function limpiarForm() {
     setFichaNro(""); setNombre(""); setDni(""); setPeso(""); setTalla(""); setEstudio(""); setEstudioOtro(""); setMci(""); setFarmId(""); setLote(""); setObs("");
     setMostrarIsotopo(false); setIsotopoId("tc99m"); setMedicoResponsable("");
-    setTipoI131("barrido"); setActividadAdministrada(""); setIndicacion(""); setDosisVinculada("");
+    setTipoI131("barrido"); setActividadAdministrada(""); setIndicacion(""); setDosisVinculada(""); setMibgLoteSeleccionado("");
     setSedeId(usuario.sede);
   }
 
@@ -221,6 +246,19 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
         tipoI131Actual.fn({ ...base, actividadAdministrada: parseFloat(actividadAdministrada) || 0, unidadActividad: "uCi", dosisActaId: dosisVinculada || null })
           .catch((e) => onToast(e.message || "No se pudo guardar el registro", "error"));
         onToast(`${tipoI131Actual.label} registrado — consultalo en la pestaña Terapia I-131`);
+      } else if (tipoI131Actual.categoria === "mibg") {
+        // A diferencia del resto (fire-and-forget, offline-safe), esto es
+        // una transacción real -- puede fallar de verdad si otra técnica
+        // usó el mismo lote un instante antes. El toast de éxito espera a
+        // que la transacción confirme, en vez de mostrarse optimista.
+        if (!mibgLoteSeleccionado) return;
+        const loteElegido = mibgLotes.find((l) => l.id === mibgLoteSeleccionado);
+        if (!loteElegido) return;
+        administrarMibgTransaction(mibgLoteSeleccionado, {
+          ...base, numeroLote: loteElegido.numeroLote, actividadCalibrada: loteElegido.actividadCalibrada, volumen: loteElegido.volumen,
+        })
+          .then(() => onToast("MIBG registrado — consultalo en la pestaña Terapia I-131"))
+          .catch((e) => onToast(e.message || "No se pudo registrar la administración de MIBG", "error"));
       } else {
         tipoI131Actual.fn(base)
           .catch((e) => onToast(e.message || "No se pudo guardar el barrido", "error"));
@@ -300,19 +338,23 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
       return { principal: a.dosisActaId ? "Vinculado a dosis" : "—", sub: null };
     }
     if (a.tipo === "i131_barrido") return { principal: "—", sub: null };
+    if (a.tipo === "i131_mibg") return { principal: `Lote MIBG: ${a.numeroLote || "—"}`, sub: null };
     return { principal: a.isotopoId === "lu177" ? null : (a.farmNombre || "—"), sub: a.lote || null };
   }
 
   // Misma magnitud física (actividad administrada) para Tc-99m/Lutecio
-  // (mciAdministrados, siempre mCi) y los 5 tipos de I-131 con actividad
+  // (mciAdministrados, siempre mCi), los 5 tipos de I-131 con actividad
   // (actividadAdministrada, mCi para dosis/ablativa, µCi para los 3
-  // diagnósticos) -- se unifica en una sola columna con su unidad real, no un
-  // sufijo "mCi" fijo. unidadActividad ausente (actas i131_dosis anteriores a
-  // este cambio) se interpreta como mCi, mismo criterio que isotopoId
-  // ausente = tc99m. Barrido corporal no administra nada nuevo.
+  // diagnósticos) y MIBG (actividadCalibrada, mCi -- denormalizada del lote
+  // al administrar, no se retipea) -- se unifica en una sola columna con su
+  // unidad real, no un sufijo "mCi" fijo. unidadActividad ausente (actas
+  // i131_dosis anteriores a este cambio) se interpreta como mCi, mismo
+  // criterio que isotopoId ausente = tc99m. Barrido corporal no administra
+  // nada nuevo.
   function dosisRegistro(a) {
     if (a.mciAdministrados != null) return { valor: a.mciAdministrados, unidad: "mCi" };
     if (a.actividadAdministrada != null) return { valor: a.actividadAdministrada, unidad: a.unidadActividad || "mCi" };
+    if (a.tipo === "i131_mibg" && a.actividadCalibrada != null) return { valor: a.actividadCalibrada, unidad: "mCi" };
     return null;
   }
 
@@ -402,7 +444,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
     const dosis = dosisRegistro(a);
     return [d.toLocaleDateString("es-AR"), d.toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" }),
       a.sedeNombre, tipoTextoCSV(a), a.pacienteFicha || "—", a.pacienteNombre, a.pacienteDni, a.medicoResponsable || "—",
-      a.peso ?? "—", a.talla ?? "—", a.estudio || "—", a.farmNombre || "—", a.lote || "—",
+      a.peso ?? "—", a.talla ?? "—", a.estudio || "—", a.farmNombre || "—", a.lote || a.numeroLote || "—",
       dosis?.valor ?? "—", dosis?.unidad ?? "—", a.indicacion || "—", a.dosisActaId || "—", a.usuarioNombre, a.observacion || "—"];
   }
 
@@ -425,7 +467,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
   // largo -- este es un getDocs aparte, sin ese límite, por rango de fechas.
   // Buscar y descargar son dos pasos separados a propósito: ver nota completa
   // en TabMarcacion.jsx#buscarRango.
-  // Trae los 7 tipos por separado (misma sede/rango, siete consultas en
+  // Trae los 8 tipos por separado (misma sede/rango, ocho consultas en
   // paralelo) y los mezcla, igual que el listado en vivo -- una exportación
   // de rango tiene que reflejar la misma secuencia de fichas sin huecos.
   async function buscarRango() {
@@ -435,7 +477,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
     setResultadoRango(null);
     try {
       const opts = { desde: rangoDesde, hasta: rangoHasta, esAdmin, sedeId: esAdmin ? (filtroSede || null) : usuario.sede };
-      const tipos = ["paciente", "i131_ablativa", "i131_dosis", "i131_barrido", "i131_captacion", "i131_centellograma", "i131_captacion_centellograma"];
+      const tipos = ["paciente", "i131_ablativa", "i131_dosis", "i131_barrido", "i131_mibg", "i131_captacion", "i131_centellograma", "i131_captacion_centellograma"];
       const resultados = await conTimeout(
         Promise.all(tipos.map((t) => actasPorRango(t, opts))),
         TIMEOUT_BUSQUEDA_MS, MSJ_TIMEOUT_BUSQUEDA
@@ -599,11 +641,12 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
                 )}
               </>
             )}
-            {/* 6 opciones ya no entran cómodas en pills -- Sel, mismo criterio
+            {/* 7 opciones ya no entran cómodas en pills -- Sel, mismo criterio
                 que usamos en otros lados cuando una lista de opciones crece
-                (tabs de Configuración/Actas ARN). Las 4 que requieren
+                (tabs de Configuración/Actas ARN). Las que requieren
                 accesoTerapiaI131 quedan disabled con una nota en el texto si
-                el técnico no lo tiene -- admin siempre puede elegir cualquiera. */}
+                el técnico no lo tiene -- admin siempre puede elegir cualquiera.
+                MIBG, como Barrido, no tiene ese gate (ver TIPOS_I131). */}
             {esI131 && (
               <div className="sm:col-span-2">
                 <Sel label="Tipo de registro" value={tipoI131} onChange={(e) => setTipoI131(e.target.value)}>
@@ -638,6 +681,19 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
                 </div>
               </>
             )}
+            {esI131 && tipoI131Actual.categoria === "mibg" && (
+              <div className="sm:col-span-2">
+                <Sel label="Lote de MIBG disponible" value={mibgLoteSeleccionado} onChange={(e) => setMibgLoteSeleccionado(e.target.value)}>
+                  <option value="">Seleccionar lote...</option>
+                  {lotesMibgDisponibles.map((l) => (
+                    <option key={l.id} value={l.id}>{l.numeroLote} · {l.actividadCalibrada} mCi en {l.volumen} mL · Calibrado {fmtTs(l.fechaHoraCalibracion)}</option>
+                  ))}
+                </Sel>
+                {lotesMibgDisponibles.length === 0 && (
+                  <p className="text-xs text-orange-500 mt-1">No hay lotes de MIBG disponibles en esta sede -- registrá uno nuevo en la pestaña "MIBG" de Terapia I-131.</p>
+                )}
+              </div>
+            )}
             {!esI131 && (esLutecio ? (
               // Lutecio-177 no pasa por el catálogo de radiofármacos/stock --
               // dosis puntual por paciente, no stock rotativo (ver guardar()).
@@ -665,8 +721,9 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
               !fichaNro.trim() || !nombre.trim() || !dni.trim() ||
               (esI131
                 ? ((tipoI131Actual.requierePermiso && !puedeCargarDosisI131) ||
-                   (tipoI131Actual.categoria !== "barrido" && !actividadAdministrada) ||
-                   (tipoI131Actual.categoria === "dosis" && !lote.trim()))
+                   (tipoI131Actual.categoria !== "barrido" && tipoI131Actual.categoria !== "mibg" && !actividadAdministrada) ||
+                   (tipoI131Actual.categoria === "dosis" && !lote.trim()) ||
+                   (tipoI131Actual.categoria === "mibg" && !mibgLoteSeleccionado))
                 : (!mci || !estudio || (estudio === "Otro" && !estudioOtro.trim()) || !lote.trim() || (esLutecio ? !medicoResponsable.trim() : !farmId)))
             }>Guardar registro</Btn>
           </div>

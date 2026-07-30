@@ -206,10 +206,44 @@ service cloud.firestore {
     function tiposActa() {
       return [
         'paciente', 'marcacion', 'elucion', 'anulacion',
-        'i131_ablativa', 'i131_dosis', 'i131_barrido',
+        'i131_ablativa', 'i131_dosis', 'i131_barrido', 'i131_mibg',
         'i131_captacion', 'i131_centellograma', 'i131_captacion_centellograma',
         'i131_vial', 'i131_extraccion', 'i131_captacion_resultado', 'i131_seguimiento_fin',
       ];
+    }
+
+    // MIBG (131I-MIBG, neuroblastoma/feocromocitoma/paraganglioma) -- abierto
+    // a CUALQUIER técnico, sin tieneAccesoI131(), mismo criterio que Barrido
+    // corporal. mibg_lote es una colección PROPIA (no vive dentro de actas
+    // como i131_vial) porque no comparte nada de la maquinaria de decaimiento/
+    // balance de volumen de Parte A -- cada vial es una dosis completa para
+    // un único paciente, sin curva ni HAY/SACADO/QUEDAN. "Disponible" se
+    // deriva, nunca se guarda: no existe anulación del lote (mibgLoteAnulado,
+    // reusa el mecanismo `anula_${id}` de actas -- ver
+    // services/firestore/mibgLotes.js, anularActaTransaction no le importa de
+    // qué colección viene el objeto que anula) NI un acta i131_mibg que ya lo
+    // haya usado -- y eso último queda garantizado por el id determinístico
+    // `mibg_${loteId}` de esa acta (allow update: false más abajo bloquea un
+    // segundo uso solo, sin necesitar loop ni query).
+    function mibgLoteAnulado(loteId) {
+      return exists(/databases/$(database)/documents/actas/$('anula_' + loteId));
+    }
+    function mibgLoteValido() {
+      let d = request.resource.data;
+      return d.usuarioEmail == request.auth.token.email &&
+        d.sedeId is string && d.sedeId.size() > 0 &&
+        (isAdmin() || miRol().sede == d.sedeId) &&
+        d.numeroLote is string && d.numeroLote.size() > 0 &&
+        d.proveedor is string && d.proveedor.size() > 0 &&
+        d.actividadCalibrada is number && d.actividadCalibrada > 0 &&
+        d.volumen is number && d.volumen > 0 &&
+        d.fechaHoraCalibracion is timestamp &&
+        d.fechaVencimiento is string && d.fechaVencimiento.size() > 0;
+    }
+    match /mibg_lote/{loteId} {
+      allow read: if tieneAcceso() && (isAdmin() || resource.data.sedeId == miRol().sede);
+      allow create: if tieneAcceso() && mibgLoteValido();
+      allow update, delete: if false;
     }
 
     // Espacio de cálculo I-131 (stock de viales + extracciones con
@@ -345,14 +379,23 @@ service cloud.firestore {
                   ? (d.pacienteFicha is string && d.pacienteFicha.size() > 0 &&
                      d.pacienteNombre is string && d.pacienteNombre.size() > 0 &&
                      d.pacienteDni is string && d.pacienteDni.size() > 0)
-                  : d.tipo == 'i131_vial'
-                    ? (tieneAccesoI131() &&
-                       d.lote is string && d.lote.size() > 0 &&
-                       d.fechaCalibracion is timestamp &&
-                       d.actividadCalibrada is number && d.actividadCalibrada > 0 &&
-                       d.volumenInicial is number && d.volumenInicial > 0 &&
-                       d.categoria in ['terapeutico', 'diagnostico'])
-                    : d.tipo == 'i131_extraccion'
+                  : d.tipo == 'i131_mibg'
+                    ? (d.pacienteFicha is string && d.pacienteFicha.size() > 0 &&
+                       d.pacienteNombre is string && d.pacienteNombre.size() > 0 &&
+                       d.pacienteDni is string && d.pacienteDni.size() > 0 &&
+                       d.mibgLoteId is string && d.mibgLoteId.size() > 0 &&
+                       exists(/databases/$(database)/documents/mibg_lote/$(d.mibgLoteId)) &&
+                       get(/databases/$(database)/documents/mibg_lote/$(d.mibgLoteId)).data.sedeId == d.sedeId &&
+                       !mibgLoteAnulado(d.mibgLoteId) &&
+                       d.actividadCalibrada is number && d.actividadCalibrada > 0)
+                    : d.tipo == 'i131_vial'
+                      ? (tieneAccesoI131() &&
+                         d.lote is string && d.lote.size() > 0 &&
+                         d.fechaCalibracion is timestamp &&
+                         d.actividadCalibrada is number && d.actividadCalibrada > 0 &&
+                         d.volumenInicial is number && d.volumenInicial > 0 &&
+                         d.categoria in ['terapeutico', 'diagnostico'])
+                      : d.tipo == 'i131_extraccion'
                       ? (tieneAccesoI131() &&
                          d.viales is list && d.viales.size() > 0 &&
                          d.actividadCalculada is number && d.actividadCalculada > 0 &&

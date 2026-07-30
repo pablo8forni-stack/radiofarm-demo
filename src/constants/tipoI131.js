@@ -8,6 +8,7 @@ export const TIPO_LABEL_I131 = {
   i131_ablativa: { label: "Ablativa I-131", color: "red" },
   i131_dosis: { label: "Dosis I-131", color: "orange" },
   i131_barrido: { label: "Barrido I-131", color: "teal" },
+  i131_mibg: { label: "MIBG", color: "red" },
   i131_captacion: { label: "Captación I-131", color: "blue" },
   i131_centellograma: { label: "Centellograma I-131", color: "green" },
   i131_captacion_centellograma: { label: "Capt.+Centellograma I-131", color: "purple" },
