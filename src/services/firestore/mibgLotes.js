@@ -40,36 +40,71 @@ export function listenMibgLotes(callback, { esAdmin, sedeId } = {}) {
 // dos pasen la validación de "no usado" acá, sólo una de las dos puede
 // terminar de escribir en ese mismo id.
 //
+// El id de la acta de uso NO es fijo por lote (`${prefijo}${loteId}`) --
+// eso fue el diseño original y tenía un bug real: al desacoplar la
+// anulación de la acta y del lote, un lote anulado-y-corregido no tenía
+// ningún id libre donde guardar la segunda administración, porque allow
+// update:false deja el primer id ocupado para siempre aunque esté anulado.
+// Ahora el id lleva un número de intento acotado (1..5, ver CAP_INTENTOS,
+// mismo tope que la regla server-side): se busca el primer intento libre
+// (no existe todavía) o anulado-y-liberable... en realidad un intento
+// anulado NO se reutiliza (cada intento es su propia acta inmutable) -- se
+// busca el primer número SIN acta creada todavía, y de paso se verifica
+// que ningún intento anterior siga activo (existe y no anulado), que es la
+// garantía real de "nunca dos administraciones activas del mismo lote".
+//
 // usoRef/tipo/campoLoteId varían según el isótopo -- MIBG usa su propio
-// namespace de ids (mibg_${loteId}, tipo i131_mibg, campo mibgLoteId) desde
-// antes de que existiera Lutecio-177, y se preserva tal cual para no tocar
-// datos ya en producción. Lutecio-177 usa un namespace NUEVO (lote_${loteId},
-// tipo paciente, campo loteDosisUnicaId) para no confundirse con el de MIBG.
-function administrarLoteDosisUnicaTransaction(loteId, dataActa, { usoRef, tipo, campoLoteId }) {
+// namespace de ids (mibg_${loteId}_${n}, tipo i131_mibg, campo mibgLoteId)
+// desde antes de que existiera Lutecio-177. Lutecio-177 usa un namespace
+// NUEVO (lote_${loteId}_${n}, tipo paciente, campo loteDosisUnicaId) para no
+// confundirse con el de MIBG.
+const CAP_INTENTOS = 5;
+
+function administrarLoteDosisUnicaTransaction(loteId, dataActa, { prefijo, tipo, campoLoteId }) {
   const loteRef = doc(mibgLoteCol, loteId);
   const anulaLoteRef = doc(actasCol, `anula_${loteId}`);
+  const legacyUsoRef = doc(actasCol, `${prefijo}${loteId}`);
+  const legacyAnulaRef = doc(actasCol, `anula_${prefijo}${loteId}`);
   return conMensajeDeContingencia(() =>
     runTransaction(db, async (tx) => {
       const loteSnap = await tx.get(loteRef);
       if (!loteSnap.exists()) throw new Error("Este lote no existe.");
       const anulaSnap = await tx.get(anulaLoteRef);
       if (anulaSnap.exists()) throw new Error("Este lote fue anulado -- no se puede usar.");
-      const usoSnap = await tx.get(usoRef);
-      if (usoSnap.exists()) throw new Error("Este lote ya fue administrado a otro paciente -- elegí otro.");
-      tx.set(usoRef, { ...dataActa, tipo, [campoLoteId]: loteId, fecha: serverTimestamp() });
+
+      // Compatibilidad con actas de antes de este esquema (id sin sufijo
+      // _n) -- si alguna quedara activa, sigue bloqueando una nueva
+      // administración, sin necesitar migrar ningún dato existente.
+      const legacyUsoSnap = await tx.get(legacyUsoRef);
+      if (legacyUsoSnap.exists()) {
+        const legacyAnulaSnap = await tx.get(legacyAnulaRef);
+        if (!legacyAnulaSnap.exists()) throw new Error("Este lote ya fue administrado a otro paciente -- elegí otro.");
+      }
+
+      for (let n = 1; n <= CAP_INTENTOS; n++) {
+        const usoRef = doc(actasCol, `${prefijo}${loteId}_${n}`);
+        const usoSnap = await tx.get(usoRef);
+        if (!usoSnap.exists()) {
+          tx.set(usoRef, { ...dataActa, tipo, [campoLoteId]: loteId, intentoNro: String(n), fecha: serverTimestamp() });
+          return;
+        }
+        const anulaUsoSnap = await tx.get(doc(actasCol, `anula_${prefijo}${loteId}_${n}`));
+        if (!anulaUsoSnap.exists()) throw new Error("Este lote ya fue administrado a otro paciente -- elegí otro.");
+      }
+      throw new Error("Este lote ya tuvo demasiadas correcciones de administración -- contactá soporte.");
     })
   );
 }
 
 export function administrarMibgTransaction(loteId, dataActa) {
   return administrarLoteDosisUnicaTransaction(loteId, dataActa, {
-    usoRef: doc(actasCol, `mibg_${loteId}`), tipo: "i131_mibg", campoLoteId: "mibgLoteId",
+    prefijo: "mibg_", tipo: "i131_mibg", campoLoteId: "mibgLoteId",
   });
 }
 
 export function administrarLutecioTransaction(loteId, dataActa) {
   return administrarLoteDosisUnicaTransaction(loteId, dataActa, {
-    usoRef: doc(actasCol, `lote_${loteId}`), tipo: "paciente", campoLoteId: "loteDosisUnicaId",
+    prefijo: "lote_", tipo: "paciente", campoLoteId: "loteDosisUnicaId",
   });
 }
 

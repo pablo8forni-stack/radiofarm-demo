@@ -228,11 +228,7 @@ service cloud.firestore {
     // anulación del lote (loteDosisUnicaAnulado, reusa el mecanismo
     // `anula_${id}` de actas -- ver services/firestore/mibgLotes.js,
     // anularActaTransaction no le importa de qué colección viene el objeto
-    // que anula) NI una acta que ya lo haya usado -- y eso último queda
-    // garantizado por el id determinístico de esa acta (`mibg_${loteId}`
-    // para i131_mibg, `lote_${loteId}` para el 'paciente' de Lutecio-177 --
-    // allow update: false más abajo bloquea un segundo uso solo, sin
-    // necesitar loop ni query).
+    // que anula) NI una acta ACTIVA (no anulada) que ya lo haya usado.
     //
     // isotopoId: campo agregado después de que MIBG ya estaba en producción
     // -- los docs viejos no lo tienen y se interpretan como 'mibg' por
@@ -241,6 +237,53 @@ service cloud.firestore {
     // revalida contra docs existentes.
     function loteDosisUnicaAnulado(loteId) {
       return exists(/databases/$(database)/documents/actas/$('anula_' + loteId));
+    }
+
+    // Id de la acta de uso: `${prefijo}${loteId}_${intentoNro}`, con
+    // intentoNro acotado a 1..5 -- NO `${prefijo}${loteId}` fijo (eso fue el
+    // diseño original y tenía un bug real: al desacoplar la anulación de la
+    // acta y del lote, un lote anulado-y-corregido no tenía ningún id libre
+    // donde guardar la segunda administración, porque allow update:false
+    // deja el primer id ocupado para siempre aunque esté anulado). Cada
+    // corrección pasa al siguiente número -- create-only sigue intacto, cada
+    // intento es su propia acta inmutable, nunca se reescribe ninguna.
+    //
+    // La garantía real (nunca dos administraciones ACTIVAS del mismo lote al
+    // mismo tiempo) se logra con progresión ESTRICTAMENTE secuencial: para
+    // crear el intento N (N>1) hace falta que el intento N-1 exista Y esté
+    // anulado. Por inducción alcanza con revisar UN SOLO intento anterior
+    // (no los otros 4): si N-1 tuvo que anularse para poder crear N, todo
+    // intento previo a N-1 tuvo que anularse antes de que N-1 existiera --
+    // en cualquier momento sólo el intento activo más alto puede estar sin
+    // anular.
+    //
+    // Primer diseño (descartado): revisar los 5 intentos sin excepción en
+    // cada escritura. Se probó contra staging y SIEMPRE rechazaba, incluso
+    // cuando la lógica en sí era correcta -- Firestore Rules tiene un tope
+    // de document-access calls (get()/exists()) por evaluación, y revisar
+    // un intento ya OCUPADO cuesta 2 calls (exists del acta + exists de su
+    // anulación) en vez de 1 (exists que corta en falso si el intento ni
+    // siquiera existe); sumado al resto de chequeos de la rama (tieneAcceso,
+    // isAdmin, mibg_lote, loteDosisUnicaAnulado) alcanzaba el tope. Revisar
+    // sólo el intento anterior evita el problema de raíz, no lo esquiva.
+    function usoAnuladoDosisUnica(prefijo, loteId, n) {
+      return exists(/databases/$(database)/documents/actas/$(prefijo + loteId + '_' + n)) &&
+        exists(/databases/$(database)/documents/actas/$('anula_' + prefijo + loteId + '_' + n));
+    }
+    // Compatibilidad con actas de antes de este esquema (id sin sufijo
+    // _n) -- si alguna quedara activa, sigue bloqueando el primer intento
+    // nuevo, sin necesitar migrar ningún dato existente.
+    function usoActivoLegacyDosisUnica(prefijo, loteId) {
+      return exists(/databases/$(database)/documents/actas/$(prefijo + loteId)) &&
+        !exists(/databases/$(database)/documents/actas/$('anula_' + prefijo + loteId));
+    }
+    function intentoHabilitado(prefijo, loteId, intentoNro) {
+      return intentoNro == '1'
+        ? !usoActivoLegacyDosisUnica(prefijo, loteId)
+        : intentoNro == '2' ? usoAnuladoDosisUnica(prefijo, loteId, '1')
+        : intentoNro == '3' ? usoAnuladoDosisUnica(prefijo, loteId, '2')
+        : intentoNro == '4' ? usoAnuladoDosisUnica(prefijo, loteId, '3')
+        : usoAnuladoDosisUnica(prefijo, loteId, '4');
     }
     function mibgLoteValido() {
       let d = request.resource.data;
@@ -414,7 +457,9 @@ service cloud.firestore {
                        d.pacienteNombre is string && d.pacienteNombre.size() > 0 &&
                        d.pacienteDni is string && d.pacienteDni.size() > 0 &&
                        d.mibgLoteId is string && d.mibgLoteId.size() > 0 &&
-                       actaId == 'mibg_' + d.mibgLoteId &&
+                       d.intentoNro in ['1', '2', '3', '4', '5'] &&
+                       actaId == 'mibg_' + d.mibgLoteId + '_' + d.intentoNro &&
+                       intentoHabilitado('mibg_', d.mibgLoteId, d.intentoNro) &&
                        exists(/databases/$(database)/documents/mibg_lote/$(d.mibgLoteId)) &&
                        get(/databases/$(database)/documents/mibg_lote/$(d.mibgLoteId)).data.sedeId == d.sedeId &&
                        !loteDosisUnicaAnulado(d.mibgLoteId) &&
@@ -474,7 +519,9 @@ service cloud.firestore {
                              // mibg_${mibgLoteId}), prefijo DISTINTO a propósito
                              // para no tocar el namespace ya usado por MIBG.
                              d.loteDosisUnicaId is string && d.loteDosisUnicaId.size() > 0 &&
-                             actaId == 'lote_' + d.loteDosisUnicaId &&
+                             d.intentoNro in ['1', '2', '3', '4', '5'] &&
+                             actaId == 'lote_' + d.loteDosisUnicaId + '_' + d.intentoNro &&
+                             intentoHabilitado('lote_', d.loteDosisUnicaId, d.intentoNro) &&
                              exists(/databases/$(database)/documents/mibg_lote/$(d.loteDosisUnicaId)) &&
                              get(/databases/$(database)/documents/mibg_lote/$(d.loteDosisUnicaId)).data.sedeId == d.sedeId &&
                              !loteDosisUnicaAnulado(d.loteDosisUnicaId) &&
