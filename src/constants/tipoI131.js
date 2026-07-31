@@ -6,7 +6,7 @@
 // deberían confundirse a simple vista en un listado compartido.
 export const TIPO_LABEL_I131 = {
   i131_ablativa: { label: "Ablativa I-131", color: "red" },
-  i131_dosis: { label: "Dosis I-131", color: "orange" },
+  i131_dosis: { label: "Dosis Hiper", color: "orange" },
   i131_barrido: { label: "Barrido I-131", color: "teal" },
   i131_mibg: { label: "MIBG", color: "red" },
   i131_captacion: { label: "Captación I-131", color: "blue" },

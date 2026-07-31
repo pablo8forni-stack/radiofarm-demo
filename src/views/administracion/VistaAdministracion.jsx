@@ -6,8 +6,8 @@ import { TabElucion } from "./TabElucion.jsx";
 import { TabLoteDosisUnica } from "../terapiaI131/TabLoteDosisUnica.jsx";
 
 const TABS = [
-  { id: "pacientes", label: "Libro 2 — Pacientes" },
   { id: "marcacion", label: "Libro 1 — Marcación" },
+  { id: "pacientes", label: "Libro 2 — Pacientes" },
   { id: "elucion", label: "Libro 3 — Elución" },
   { id: "lutecio", label: "Libro 4 — Lutecio-177" },
 ];
