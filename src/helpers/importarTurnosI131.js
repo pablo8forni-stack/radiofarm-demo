@@ -99,12 +99,30 @@ function esZipBinario(bytes) {
   return bytes.length >= 2 && bytes[0] === 0x50 && bytes[1] === 0x4b;
 }
 
+// Mismo criterio que esZipBinario -- mirar los bytes reales en vez de asumir
+// un formato fijo. "Guardar como > Texto Unicode" de Excel de escritorio
+// siempre trae el BOM UTF-16LE (FF FE); el TSV que exportan las apps de
+// planillas del celular viene en UTF-8, con o sin su propio BOM (EF BB BF).
+// Sin BOM (el caso más común desde el celular) se asume UTF-8 por default --
+// es una heurística, no una certeza, pero es estrictamente mejor que antes
+// (que siempre asumía utf-16le y producía basura ilegible para cualquier
+// archivo sin ese BOM puntual). Si la codificación adivinada fuera la
+// incorrecta, el texto decodificado no va a matchear ningún encabezado
+// esperado y la validación de "faltan columnas" de más abajo lo va a
+// rechazar con un error claro -- nunca queda un dato mal cargado en
+// silencio, sólo un archivo rechazado.
+function detectarCodificacion(bytes) {
+  if (bytes[0] === 0xff && bytes[1] === 0xfe) return "utf-16le";
+  if (bytes[0] === 0xfe && bytes[1] === 0xff) return "utf-16be"; // por completitud, rarísimo en la práctica
+  return "utf-8"; // con o sin BOM (EF BB BF) -- TextDecoder("utf-8") descarta el BOM solo si está
+}
+
 export async function parsearArchivoTurnosI131(file) {
   const bytes = new Uint8Array(await file.arrayBuffer());
   if (esZipBinario(bytes)) {
     throw new Error("Este archivo es el .xlsx tal cual, no el archivo de texto que espera el importador. En Excel: \"Guardar como\" → Texto Unicode (*.txt), y subí ese archivo.");
   }
-  const texto = new TextDecoder("utf-16le").decode(bytes);
+  const texto = new TextDecoder(detectarCodificacion(bytes)).decode(bytes);
   const lineas = texto.split(/\r\n|\n/).filter((l) => l.trim() !== "");
   if (lineas.length === 0) throw new Error("El archivo está vacío.");
 
