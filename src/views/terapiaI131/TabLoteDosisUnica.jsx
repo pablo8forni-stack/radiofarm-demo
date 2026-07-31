@@ -64,9 +64,13 @@ export function TabLoteDosisUnica({ catalogo, usuario, esAdmin, onToast, isotopo
   // Lutecio-177 hay que filtrar además por isotopoId=='lu177' antes de armar
   // el mapa de usos (para MIBG, TIPO_USO ya scopeó la consulta a i131_mibg
   // exclusivamente, no hace falta filtrar de nuevo).
+  // !anulaciones.has(u.id): un uso anulado no cuenta como "usado" -- anular
+  // la administración es independiente de anular el lote (ver
+  // helpers/mibgLote.js), así que el lote vuelve a "disponible" apenas se
+  // anula la acta que lo usaba.
   const usos = useMemo(
-    () => (isotopoId === "lutecio177" ? usosRaw.filter((u) => u.isotopoId === "lu177" && u.loteDosisUnicaId) : usosRaw),
-    [usosRaw, isotopoId]
+    () => (isotopoId === "lutecio177" ? usosRaw.filter((u) => u.isotopoId === "lu177" && u.loteDosisUnicaId && !anulaciones.has(u.id)) : usosRaw.filter((u) => !anulaciones.has(u.id))),
+    [usosRaw, isotopoId, anulaciones]
   );
   const usoPorLoteId = useMemo(() => new Map(usos.map((u) => [u[CAMPO_LOTE_ID[isotopoId]], u])), [usos, isotopoId]);
 
@@ -200,7 +204,7 @@ export function TabLoteDosisUnica({ catalogo, usuario, esAdmin, onToast, isotopo
                 {l.observacion && <div className="text-xs text-gray-400 italic">{l.observacion}</div>}
                 {anulacion && <div className="text-xs text-orange-500 font-semibold">ANULADO: {anulacion.motivo}</div>}
                 <div className="text-xs text-gray-400">{l.usuarioNombre}</div>
-                {esAdmin && estadoDe(l) === "disponible" && (
+                {esAdmin && estadoDe(l) !== "anulado" && (
                   <div className="flex justify-end mt-0.5">
                     <button onClick={() => setMAnular(l)} className="text-xs text-orange-500 hover:text-orange-700 font-semibold px-2 py-1 rounded-lg hover:bg-orange-50 transition min-h-11 md:min-h-0">
                       Anular

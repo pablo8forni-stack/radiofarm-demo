@@ -2,18 +2,17 @@
 // duplicada de forma sutilmente distinta en TabMibg.jsx (estadoDe) y
 // TabPacientes.jsx (picker de lote), y las dos versiones divergieron: una
 // filtraba usos anulados, la otra no (auditoría de seguridad, hallazgo #12).
-// Una sola función, usada en los dos lados, para que nunca vuelva a pasar.
+// Una sola función, usada en los tres lados, para que nunca vuelva a pasar.
 //
 // anulaciones: Map<id, anulación> keyed por anulaId (mismo Map que ya arma
 // cada pantalla desde listenAnulacionesActas). usoPorLoteId: Map<mibgLoteId,
-// actaI131Mibg> (la acta que usó ese lote, si existe alguna).
+// actaDeUso> -- IMPORTANTE: el llamador tiene que armar este mapa excluyendo
+// usos ya anulados (`.filter(u => !anulaciones.has(u.id))`) -- anular la
+// acta de administración es independiente de anular el lote (corrección de
+// diseño: eran dos hechos distintos, no el mismo evento), así que un lote
+// cuya única acta de uso está anulada vuelve a estar "disponible" sin tocar
+// el lote en sí.
 export function estadoMibgLote(loteId, { anulaciones, usoPorLoteId }) {
   if (anulaciones.has(loteId)) return "anulado";
-  const uso = usoPorLoteId.get(loteId);
-  // Defensivo: si el acta que usó el lote está anulada pero el lote todavía
-  // no (ventana breve del flujo en 2 pasos de anularActaMibgYLote, o datos
-  // viejos previos a esta corrección), sigue contando como "usado" -- nunca
-  // "disponible" mientras exista una acta apuntándole, anulada o no.
-  if (uso) return "usado";
-  return "disponible";
+  return usoPorLoteId.has(loteId) ? "usado" : "disponible";
 }

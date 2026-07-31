@@ -9,7 +9,6 @@ import { fmtF, fmtTs, fmtFechaISO, hoy, agruparPorFecha } from "../../helpers/fo
 import { descargarArchivo } from "../../helpers/descargarArchivo.js";
 import { sedesActivas } from "../../helpers/stock.js";
 import { listenActas, actasPorRango, anularActaTransaction, listenAnulacionesActas } from "../../services/firestore/actas.js";
-import { anularActaConLote } from "../../services/firestore/mibgLotes.js";
 import { TIPO_LABEL_I131 } from "../../constants/tipoI131.js";
 
 const TIPOS_I131 = ["i131_ablativa", "i131_dosis", "i131_barrido", "i131_mibg", "i131_captacion", "i131_centellograma", "i131_captacion_centellograma"];
@@ -90,24 +89,17 @@ export function TabRegistrosI131({ catalogo, usuario, esAdmin, onToast }) {
 
   // Sin formulario que reabrir acá -- corregir un registro anulado se hace
   // volviendo a cargarlo en Libro 2 (Pacientes), eligiendo I-131 de nuevo.
-  // MIBG es distinto: anular el acta anula TAMBIÉN el lote (dos pasos, ver
-  // anularActaMibgYLote) -- corregir exige re-registrar el lote de cero
-  // desde la etiqueta, no sólo recargar el acta (auditoría, #2).
+  // MIBG (y Lutecio-177) NO anulan su lote acá: son hechos independientes
+  // (corrección de diseño -- el lote es la llegada del vial, la acta es la
+  // dosis realmente inyectada). El lote sigue válido y queda disponible
+  // para reasignar apenas se anula esta acta.
   async function confirmarAnulacion(acta, motivo) {
     try {
-      if (acta.tipo === "i131_mibg") {
-        await anularActaConLote(acta, acta.mibgLoteId, motivo, usuario);
-        onToast(
-          "MIBG anulado (el lote también quedó anulado, no se reutiliza). Para corregir: registrá el lote de nuevo en la pestaña MIBG y cargá el acta correcta en Libro 2.",
-          "info", 10000
-        );
-      } else {
-        await anularActaTransaction(acta, motivo, usuario);
-        onToast(
-          `${TIPO_LABEL_I131[acta.tipo]?.label || acta.tipo} anulado. Para corregirlo, volvé a cargarlo en Libro 2 (Pacientes) eligiendo I-131.`,
-          "info", 8000
-        );
-      }
+      await anularActaTransaction(acta, motivo, usuario);
+      const mensaje = acta.mibgLoteId
+        ? "MIBG anulado. El lote sigue siendo válido y quedó disponible para reasignar (a este paciente u otro) con el dato de dosis corregido -- volvé a cargarlo en Libro 2."
+        : `${TIPO_LABEL_I131[acta.tipo]?.label || acta.tipo} anulado. Para corregirlo, volvé a cargarlo en Libro 2 (Pacientes) eligiendo I-131.`;
+      onToast(mensaje, "info", acta.mibgLoteId ? 10000 : 8000);
       setMAnular(null);
     } catch (e) {
       onToast(e.message, "error");

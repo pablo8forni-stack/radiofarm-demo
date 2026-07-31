@@ -15,7 +15,7 @@ import {
   addActaI131Ablativa, addActaI131Dosis, addActaI131Barrido,
   addActaI131Captacion, addActaI131Centellograma, addActaI131CaptacionCentellograma,
 } from "../../services/firestore/actas.js";
-import { listenMibgLotes, administrarMibgTransaction, administrarLutecioTransaction, anularActaConLote } from "../../services/firestore/mibgLotes.js";
+import { listenMibgLotes, administrarMibgTransaction, administrarLutecioTransaction } from "../../services/firestore/mibgLotes.js";
 import { estadoMibgLote } from "../../helpers/mibgLote.js";
 
 const TIMEOUT_BUSQUEDA_MS = 20000;
@@ -33,6 +33,17 @@ function tsMillis(fecha) {
   if (!fecha) return 0;
   const d = typeof fecha?.toDate === "function" ? fecha.toDate() : new Date(fecha);
   return Number.isNaN(d.getTime()) ? 0 : d.getTime();
+}
+
+// Conformidad de un lote (MIBG/Lutecio-177) -- 3 estados, no 2: además de
+// Sí/No, los lotes de MIBG cargados antes de que este campo existiera no
+// tienen el dato (null/undefined), y eso no es lo mismo que "No conforme"
+// -- mostrarlo en rojo alarmaría por algo que nunca se cargó, no por un
+// problema real. "Sin dato" queda neutro a propósito.
+function textoConformidad(lote) {
+  if (lote.conformidad === true) return { texto: "Sí", clase: "text-green-700 font-semibold" };
+  if (lote.conformidad === false) return { texto: "No conforme", clase: "text-red-600 font-semibold" };
+  return { texto: "Sin dato", clase: "text-gray-400" };
 }
 
 // Tabla que maneja los 6 tipos de registro de I-131 -- categoria decide qué
@@ -149,11 +160,14 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
   const anulaciones = useMemo(() => new Map(anulacionesRaw.map((a) => [a.anulaId, a])), [anulacionesRaw]);
 
   // "Disponible" para el picker de abajo, en tiempo real -- misma derivación
-  // que TabMibg.jsx (estadoMibgLote, ver helpers/mibgLote.js: antes cada
-  // pantalla tenía su propia lógica y divergieron, auditoría #12). Filtra
-  // por la sede elegida en el FORMULARIO (sedeId), no por usuario.sede --
-  // admin puede cambiarla.
-  const usoPorLoteId = useMemo(() => new Map(mibgI131.map((u) => [u.mibgLoteId, u])), [mibgI131]);
+  // que TabLoteDosisUnica.jsx (estadoMibgLote, ver helpers/mibgLote.js: antes
+  // cada pantalla tenía su propia lógica y divergieron, auditoría #12).
+  // !anulaciones.has(u.id): anular la administración es independiente de
+  // anular el lote (corrección de diseño posterior) -- el lote vuelve a
+  // "disponible" apenas se anula la acta que lo usaba, sin tocar el lote.
+  // Filtra por la sede elegida en el FORMULARIO (sedeId), no por
+  // usuario.sede -- admin puede cambiarla.
+  const usoPorLoteId = useMemo(() => new Map(mibgI131.filter((u) => !anulaciones.has(u.id)).map((u) => [u.mibgLoteId, u])), [mibgI131, anulaciones]);
   const lotesMibgDisponibles = useMemo(
     () => mibgLotes.filter((l) => (l.isotopoId || "mibg") === "mibg" && l.sedeId === sedeId && estadoMibgLote(l.id, { anulaciones, usoPorLoteId }) === "disponible")
       .sort((a, b) => tsMillis(b.fecha) - tsMillis(a.fecha)),
@@ -166,8 +180,8 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
   // agnóstico de isótopo). Reusa pacientesTodas/mibgLotes, ya escuchados
   // arriba -- ningún listener nuevo.
   const usoLutecioPorLoteId = useMemo(
-    () => new Map(pacientesTodas.filter((p) => p.isotopoId === "lu177" && p.loteDosisUnicaId).map((p) => [p.loteDosisUnicaId, p])),
-    [pacientesTodas]
+    () => new Map(pacientesTodas.filter((p) => p.isotopoId === "lu177" && p.loteDosisUnicaId && !anulaciones.has(p.id)).map((p) => [p.loteDosisUnicaId, p])),
+    [pacientesTodas, anulaciones]
   );
   const lotesLutecioDisponibles = useMemo(
     () => mibgLotes.filter((l) => l.isotopoId === "lutecio177" && l.sedeId === sedeId && estadoMibgLote(l.id, { anulaciones, usoPorLoteId: usoLutecioPorLoteId }) === "disponible")
@@ -186,28 +200,44 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
 
   async function confirmarAnulacion(acta, motivo) {
     try {
-      // Lutecio-177 vinculado a un lote (Libro 4): anular la acta tiene que
-      // anular TAMBIÉN el lote, mismo motivo/mecanismo que MIBG (auditoría,
-      // #2) -- si no, el lote queda "usado" para siempre (id determinístico
-      // lote_${loteId} ya ocupado) sin aparecer nunca más como disponible.
-      if (acta.tipo === "paciente" && acta.isotopoId === "lu177" && acta.loteDosisUnicaId) {
-        await anularActaConLote(acta, acta.loteDosisUnicaId, motivo, usuario);
-        onToast("Lutecio-177 anulado (el lote también quedó anulado, no se reutiliza). Para corregir: registrá el lote de nuevo en Libro 4 y cargá el acta correcta acá.", "info", 10000);
-      } else {
-        await anularActaTransaction(acta, motivo, usuario);
-        onToast("Registro anulado", "info", 6000);
-      }
+      // Anular la administración a un paciente (MIBG/Lutecio-177 incluidos)
+      // es independiente de anular el lote -- son dos hechos distintos (el
+      // lote es la llegada del vial, la acta es la dosis realmente
+      // inyectada). El lote NO se toca acá: sigue válido y, apenas se anula
+      // esta acta, vuelve a aparecer "disponible" en el picker (ver
+      // usoPorLoteId/usoLutecioPorLoteId más arriba), listo para
+      // reasignarlo con el dato de dosis corregido.
+      await anularActaTransaction(acta, motivo, usuario);
+      const tieneLote = acta.mibgLoteId || acta.loteDosisUnicaId;
+      onToast(
+        tieneLote
+          ? "Registro anulado. El lote sigue siendo válido y quedó disponible para reasignar (a este paciente u otro) con el dato de dosis corregido."
+          : "Registro anulado",
+        "info", tieneLote ? 10000 : 6000
+      );
       setMAnular(null);
       // Precarga el formulario con los mismos datos para corregir sólo lo
-      // que estaba mal, en vez de tipear todo de nuevo -- salvo el lote de
-      // Lutecio-177 (quedó anulado, no se puede reelegir: hay que registrar
-      // uno nuevo en Libro 4 primero).
+      // que estaba mal, en vez de tipear todo de nuevo. i131_mibg es el
+      // primer subtipo de I-131 con botón Anular en Libro 2 (antes limitado
+      // a tipo:"paciente") -- necesita su propia rama, no la reconoce el
+      // criterio isotopoId de abajo (los 6 subtipos de I-131 no tienen ese
+      // campo, distinguen por tipo).
       setSedeId(acta.sedeId); setFichaNro(acta.pacienteFicha || ""); setNombre(acta.pacienteNombre); setDni(acta.pacienteDni);
       setPeso(String(acta.peso ?? "")); setTalla(String(acta.talla ?? "")); setEstudio(acta.estudio || "");
-      const iso = acta.isotopoId || "tc99m";
-      setMostrarIsotopo(iso !== "tc99m"); setIsotopoId(iso); setMedicoResponsable(acta.medicoResponsable || "");
-      setFarmId(acta.farmId || ""); setLote(acta.lote); setMci(String(acta.mciAdministrados ?? ""));
       setObs(acta.observacion || "");
+      if (acta.tipo === "i131_mibg") {
+        setMostrarIsotopo(true); setIsotopoId("i131"); setTipoI131("mibg");
+        setMibgLoteSeleccionado(acta.mibgLoteId || "");
+        setActividadAdministrada(String(acta.actividadAdministrada ?? ""));
+      } else {
+        const iso = acta.isotopoId || "tc99m";
+        setMostrarIsotopo(iso !== "tc99m"); setIsotopoId(iso); setMedicoResponsable(acta.medicoResponsable || "");
+        setFarmId(acta.farmId || ""); setLote(acta.lote); setMci(String(acta.mciAdministrados ?? ""));
+        if (iso === "lu177") {
+          setLutecioLoteSeleccionado(acta.loteDosisUnicaId || "");
+          setActividadAdministrada(String(acta.mciAdministrados ?? ""));
+        }
+      }
       setMostrarForm(true);
     } catch (e) {
       onToast(e.message, "error");
@@ -290,11 +320,17 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
         // una transacción real -- puede fallar de verdad si otra técnica
         // usó el mismo lote un instante antes. El toast de éxito espera a
         // que la transacción confirme, en vez de mostrarse optimista.
-        if (!mibgLoteSeleccionado) return;
+        // actividadCalibrada/volumen se denormalizan del lote como dato de
+        // REFERENCIA (lo que llegó); actividadAdministrada es lo que el
+        // técnico tipeó como realmente inyectado -- casi nunca coinciden
+        // por decaimiento entre la llegada y la administración. Ya no se
+        // copia uno como si fuera el otro.
+        if (!mibgLoteSeleccionado || !actividadAdministrada) return;
         const loteElegido = mibgLotes.find((l) => l.id === mibgLoteSeleccionado);
         if (!loteElegido) return;
         administrarMibgTransaction(mibgLoteSeleccionado, {
           ...base, numeroLote: loteElegido.numeroLote, actividadCalibrada: loteElegido.actividadCalibrada, volumen: loteElegido.volumen,
+          actividadAdministrada: parseFloat(actividadAdministrada) || 0,
         })
           .then(() => onToast("MIBG registrado — consultalo en la pestaña Gestión I-131"))
           .catch((e) => onToast(e.message || "No se pudo registrar la administración de MIBG", "error"));
@@ -308,18 +344,21 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
     }
     if (esLutecio) {
       // Libro 4: mismo rigor que MIBG -- el lote se elige de un picker
-      // vinculado (ya no texto libre) y la dosis administrada es la
-      // actividadCalibrada COMPLETA del lote (dosis única, no se retipea).
-      // Transacción real por el mismo motivo que MIBG: puede fallar de
-      // verdad si otra técnica usó el mismo lote un instante antes.
-      if (!lutecioLoteSeleccionado || !medicoResponsable.trim()) return;
+      // vinculado (ya no texto libre). mciAdministrados es lo que el
+      // técnico tipeó como realmente inyectado; actividadCalibrada se
+      // denormaliza del lote sólo como dato de REFERENCIA (lo que llegó) --
+      // casi nunca coinciden por decaimiento, ya no se copia uno como si
+      // fuera el otro. Transacción real por el mismo motivo que MIBG: puede
+      // fallar de verdad si otra técnica usó el mismo lote un instante antes.
+      if (!lutecioLoteSeleccionado || !medicoResponsable.trim() || !actividadAdministrada) return;
       const loteElegido = mibgLotes.find((l) => l.id === lutecioLoteSeleccionado);
       if (!loteElegido) return;
       administrarLutecioTransaction(lutecioLoteSeleccionado, {
         sedeId, sedeNombre: catalogo.sedes[sedeId]?.nombre,
         pacienteFicha: fichaNro.trim(), pacienteNombre: nombre.trim(), pacienteDni: dni.trim(),
         peso: parseFloat(peso) || 0, talla: parseFloat(talla) || 0,
-        mciAdministrados: loteElegido.actividadCalibrada, isotopoId, lote: loteElegido.numeroLote,
+        mciAdministrados: parseFloat(actividadAdministrada) || 0, actividadCalibrada: loteElegido.actividadCalibrada,
+        isotopoId, lote: loteElegido.numeroLote,
         medicoResponsable: medicoResponsable.trim(),
         usuarioNombre: usuario.nombre, usuarioEmail: usuario.email, observacion: obs.trim(),
       })
@@ -400,14 +439,17 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
   }
 
   // Misma magnitud física (actividad administrada) para Tc-99m/Lutecio
-  // (mciAdministrados, siempre mCi), los 5 tipos de I-131 con actividad
-  // (actividadAdministrada, mCi para dosis/ablativa, µCi para los 3
-  // diagnósticos) y MIBG (actividadCalibrada, mCi -- denormalizada del lote
-  // al administrar, no se retipea) -- se unifica en una sola columna con su
-  // unidad real, no un sufijo "mCi" fijo. unidadActividad ausente (actas
-  // i131_dosis anteriores a este cambio) se interpreta como mCi, mismo
-  // criterio que isotopoId ausente = tc99m. Barrido corporal no administra
-  // nada nuevo.
+  // (mciAdministrados, siempre mCi, tipeado a mano) y los 6 tipos de I-131
+  // con actividad (actividadAdministrada, mCi para dosis/ablativa/MIBG, µCi
+  // para los 3 diagnósticos, todos tipeados a mano) -- se unifica en una
+  // sola columna con su unidad real, no un sufijo "mCi" fijo. unidadActividad
+  // ausente (actas i131_dosis anteriores a este cambio) se interpreta como
+  // mCi, mismo criterio que isotopoId ausente = tc99m. El tercer fallback
+  // (actividadCalibrada del lote) es sólo para actas de MIBG previas a que
+  // existiera actividadAdministrada como campo separado -- ver corrección de
+  // diseño: antes se copiaba la actividad de llegada del lote como si fuera
+  // lo administrado, ahora son dos campos distintos. Barrido corporal no
+  // administra nada nuevo.
   function dosisRegistro(a) {
     if (a.mciAdministrados != null) return { valor: a.mciAdministrados, unidad: "mCi" };
     if (a.actividadAdministrada != null) return { valor: a.actividadAdministrada, unidad: a.unidadActividad || "mCi" };
@@ -429,7 +471,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
         <div><span className="text-gray-400">Volumen: </span><span className="text-gray-700">{lote.volumen} mL</span></div>
         <div><span className="text-gray-400">Calibración: </span><span className="text-gray-700">{fmtTs(lote.fechaHoraCalibracion)}</span></div>
         <div><span className="text-gray-400">Vencimiento: </span><span className="text-gray-700">{fmtF(lote.fechaVencimiento)}</span></div>
-        <div><span className="text-gray-400">Conformidad: </span><span className={lote.conformidad ? "text-gray-700" : "text-red-600 font-semibold"}>{lote.conformidad ? "Sí" : "No"}</span></div>
+        <div><span className="text-gray-400">Conformidad: </span><span className={textoConformidad(lote).clase}>{textoConformidad(lote).texto}</span></div>
         <div><span className="text-gray-400">Registrado por: </span><span className="text-gray-700">{lote.usuarioNombre}</span></div>
         {lote.observacion && (
           <div className="col-span-2 sm:col-span-3"><span className="text-gray-400">Observación: </span><span className="text-gray-700 italic">{lote.observacion}</span></div>
@@ -477,7 +519,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
           </td>
           <td className="px-3 py-2.5 text-xs text-gray-500">{a.usuarioNombre}</td>
           <td className="px-3 py-2.5 text-right">
-            {esAdmin && a.tipo === "paciente" && !anulacion && (
+            {esAdmin && (a.tipo === "paciente" || a.tipo === "i131_mibg") && !anulacion && (
               <button onClick={() => setMAnular(a)} className="text-xs text-orange-500 hover:text-orange-700 font-semibold px-2 py-1 rounded-lg hover:bg-orange-50 transition min-h-11 md:min-h-0">
                 Anular
               </button>
@@ -526,7 +568,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
         {expandido && lote && (
           <div className="bg-gray-50 rounded-xl p-3 mt-1"><DetalleLote lote={lote} /></div>
         )}
-        {esAdmin && a.tipo === "paciente" && !anulacion && (
+        {esAdmin && (a.tipo === "paciente" || a.tipo === "i131_mibg") && !anulacion && (
           <div className="flex justify-end mt-0.5">
             <button onClick={() => setMAnular(a)} className="text-xs text-orange-500 hover:text-orange-700 font-semibold px-2 py-1 rounded-lg hover:bg-orange-50 transition min-h-11 md:min-h-0">
               Anular
@@ -553,7 +595,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
       // y cualquier otro registro sin este dato), ver loteVinculadoDe.
       lote?.numeroLote ?? "—", lote?.actividadCalibrada ?? "—", lote?.volumen ?? "—",
       lote ? fmtTs(lote.fechaHoraCalibracion) : "—", lote ? fmtF(lote.fechaVencimiento) : "—",
-      lote?.proveedor ?? "—", lote ? (lote.conformidad ? "Sí" : "No") : "—"];
+      lote?.proveedor ?? "—", lote ? textoConformidad(lote).texto : "—"];
   }
 
   function descargarCSV(lista, nombreArchivo) {
@@ -791,32 +833,39 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
               </>
             )}
             {esI131 && tipoI131Actual.categoria === "mibg" && (
-              <div className="sm:col-span-2">
+              <div className="sm:col-span-2 flex flex-col gap-3">
                 <Sel label="Lote de MIBG disponible" value={mibgLoteSeleccionado} onChange={(e) => setMibgLoteSeleccionado(e.target.value)}>
                   <option value="">Seleccionar lote...</option>
                   {lotesMibgDisponibles.map((l) => (
-                    <option key={l.id} value={l.id}>{l.numeroLote} · {l.actividadCalibrada} mCi en {l.volumen} mL · Calibrado {fmtTs(l.fechaHoraCalibracion)}</option>
+                    <option key={l.id} value={l.id}>{l.numeroLote} · {l.actividadCalibrada} mCi en {l.volumen} mL (llegada) · Calibrado {fmtTs(l.fechaHoraCalibracion)}</option>
                   ))}
                 </Sel>
                 {lotesMibgDisponibles.length === 0 && (
-                  <p className="text-xs text-orange-500 mt-1">No hay lotes de MIBG disponibles en esta sede -- registrá uno nuevo en la pestaña "MIBG" de Gestión I-131.</p>
+                  <p className="text-xs text-orange-500 -mt-2">No hay lotes de MIBG disponibles en esta sede -- registrá uno nuevo en la pestaña "MIBG" de Gestión I-131.</p>
                 )}
+                {/* Distinto de la actividad de llegada del lote (arriba) --
+                    casi siempre difiere por decaimiento entre la llegada y el
+                    momento real de la administración. Se tipea a mano, nunca
+                    se copia sola (ver guardar()). */}
+                <Input label="Dosis administrada (mCi)" type="number" min={0} step={0.1} value={actividadAdministrada} onChange={(e) => setActividadAdministrada(e.target.value)} placeholder="Ej: 1.5 (suele ser menor a la actividad de llegada)" />
               </div>
             )}
             {esLutecio && (
               // Libro 4: mismo patrón que MIBG -- lote vinculado (ya no texto
-              // libre), dosis única, no pasa por el catálogo de
-              // radiofármacos/stock (ver guardar()).
-              <div className="sm:col-span-2">
+              // libre), no pasa por el catálogo de radiofármacos/stock (ver
+              // guardar()). Dosis administrada se tipea a mano, distinta de
+              // la actividad de llegada del lote.
+              <div className="sm:col-span-2 flex flex-col gap-3">
                 <Sel label="Lote de Lutecio-177 disponible" value={lutecioLoteSeleccionado} onChange={(e) => setLutecioLoteSeleccionado(e.target.value)}>
                   <option value="">Seleccionar lote...</option>
                   {lotesLutecioDisponibles.map((l) => (
-                    <option key={l.id} value={l.id}>{l.numeroLote} · {l.actividadCalibrada} mCi en {l.volumen} mL · Calibrado {fmtTs(l.fechaHoraCalibracion)}</option>
+                    <option key={l.id} value={l.id}>{l.numeroLote} · {l.actividadCalibrada} mCi en {l.volumen} mL (llegada) · Calibrado {fmtTs(l.fechaHoraCalibracion)}</option>
                   ))}
                 </Sel>
                 {lotesLutecioDisponibles.length === 0 && (
-                  <p className="text-xs text-orange-500 mt-1">No hay lotes de Lutecio-177 disponibles en esta sede -- registrá uno nuevo en "Libro 4 — Lutecio-177" (Actas ARN).</p>
+                  <p className="text-xs text-orange-500 -mt-2">No hay lotes de Lutecio-177 disponibles en esta sede -- registrá uno nuevo en "Libro 4 — Lutecio-177" (Actas ARN).</p>
                 )}
+                <Input label="Dosis administrada (mCi)" type="number" min={0} step={0.1} value={actividadAdministrada} onChange={(e) => setActividadAdministrada(e.target.value)} placeholder="Ej: 1.5 (suele ser menor a la actividad de llegada)" />
               </div>
             )}
             {!esI131 && !esLutecio && (
@@ -840,11 +889,11 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
               !fichaNro.trim() || !nombre.trim() || !dni.trim() ||
               (esI131
                 ? ((tipoI131Actual.requierePermiso && !puedeCargarDosisI131) ||
-                   (tipoI131Actual.categoria !== "barrido" && tipoI131Actual.categoria !== "mibg" && !actividadAdministrada) ||
+                   (tipoI131Actual.categoria !== "barrido" && !actividadAdministrada) ||
                    (tipoI131Actual.categoria === "dosis" && !lote.trim()) ||
                    (tipoI131Actual.categoria === "mibg" && !mibgLoteSeleccionado))
                 : esLutecio
-                  ? (!medicoResponsable.trim() || !lutecioLoteSeleccionado)
+                  ? (!medicoResponsable.trim() || !lutecioLoteSeleccionado || !actividadAdministrada)
                   : (!mci || !estudio || (estudio === "Otro" && !estudioOtro.trim()) || !lote.trim() || !farmId))
             }>Guardar registro</Btn>
           </div>

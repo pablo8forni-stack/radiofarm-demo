@@ -1268,7 +1268,12 @@ function mibgActaBase(loteId, overrides = {}) {
   return {
     tipo: "i131_mibg", fecha: serverTimestamp(), sedeId: SEDE_A,
     pacienteFicha: "9001", pacienteNombre: "Paciente MIBG", pacienteDni: "1",
-    mibgLoteId: loteId, actividadCalibrada: 150,
+    mibgLoteId: loteId,
+    // actividadCalibrada: referencia denormalizada del lote (lo que llegó).
+    // actividadAdministrada: lo que el técnico tipeó como realmente
+    // inyectado -- corrección de diseño, antes se copiaba uno como si fuera
+    // el otro.
+    actividadCalibrada: 150, actividadAdministrada: 90,
     ...overrides,
   };
 }
@@ -1284,6 +1289,18 @@ test("control positivo: técnico SIN accesoTerapiaI131 SÍ puede administrar MIB
   // Y cualquier técnico de la sede puede LEERLA de vuelta, sin accesoTerapiaI131.
   const releido = await getDoc(ref);
   assert.ok(releido.exists());
+});
+
+// Corrección de diseño posterior a la auditoría v4: antes se copiaba
+// actividadCalibrada (lo que llegó) como si fuera lo administrado. Ahora son
+// dos campos, los dos obligatorios.
+test("i131_mibg sin actividadAdministrada es rechazado, aunque tenga actividadCalibrada", async () => {
+  await loguearComo(PERSONAS.admin);
+  const lote = await addDoc(collection(db, "mibg_lote"), mibgLoteBase({ usuarioEmail: PERSONAS.admin.email, usuarioNombre: "Admin" }));
+  const { actividadAdministrada: _actividadAdministrada, ...sinActividadAdministrada } = mibgActaBase(lote.id, { usuarioEmail: PERSONAS.admin.email, usuarioNombre: "Admin" });
+  await assertPermissionDenied(() =>
+    setDoc(doc(db, "actas", `mibg_${lote.id}`), sinActividadAdministrada)
+  );
 });
 
 // Auditoría de seguridad, hallazgo #1: la regla validaba que el lote
@@ -1361,36 +1378,36 @@ test("técnico sin rol NO puede anular un lote de MIBG (admin-only, mismo patró
   );
 });
 
-// Auditoría de seguridad, hallazgo #2/#6b: anular un acta MIBG tiene que
-// anular TAMBIÉN el lote (flujo oficial, ver anularActaMibgYLote) -- estos
-// dos tests verifican que la regla no deja anular el LOTE solo, dejando
-// viva la acta que lo usó, cuando alguien se salta el flujo oficial vía SDK.
+// Corrección de diseño posterior a la auditoría v4: anular la administración
+// a un paciente y anular el LOTE pasan a ser acciones INDEPENDIENTES (antes
+// de esta corrección, una cascada obligatoria las ataba) -- el lote es la
+// llegada del vial (fecha, actividad de llegada), la acta es la dosis
+// realmente inyectada, dos hechos distintos. Ninguna de las dos anulaciones
+// depende de la otra, en ningún orden.
 function anulacionDoc(id, sedeId, motivo) {
   return { tipo: "anulacion", anulaId: id, sedeId, fecha: serverTimestamp(), motivo, usuarioNombre: "Admin", usuarioEmail: PERSONAS.admin.email };
 }
 
-test("anular directamente un lote de MIBG ya usado, sin haber anulado antes la acta, es rechazado", async () => {
+test("control positivo: anular un lote de MIBG YA USADO se acepta directamente, sin anular la acta primero", async () => {
   await loguearComo(PERSONAS.admin);
   const lote = await addDoc(collection(db, "mibg_lote"), mibgLoteBase({ usuarioEmail: PERSONAS.admin.email, usuarioNombre: "Admin" }));
   await setDoc(doc(db, "actas", `mibg_${lote.id}`), mibgActaBase(lote.id, { usuarioEmail: PERSONAS.admin.email, usuarioNombre: "Admin" }));
 
-  await assertPermissionDenied(() =>
-    setDoc(doc(db, "actas", `anula_${lote.id}`), anulacionDoc(lote.id, SEDE_A, "Intento de anular sólo el lote"))
-  );
-});
-
-test("control positivo: anular un lote de MIBG ya usado SÍ se acepta si la acta que lo usó ya fue anulada primero", async () => {
-  await loguearComo(PERSONAS.admin);
-  const lote = await addDoc(collection(db, "mibg_lote"), mibgLoteBase({ usuarioEmail: PERSONAS.admin.email, usuarioNombre: "Admin" }));
-  await setDoc(doc(db, "actas", `mibg_${lote.id}`), mibgActaBase(lote.id, { usuarioEmail: PERSONAS.admin.email, usuarioNombre: "Admin" }));
-
-  // Paso 1: anular la acta (anularActaConLote lo hace primero).
-  await setDoc(doc(db, "actas", `anula_mibg_${lote.id}`), anulacionDoc(`mibg_${lote.id}`, SEDE_A, "Test"));
-  // Paso 2: recién ahora se puede anular el lote.
   const ref = doc(db, "actas", `anula_${lote.id}`);
-  await setDoc(ref, anulacionDoc(lote.id, SEDE_A, "Test"));
+  await setDoc(ref, anulacionDoc(lote.id, SEDE_A, "Lote mal cargado -- la administración sigue siendo válida"));
   const snap = await getDoc(ref);
   assert.ok(snap.exists());
+});
+
+test("control positivo: anular la acta de MIBG NO anula el lote (quedan independientes)", async () => {
+  await loguearComo(PERSONAS.admin);
+  const lote = await addDoc(collection(db, "mibg_lote"), mibgLoteBase({ usuarioEmail: PERSONAS.admin.email, usuarioNombre: "Admin" }));
+  await setDoc(doc(db, "actas", `mibg_${lote.id}`), mibgActaBase(lote.id, { usuarioEmail: PERSONAS.admin.email, usuarioNombre: "Admin" }));
+
+  await setDoc(doc(db, "actas", `anula_mibg_${lote.id}`), anulacionDoc(`mibg_${lote.id}`, SEDE_A, "Dosis mal cargada, se corrige"));
+
+  const loteAnulaSnap = await getDoc(doc(db, "actas", `anula_${lote.id}`));
+  assert.equal(loteAnulaSnap.exists(), false, "el lote no debería quedar anulado sólo porque se anuló la acta que lo usó");
 });
 
 // Libro 4 -- Lutecio-177: mismo lote de dosis única que MIBG (misma
@@ -1398,14 +1415,19 @@ test("control positivo: anular un lote de MIBG ya usado SÍ se acepta si la acta
 // "usa" es el 'paciente' de siempre (isotopoId 'lu177'), con su propio
 // namespace de id determinístico -- lote_${loteId}, campo loteDosisUnicaId --
 // para no compartir el namespace mibg_${loteId} ya usado por MIBG en
-// producción. Mismas garantías: bypass del id, sede, anulado, doble uso,
-// cascada de anulación.
+// producción. Mismas garantías: bypass del id, sede, anulado, doble uso.
+// Anulación del lote y de la acta son independientes (ver anulacionDoc,
+// arriba, en el bloque de MIBG).
 function lutecioActaBase(loteId, overrides = {}) {
   return {
     tipo: "paciente", fecha: serverTimestamp(), sedeId: SEDE_A, isotopoId: "lu177",
     pacienteFicha: "9002", pacienteNombre: "Paciente Lutecio", pacienteDni: "2",
-    medicoResponsable: "Dra. Test", mciAdministrados: 150, lote: "LU177-TEST",
-    loteDosisUnicaId: loteId,
+    medicoResponsable: "Dra. Test",
+    // mciAdministrados: lo que el técnico tipeó como realmente inyectado.
+    // actividadCalibrada: referencia denormalizada del lote (lo que llegó) --
+    // corrección de diseño, antes no existía este segundo campo para Lutecio.
+    mciAdministrados: 90, actividadCalibrada: 150,
+    lote: "LU177-TEST", loteDosisUnicaId: loteId,
     ...overrides,
   };
 }
@@ -1417,6 +1439,19 @@ test("control positivo: técnico SIN accesoTerapiaI131 SÍ puede administrar Lut
   await setDoc(ref, lutecioActaBase(lote.id, { usuarioEmail: PERSONAS.tecnicoA.email, usuarioNombre: PERSONAS.tecnicoA.nombre }));
   const snap = await getDoc(ref);
   assert.ok(snap.exists());
+});
+
+// Corrección de diseño posterior a la auditoría v4: mismo criterio que MIBG
+// -- actividadCalibrada (referencia del lote) es ahora un campo separado y
+// obligatorio, ya no se confunde con mciAdministrados (lo que el técnico
+// tipeó como realmente inyectado).
+test("acta de Lutecio-177 sin actividadCalibrada es rechazada, aunque tenga mciAdministrados", async () => {
+  await loguearComo(PERSONAS.admin);
+  const lote = await addDoc(collection(db, "mibg_lote"), mibgLoteBase({ isotopoId: "lutecio177", usuarioEmail: PERSONAS.admin.email, usuarioNombre: "Admin" }));
+  const { actividadCalibrada: _actividadCalibrada, ...sinActividadCalibrada } = lutecioActaBase(lote.id, { usuarioEmail: PERSONAS.admin.email, usuarioNombre: "Admin" });
+  await assertPermissionDenied(() =>
+    setDoc(doc(db, "actas", `lote_${lote.id}`), sinActividadCalibrada)
+  );
 });
 
 test("acta de Lutecio-177 con id que no es lote_${loteDosisUnicaId} es rechazada (bypass del id determinístico)", async () => {
@@ -1454,27 +1489,26 @@ test("un lote de Lutecio-177 anulado no se puede administrar", async () => {
   );
 });
 
-test("anular directamente un lote de Lutecio-177 ya usado, sin haber anulado antes la acta, es rechazado", async () => {
-  await loguearComo(PERSONAS.admin);
-  const lote = await addDoc(collection(db, "mibg_lote"), mibgLoteBase({ isotopoId: "lutecio177", usuarioEmail: PERSONAS.admin.email, usuarioNombre: "Admin" }));
-  await setDoc(doc(db, "actas", `lote_${lote.id}`), lutecioActaBase(lote.id, { usuarioEmail: PERSONAS.admin.email, usuarioNombre: "Admin" }));
-  await assertPermissionDenied(() =>
-    setDoc(doc(db, "actas", `anula_${lote.id}`), anulacionDoc(lote.id, SEDE_A, "Intento de anular sólo el lote"))
-  );
-});
-
-test("control positivo: anular un lote de Lutecio-177 ya usado SÍ se acepta si la acta que lo usó ya fue anulada primero", async () => {
+test("control positivo: anular un lote de Lutecio-177 YA USADO se acepta directamente, sin anular la acta primero", async () => {
   await loguearComo(PERSONAS.admin);
   const lote = await addDoc(collection(db, "mibg_lote"), mibgLoteBase({ isotopoId: "lutecio177", usuarioEmail: PERSONAS.admin.email, usuarioNombre: "Admin" }));
   await setDoc(doc(db, "actas", `lote_${lote.id}`), lutecioActaBase(lote.id, { usuarioEmail: PERSONAS.admin.email, usuarioNombre: "Admin" }));
 
-  // Paso 1: anular la acta (anularActaConLote lo hace primero).
-  await setDoc(doc(db, "actas", `anula_lote_${lote.id}`), anulacionDoc(`lote_${lote.id}`, SEDE_A, "Test"));
-  // Paso 2: recién ahora se puede anular el lote.
   const ref = doc(db, "actas", `anula_${lote.id}`);
-  await setDoc(ref, anulacionDoc(lote.id, SEDE_A, "Test"));
+  await setDoc(ref, anulacionDoc(lote.id, SEDE_A, "Lote mal cargado -- la administración sigue siendo válida"));
   const snap = await getDoc(ref);
   assert.ok(snap.exists());
+});
+
+test("control positivo: anular la acta de Lutecio-177 NO anula el lote (quedan independientes)", async () => {
+  await loguearComo(PERSONAS.admin);
+  const lote = await addDoc(collection(db, "mibg_lote"), mibgLoteBase({ isotopoId: "lutecio177", usuarioEmail: PERSONAS.admin.email, usuarioNombre: "Admin" }));
+  await setDoc(doc(db, "actas", `lote_${lote.id}`), lutecioActaBase(lote.id, { usuarioEmail: PERSONAS.admin.email, usuarioNombre: "Admin" }));
+
+  await setDoc(doc(db, "actas", `anula_lote_${lote.id}`), anulacionDoc(`lote_${lote.id}`, SEDE_A, "Dosis mal cargada, se corrige"));
+
+  const loteAnulaSnap = await getDoc(doc(db, "actas", `anula_${lote.id}`));
+  assert.equal(loteAnulaSnap.exists(), false, "el lote no debería quedar anulado sólo porque se anuló la acta que lo usó");
 });
 
 // radioisotopos: mismo criterio que proveedores -- lectura para cualquiera

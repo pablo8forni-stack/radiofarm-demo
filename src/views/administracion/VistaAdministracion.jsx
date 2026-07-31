@@ -17,8 +17,8 @@ export function VistaAdministracion({ catalogo, usuario, esAdmin, onToast }) {
   return (
     <div className="flex flex-col gap-4">
       <div>
-        <h2 className="text-base font-bold text-gray-800">Administración de dosis</h2>
-        <p className="text-xs text-gray-400 mt-0.5">Registro equivalente a los Libros de Actas ARN</p>
+        <h2 className="text-base font-bold text-gray-800">Actas ARN</h2>
+        <p className="text-sm text-gray-400 mt-0.5">Registro regulatorio para la Autoridad Regulatoria Nuclear</p>
       </div>
       {/* Mobile: dropdown en vez de la fila de pestañas -- mismo criterio que
           Configuración: con 4 pestañas la fila fija queda grande/apretada en

@@ -380,17 +380,7 @@ service cloud.firestore {
         (isAdmin() || miRol().sede == d.sedeId) &&
         (d.tipo == 'anulacion'
           ? (isAdmin() && d.anulaId is string && d.anulaId.size() > 0 &&
-             actaId == 'anula_' + d.anulaId &&
-             // Un lote de dosis única (MIBG o Lutecio-177) ya usado sólo se
-             // puede anular junto con la acta que lo usó (nunca dejarla
-             // viva) -- si d.anulaId no es un lote de este tipo, o el lote
-             // nunca se usó, las cláusulas de abajo quedan vacías y no
-             // afectan nada (auditoría, hallazgo #2/#6b; extendido a Lutecio
-             // al agregar Libro 4).
-             (!exists(/databases/$(database)/documents/actas/$('mibg_' + d.anulaId)) ||
-               exists(/databases/$(database)/documents/actas/$('anula_mibg_' + d.anulaId))) &&
-             (!exists(/databases/$(database)/documents/actas/$('lote_' + d.anulaId)) ||
-               exists(/databases/$(database)/documents/actas/$('anula_lote_' + d.anulaId))))
+             actaId == 'anula_' + d.anulaId)
           : d.tipo == 'elucion'
             ? (d.loteGenerador is string && d.loteGenerador.size() > 0 &&
                d.actividadEluida is number && d.actividadEluida > 0 &&
@@ -428,7 +418,15 @@ service cloud.firestore {
                        exists(/databases/$(database)/documents/mibg_lote/$(d.mibgLoteId)) &&
                        get(/databases/$(database)/documents/mibg_lote/$(d.mibgLoteId)).data.sedeId == d.sedeId &&
                        !loteDosisUnicaAnulado(d.mibgLoteId) &&
-                       d.actividadCalibrada is number && d.actividadCalibrada > 0)
+                       // actividadCalibrada: dato de referencia denormalizado
+                       // del lote (lo que llegó). actividadAdministrada: lo
+                       // que el técnico realmente inyectó, tipeado a mano --
+                       // casi nunca coinciden por decaimiento entre la llegada
+                       // y la administración. Son dos hechos distintos, ya no
+                       // se copia uno como si fuera el otro (corrección de
+                       // diseño posterior a la auditoría v4).
+                       d.actividadCalibrada is number && d.actividadCalibrada > 0 &&
+                       d.actividadAdministrada is number && d.actividadAdministrada > 0)
                     : d.tipo == 'i131_vial'
                       ? (tieneAccesoI131() &&
                          d.lote is string && d.lote.size() > 0 &&
@@ -479,7 +477,14 @@ service cloud.firestore {
                              actaId == 'lote_' + d.loteDosisUnicaId &&
                              exists(/databases/$(database)/documents/mibg_lote/$(d.loteDosisUnicaId)) &&
                              get(/databases/$(database)/documents/mibg_lote/$(d.loteDosisUnicaId)).data.sedeId == d.sedeId &&
-                             !loteDosisUnicaAnulado(d.loteDosisUnicaId))))
+                             !loteDosisUnicaAnulado(d.loteDosisUnicaId) &&
+                             // d.mciAdministrados (ya exigido arriba, > 0) es
+                             // lo que el técnico tipeó como realmente
+                             // administrado; actividadCalibrada es el dato de
+                             // referencia denormalizado del lote (lo que
+                             // llegó) -- mismo criterio que MIBG, dos hechos
+                             // distintos.
+                             d.actividadCalibrada is number && d.actividadCalibrada > 0)))
                      : (d.farmId is string && d.farmId.size() > 0 &&
                         d.mciMarcacion is number && d.mciMarcacion > 0))));
     }

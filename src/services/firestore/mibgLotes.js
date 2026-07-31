@@ -1,7 +1,6 @@
 import { addDoc, collection, doc, onSnapshot, query, runTransaction, serverTimestamp, where } from "firebase/firestore";
 import { db } from "../../firebase.js";
 import { conMensajeDeContingencia } from "../../helpers/erroresRed.js";
-import { anularActaTransaction } from "./actas.js";
 
 // Colección de lotes de dosis única -- nombre histórico "mibg_lote" (quedó
 // así a propósito, ver isotopoId más abajo: cambiar el nombre de la
@@ -74,18 +73,15 @@ export function administrarLutecioTransaction(loteId, dataActa) {
   });
 }
 
-// Anular un acta que usó un lote de dosis única tiene que anular TAMBIÉN el
-// lote (dos pasos secuenciales, no una transacción nueva): anularActaTransaction
-// ya sirve para cualquier objeto con .id/.sedeId, sin importar de qué
-// colección viene -- se reusa dos veces. Sin esto, el lote reaparecía como
-// "disponible" en el picker (anulaciones sólo filtraba por el id del ACTA,
-// no del lote) pero la transacción de administrar rechazaba para siempre
-// porque el id determinístico de uso seguía ocupado -- picker y transacción
-// en desacuerdo (auditoría, #2). Si el segundo paso falla (ej. se corta la
-// conexión entre medio), la acta queda anulada pero el lote no todavía --
-// estado recuperable (reintentar), nunca inseguro: el id de uso sigue
-// ocupado de todos modos.
-export async function anularActaConLote(acta, loteId, motivo, usuario) {
-  await anularActaTransaction(acta, motivo, usuario);
-  await anularActaTransaction({ id: loteId, sedeId: acta.sedeId }, motivo, usuario);
-}
+// Anular la administración a un paciente y anular el LOTE son acciones
+// INDEPENDIENTES (corrección de diseño: eran dos hechos distintos que la
+// cascada original trataba como uno solo) -- el lote (llegada del vial:
+// fecha, actividad calibrada) y la administración (Libro 2: dosis
+// realmente inyectada, casi nunca igual a la calibrada por decaimiento) no
+// tienen por qué anularse juntos. Anular sólo la acta usa
+// anularActaTransaction directo (ver TabPacientes.jsx/TabRegistrosI131.jsx)
+// -- el lote queda disponible automáticamente para reasignar, ya que la
+// derivación de "usado" (estadoMibgLote) ignora actas anuladas. Anular sólo
+// el lote (error de ingreso: número de lote mal tipeado, actividad de
+// llegada mal cargada) usa el mismo anularActaTransaction directo desde
+// TabLoteDosisUnica.jsx, sin tocar la acta del paciente.
