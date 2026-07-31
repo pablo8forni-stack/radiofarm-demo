@@ -1431,13 +1431,44 @@ function anulacionDoc(id, sedeId, motivo) {
   return { tipo: "anulacion", anulaId: id, sedeId, fecha: serverTimestamp(), motivo, usuarioNombre: "Admin", usuarioEmail: PERSONAS.admin.email };
 }
 
-test("control positivo: anular un lote de MIBG YA USADO se acepta directamente, sin anular la acta primero", async () => {
+// Hueco real encontrado en producción: anular un lote con una administración
+// ACTIVA dejaba al paciente apuntando a un lote inválido, sin ningún aviso.
+// Ahora se bloquea server-side (ver loteTieneAdministracionActiva en
+// firestore.rules) -- primero hay que anular la acta del paciente en Libro
+// 2, después sí se puede corregir el lote.
+test("un lote de MIBG con administración activa NO se puede anular (el paciente quedaría con un lote inválido)", async () => {
   await loguearComo(PERSONAS.admin);
   const lote = await addDoc(collection(db, "mibg_lote"), mibgLoteBase({ usuarioEmail: PERSONAS.admin.email, usuarioNombre: "Admin" }));
   await setDoc(doc(db, "actas", `mibg_${lote.id}_1`), mibgActaBase(lote.id, { usuarioEmail: PERSONAS.admin.email, usuarioNombre: "Admin" }));
 
+  await assertPermissionDenied(() =>
+    setDoc(doc(db, "actas", `anula_${lote.id}`), anulacionDoc(lote.id, SEDE_A, "Lote mal cargado"))
+  );
+});
+
+// Mismo bloqueo pero con una corrección de por medio (intento 2 activo tras
+// anular el 1) -- confirma que loteTieneAdministracionActiva encuentra el
+// intento activo más alto, no sólo el primero.
+test("un lote de MIBG con intento 2 activo (tras corregir el intento 1) tampoco se puede anular", async () => {
+  await loguearComo(PERSONAS.admin);
+  const lote = await addDoc(collection(db, "mibg_lote"), mibgLoteBase({ usuarioEmail: PERSONAS.admin.email, usuarioNombre: "Admin" }));
+  await setDoc(doc(db, "actas", `mibg_${lote.id}_1`), mibgActaBase(lote.id, { usuarioEmail: PERSONAS.admin.email, usuarioNombre: "Admin" }));
+  await setDoc(doc(db, "actas", `anula_mibg_${lote.id}_1`), anulacionDoc(`mibg_${lote.id}_1`, SEDE_A, "Dosis mal cargada, se corrige"));
+  await setDoc(doc(db, "actas", `mibg_${lote.id}_2`), mibgActaBase(lote.id, { intentoNro: "2", usuarioEmail: PERSONAS.admin.email, usuarioNombre: "Admin" }));
+
+  await assertPermissionDenied(() =>
+    setDoc(doc(db, "actas", `anula_${lote.id}`), anulacionDoc(lote.id, SEDE_A, "Lote mal cargado"))
+  );
+});
+
+test("control positivo: anular un lote de MIBG SÍ se acepta después de anular la administración activa", async () => {
+  await loguearComo(PERSONAS.admin);
+  const lote = await addDoc(collection(db, "mibg_lote"), mibgLoteBase({ usuarioEmail: PERSONAS.admin.email, usuarioNombre: "Admin" }));
+  await setDoc(doc(db, "actas", `mibg_${lote.id}_1`), mibgActaBase(lote.id, { usuarioEmail: PERSONAS.admin.email, usuarioNombre: "Admin" }));
+  await setDoc(doc(db, "actas", `anula_mibg_${lote.id}_1`), anulacionDoc(`mibg_${lote.id}_1`, SEDE_A, "Dosis mal cargada, se corrige"));
+
   const ref = doc(db, "actas", `anula_${lote.id}`);
-  await setDoc(ref, anulacionDoc(lote.id, SEDE_A, "Lote mal cargado -- la administración sigue siendo válida"));
+  await setDoc(ref, anulacionDoc(lote.id, SEDE_A, "Lote mal cargado -- ahora sí, la administración ya está anulada"));
   const snap = await getDoc(ref);
   assert.ok(snap.exists());
 });
@@ -1564,13 +1595,37 @@ test("un lote de Lutecio-177 anulado no se puede administrar", async () => {
   );
 });
 
-test("control positivo: anular un lote de Lutecio-177 YA USADO se acepta directamente, sin anular la acta primero", async () => {
+// Mismo bloqueo que MIBG (ver bloque de arriba), namespace lote_.
+test("un lote de Lutecio-177 con administración activa NO se puede anular (el paciente quedaría con un lote inválido)", async () => {
   await loguearComo(PERSONAS.admin);
   const lote = await addDoc(collection(db, "mibg_lote"), mibgLoteBase({ isotopoId: "lutecio177", usuarioEmail: PERSONAS.admin.email, usuarioNombre: "Admin" }));
   await setDoc(doc(db, "actas", `lote_${lote.id}_1`), lutecioActaBase(lote.id, { usuarioEmail: PERSONAS.admin.email, usuarioNombre: "Admin" }));
 
+  await assertPermissionDenied(() =>
+    setDoc(doc(db, "actas", `anula_${lote.id}`), anulacionDoc(lote.id, SEDE_A, "Lote mal cargado"))
+  );
+});
+
+test("un lote de Lutecio-177 con intento 2 activo (tras corregir el intento 1) tampoco se puede anular", async () => {
+  await loguearComo(PERSONAS.admin);
+  const lote = await addDoc(collection(db, "mibg_lote"), mibgLoteBase({ isotopoId: "lutecio177", usuarioEmail: PERSONAS.admin.email, usuarioNombre: "Admin" }));
+  await setDoc(doc(db, "actas", `lote_${lote.id}_1`), lutecioActaBase(lote.id, { usuarioEmail: PERSONAS.admin.email, usuarioNombre: "Admin" }));
+  await setDoc(doc(db, "actas", `anula_lote_${lote.id}_1`), anulacionDoc(`lote_${lote.id}_1`, SEDE_A, "Dosis mal cargada, se corrige"));
+  await setDoc(doc(db, "actas", `lote_${lote.id}_2`), lutecioActaBase(lote.id, { intentoNro: "2", usuarioEmail: PERSONAS.admin.email, usuarioNombre: "Admin" }));
+
+  await assertPermissionDenied(() =>
+    setDoc(doc(db, "actas", `anula_${lote.id}`), anulacionDoc(lote.id, SEDE_A, "Lote mal cargado"))
+  );
+});
+
+test("control positivo: anular un lote de Lutecio-177 SÍ se acepta después de anular la administración activa", async () => {
+  await loguearComo(PERSONAS.admin);
+  const lote = await addDoc(collection(db, "mibg_lote"), mibgLoteBase({ isotopoId: "lutecio177", usuarioEmail: PERSONAS.admin.email, usuarioNombre: "Admin" }));
+  await setDoc(doc(db, "actas", `lote_${lote.id}_1`), lutecioActaBase(lote.id, { usuarioEmail: PERSONAS.admin.email, usuarioNombre: "Admin" }));
+  await setDoc(doc(db, "actas", `anula_lote_${lote.id}_1`), anulacionDoc(`lote_${lote.id}_1`, SEDE_A, "Dosis mal cargada, se corrige"));
+
   const ref = doc(db, "actas", `anula_${lote.id}`);
-  await setDoc(ref, anulacionDoc(lote.id, SEDE_A, "Lote mal cargado -- la administración sigue siendo válida"));
+  await setDoc(ref, anulacionDoc(lote.id, SEDE_A, "Lote mal cargado -- ahora sí, la administración ya está anulada"));
   const snap = await getDoc(ref);
   assert.ok(snap.exists());
 });

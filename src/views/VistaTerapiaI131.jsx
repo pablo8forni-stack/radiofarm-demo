@@ -20,7 +20,7 @@ import { TabLoteDosisUnica } from "./terapiaI131/TabLoteDosisUnica.jsx";
 // firestore.rules). Comparte componente con Libro 4 -- Lutecio-177 (Actas
 // ARN, VistaAdministracion.jsx), parametrizado por isotopoId; nunca se
 // mezclan en la navegación aunque compartan modelo de datos.
-export function VistaTerapiaI131({ catalogo, usuario, esAdmin, onToast }) {
+export function VistaTerapiaI131({ catalogo, usuario, esAdmin, onToast, onIrAAdministracion }) {
   const puedeVerStock = esAdmin || !!usuario.accesoTerapiaI131;
   const puedeVerAgenda = esAdmin || !!usuario.accesoAgendaI131;
   const TABS = [
@@ -64,6 +64,7 @@ export function VistaTerapiaI131({ catalogo, usuario, esAdmin, onToast }) {
           catalogo={catalogo} usuario={usuario} esAdmin={esAdmin} onToast={onToast}
           isotopoId="mibg" titulo="MIBG" placeholderLote="Ej: MIBG-2026-014"
           descripcion={'131I-MIBG (neuroblastoma/feocromocitoma/paraganglioma) -- cada lote es una dosis completa para un único paciente, se administra al llegar. Sin curva de decaimiento ni balance de volumen: para eso está "Stock de viales", que es otro material. La administración a un paciente se carga en Libro 2, eligiendo "MIBG" como tipo de registro.'}
+          onIrALibro2={onIrAAdministracion}
         />
       )}
       {tab === "agenda" && puedeVerAgenda && <TabAgendaI131 catalogo={catalogo} usuario={usuario} esAdmin={esAdmin} onToast={onToast} />}

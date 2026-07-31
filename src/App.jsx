@@ -64,6 +64,7 @@ function AppAutenticada({ usuario }) {
   const countSolicitudes = solicitudes.length;
   const [navInventario, setNavInventario] = useState(null);
   const [navConfiguracion, setNavConfiguracion] = useState(null);
+  const [navAdministracion, setNavAdministracion] = useState(null);
   const [avisosOn, setAvisosOn] = useState(() => avisosActivados());
 
   // Cambia a la vista Inventario y le pide mostrar una sede puntual --
@@ -80,6 +81,18 @@ function AppAutenticada({ usuario }) {
   function irAConfiguracion(tab) {
     setNavConfiguracion({ tab, token: Date.now() });
     setVista("configuracion");
+  }
+
+  // Mismo patrón -- usado por "Ir a Libro 2" cuando se bloquea la anulación
+  // de un lote de MIBG/Lutecio-177 con una administración activa enganchada
+  // (TabLoteDosisUnica.jsx). `extra` lleva la búsqueda a precargar (DNI del
+  // paciente) para no obligar a buscarlo a mano. Se llama tanto desde
+  // Gestión I-131 (MIBG) como desde Actas ARN > Libro 4 (Lutecio-177) --
+  // en este último caso ya estamos en "administracion", el cambio de vista
+  // es un no-op, pero el token igual dispara el efecto que cambia de sub-tab.
+  function irAAdministracion(tab, extra = {}) {
+    setNavAdministracion({ tab, ...extra, token: Date.now() });
+    setVista("administracion");
   }
 
   async function toggleAvisos() {
@@ -284,8 +297,8 @@ function AppAutenticada({ usuario }) {
         {vista === "inventario" && <VistaInventario catalogo={catalogo} usuario={usuario} esAdmin={esAdmin} onToast={(m, t, d) => setToast({ m, t, d })} navInventario={navInventario} />}
         {vista === "pedidos" && esAdmin && <VistaPedidos catalogo={catalogo} esAdmin={esAdmin} onToast={(m, t, d) => setToast({ m, t, d })} />}
         {vista === "historial" && <VistaHistorial catalogo={catalogo} usuario={usuario} esAdmin={esAdmin} onToast={(m, t, d) => setToast({ m, t, d })} />}
-        {vista === "administracion" && <VistaAdministracion catalogo={catalogo} usuario={usuario} esAdmin={esAdmin} onToast={(m, t, d) => setToast({ m, t, d })} />}
-        {vista === "terapia-i131" && <VistaTerapiaI131 catalogo={catalogo} usuario={usuario} esAdmin={esAdmin} onToast={(m, t, d) => setToast({ m, t, d })} />}
+        {vista === "administracion" && <VistaAdministracion catalogo={catalogo} usuario={usuario} esAdmin={esAdmin} onToast={(m, t, d) => setToast({ m, t, d })} navAdministracion={navAdministracion} onIrAAdministracion={irAAdministracion} />}
+        {vista === "terapia-i131" && <VistaTerapiaI131 catalogo={catalogo} usuario={usuario} esAdmin={esAdmin} onToast={(m, t, d) => setToast({ m, t, d })} onIrAAdministracion={irAAdministracion} />}
         {vista === "configuracion" && esAdmin && <VistaConfiguracion catalogo={catalogo} usuario={usuario} onToast={(m, t, d) => setToast({ m, t, d })} onIrAInventario={irAInventario} navConfiguracion={navConfiguracion} />}
       </main>
 

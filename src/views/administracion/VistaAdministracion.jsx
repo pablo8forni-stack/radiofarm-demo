@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Sel } from "../../components/ui/Sel.jsx";
 import { TabPacientes } from "./TabPacientes.jsx";
 import { TabMarcacion } from "./TabMarcacion.jsx";
@@ -12,8 +12,19 @@ const TABS = [
   { id: "lutecio", label: "Libro 4 — Lutecio-177" },
 ];
 
-export function VistaAdministracion({ catalogo, usuario, esAdmin, onToast }) {
+// navAdministracion ({tab, busqueda, token}) llega desde App.jsx -- mismo
+// patrón que navConfiguracion. Lo dispara "Ir a Libro 2" desde el bloqueo de
+// anulación de un lote de MIBG/Lutecio-177 (TabLoteDosisUnica.jsx), tanto
+// desde acá mismo (pestaña Lutecio-177) como desde Gestión I-131 (MIBG) --
+// por eso onIrAAdministracion se reenvía también hacia abajo, para que
+// Lutecio-177 pueda pedir el mismo salto sin salir de esta vista.
+export function VistaAdministracion({ catalogo, usuario, esAdmin, onToast, navAdministracion, onIrAAdministracion }) {
   const [tab, setTab] = useState("pacientes");
+
+  useEffect(() => {
+    if (navAdministracion?.tab) setTab(navAdministracion.tab);
+  }, [navAdministracion]);
+
   return (
     <div className="flex flex-col gap-4">
       <div>
@@ -36,7 +47,7 @@ export function VistaAdministracion({ catalogo, usuario, esAdmin, onToast }) {
           </button>
         ))}
       </div>
-      {tab === "pacientes" && <TabPacientes catalogo={catalogo} usuario={usuario} esAdmin={esAdmin} onToast={onToast} />}
+      {tab === "pacientes" && <TabPacientes catalogo={catalogo} usuario={usuario} esAdmin={esAdmin} onToast={onToast} nav={navAdministracion} />}
       {tab === "marcacion" && <TabMarcacion catalogo={catalogo} usuario={usuario} esAdmin={esAdmin} onToast={onToast} />}
       {tab === "elucion" && <TabElucion catalogo={catalogo} usuario={usuario} esAdmin={esAdmin} onToast={onToast} />}
       {tab === "lutecio" && (
@@ -44,6 +55,7 @@ export function VistaAdministracion({ catalogo, usuario, esAdmin, onToast }) {
           catalogo={catalogo} usuario={usuario} esAdmin={esAdmin} onToast={onToast}
           isotopoId="lutecio177" titulo="Lutecio-177" placeholderLote="Ej: LU177-2026-014"
           descripcion='Lutecio-177 (Teragnosis) -- cada lote es una dosis completa para un único paciente, se administra al llegar. La administración a un paciente se carga en Libro 2, eligiendo Lutecio-177 como isótopo.'
+          onIrALibro2={onIrAAdministracion}
         />
       )}
     </div>

@@ -285,6 +285,40 @@ service cloud.firestore {
         : intentoNro == '4' ? usoAnuladoDosisUnica(prefijo, loteId, '3')
         : usoAnuladoDosisUnica(prefijo, loteId, '4');
     }
+
+    // Bloqueo de anulación de lote con administración activa: un lote
+    // (mibg_lote) no se puede anular mientras exista una acta ACTIVA (no
+    // anulada) que lo use -- si no, el paciente queda apuntando a un lote
+    // inválido sin ningún aviso. Mismo truco que intentoHabilitado: gracias
+    // a la progresión estrictamente secuencial, sólo el intento EXISTENTE
+    // más alto puede estar activo (todos los anteriores ya se anularon por
+    // inducción para poder crear el siguiente) -- alcanza con encontrar ese
+    // intento (descendiendo 5..1, corta en el primero que existe) y mirar
+    // si está anulado, sin revisar los otros. Costo real: 1 exists() por
+    // cada intento vacío que se descarta + 1 exists() extra sólo para el
+    // que efectivamente existe -- nunca 2 por intento como en el primer
+    // diseño descartado de arriba.
+    function intentoMasAltoActivo(prefijo, loteId) {
+      return exists(/databases/$(database)/documents/actas/$(prefijo + loteId + '_5'))
+        ? !exists(/databases/$(database)/documents/actas/$('anula_' + prefijo + loteId + '_5'))
+        : exists(/databases/$(database)/documents/actas/$(prefijo + loteId + '_4'))
+          ? !exists(/databases/$(database)/documents/actas/$('anula_' + prefijo + loteId + '_4'))
+          : exists(/databases/$(database)/documents/actas/$(prefijo + loteId + '_3'))
+            ? !exists(/databases/$(database)/documents/actas/$('anula_' + prefijo + loteId + '_3'))
+            : exists(/databases/$(database)/documents/actas/$(prefijo + loteId + '_2'))
+              ? !exists(/databases/$(database)/documents/actas/$('anula_' + prefijo + loteId + '_2'))
+              : exists(/databases/$(database)/documents/actas/$(prefijo + loteId + '_1'))
+                ? !exists(/databases/$(database)/documents/actas/$('anula_' + prefijo + loteId + '_1'))
+                : usoActivoLegacyDosisUnica(prefijo, loteId);
+    }
+    // isotopoId decide qué namespace de acta revisar -- 'lutecio177' usa
+    // lote_, cualquier otro valor (incluido 'mibg'/ausente, docs viejos) usa
+    // mibg_ (mismo criterio que TIPO_USO/CAMPO_LOTE_ID en TabLoteDosisUnica.jsx).
+    function loteTieneAdministracionActiva(loteId) {
+      return get(/databases/$(database)/documents/mibg_lote/$(loteId)).data.isotopoId == 'lutecio177'
+        ? intentoMasAltoActivo('lote_', loteId)
+        : intentoMasAltoActivo('mibg_', loteId);
+    }
     function mibgLoteValido() {
       let d = request.resource.data;
       return d.usuarioEmail == request.auth.token.email &&
@@ -423,7 +457,15 @@ service cloud.firestore {
         (isAdmin() || miRol().sede == d.sedeId) &&
         (d.tipo == 'anulacion'
           ? (isAdmin() && d.anulaId is string && d.anulaId.size() > 0 &&
-             actaId == 'anula_' + d.anulaId)
+             actaId == 'anula_' + d.anulaId &&
+             // Sólo aplica el chequeo si anulaId es un lote de dosis única
+             // (MIBG/Lutecio-177) -- para anular una acta común (paciente,
+             // marcación, elución, etc.) el || corta acá y no se paga nada
+             // extra. Ver loteTieneAdministracionActiva arriba: un lote no
+             // se puede anular mientras tenga una administración activa
+             // enganchada (quedaría un paciente apuntando a un lote inválido).
+             (!exists(/databases/$(database)/documents/mibg_lote/$(d.anulaId)) ||
+               !loteTieneAdministracionActiva(d.anulaId)))
           : d.tipo == 'elucion'
             ? (d.loteGenerador is string && d.loteGenerador.size() > 0 &&
                d.actividadEluida is number && d.actividadEluida > 0 &&

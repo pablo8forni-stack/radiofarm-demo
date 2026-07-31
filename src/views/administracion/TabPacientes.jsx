@@ -64,7 +64,7 @@ const TIPOS_I131 = [
   { id: "capt_centellograma", label: "Captación y Centellograma", categoria: "diagnostico", requierePermiso: true, fn: addActaI131CaptacionCentellograma },
 ];
 
-export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
+export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
   const [pacientesTodas, setPacientesTodas] = useState([]);
   const [ablativaI131, setAblativaI131] = useState([]);
   const [barridosI131, setBarridosI131] = useState([]);
@@ -146,6 +146,18 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast }) {
   // en tiempo real: un lote usado por otra técnica desaparece para todos al
   // instante, sin importar el día (ver lotesMibgDisponibles).
   useEffect(() => listenMibgLotes(setMibgLotes, { esAdmin, sedeId: usuario.sede }), []);
+
+  // nav ({busqueda, token}) llega desde "Ir a Libro 2" (bloqueo de anulación
+  // de un lote de MIBG/Lutecio-177 con administración activa,
+  // TabLoteDosisUnica.jsx) -- limpia los filtros de fecha/sede (la
+  // administración puede ser de cualquier día/sede) y precarga el buscador
+  // con el DNI del paciente, para no obligar a buscarlo a mano.
+  useEffect(() => {
+    if (!nav?.token) return;
+    setFiltroFecha("");
+    setFiltroSede("");
+    setBusq(nav.busqueda || "");
+  }, [nav?.token]);
 
   // Cada colección ya viene ordenada desc por fecha desde el listener, así
   // que sólo hace falta mezclar y volver a ordenar, no reordenar cada una.

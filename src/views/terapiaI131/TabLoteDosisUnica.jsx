@@ -3,6 +3,7 @@ import { Badge } from "../../components/ui/Badge.jsx";
 import { Btn } from "../../components/ui/Btn.jsx";
 import { Input } from "../../components/ui/Input.jsx";
 import { Sel } from "../../components/ui/Sel.jsx";
+import { Modal } from "../../components/ui/Modal.jsx";
 import { ModalAnularActa } from "../../components/actas/ModalAnularActa.jsx";
 import { fmtF, fmtTs } from "../../helpers/formato.js";
 import { sedesActivas } from "../../helpers/stock.js";
@@ -40,11 +41,12 @@ const CAMPO_LOTE_ID = { mibg: "mibgLoteId", lutecio177: "loteDosisUnicaId" };
 // contador): un lote deja de estarlo apenas existe un acta no anulada que lo
 // usa, o si el lote mismo se anula -- ambos vía listeners en vivo, nunca
 // queda "vencido" por refrescar la pantalla.
-export function TabLoteDosisUnica({ catalogo, usuario, esAdmin, onToast, isotopoId, titulo, descripcion, placeholderLote }) {
+export function TabLoteDosisUnica({ catalogo, usuario, esAdmin, onToast, isotopoId, titulo, descripcion, placeholderLote, onIrALibro2 }) {
   const [lotesTodos, setLotesTodos] = useState([]);
   const [usosRaw, setUsosRaw] = useState([]);
   const [anulacionesRaw, setAnulacionesRaw] = useState([]);
   const [mAnular, setMAnular] = useState(null);
+  const [loteBloqueado, setLoteBloqueado] = useState(null);
   const [filtroSede, setFiltroSede] = useState(usuario.sede);
   const [mostrarForm, setMostrarForm] = useState(false);
   const [form, setForm] = useState(VACIO);
@@ -84,7 +86,18 @@ export function TabLoteDosisUnica({ catalogo, usuario, esAdmin, onToast, isotopo
     [lotes, filtroSede]
   );
 
+  // Doble chequeo con usoPorLoteId (además del gate en el botón "Anular" más
+  // abajo): la regla server-side es la garantía real, esto es sólo para un
+  // mensaje amigable si el estado cambió mientras el modal estaba abierto
+  // (alguien administró el lote en el ínterin) -- usoPorLoteId es reactivo
+  // (listener en vivo), así que ya refleja ese cambio para cuando se confirma.
   async function confirmarAnulacion(lote, motivo) {
+    const uso = usoPorLoteId.get(lote.id);
+    if (uso) {
+      onToast(`Este lote tiene una administración activa (Paciente: ${uso.pacienteNombre}, ${fmtTs(uso.fecha)}) -- anulá primero ese registro en Libro 2.`, "error", 8000);
+      setMAnular(null);
+      return;
+    }
     try {
       await anularActaTransaction(lote, motivo, usuario);
       onToast("Lote anulado", "info", 6000);
@@ -92,6 +105,12 @@ export function TabLoteDosisUnica({ catalogo, usuario, esAdmin, onToast, isotopo
     } catch (e) {
       onToast(e.message, "error");
     }
+  }
+
+  function pedirAnulacion(lote) {
+    const uso = usoPorLoteId.get(lote.id);
+    if (uso) { setLoteBloqueado({ lote, uso }); return; }
+    setMAnular(lote);
   }
 
   async function guardar() {
@@ -206,7 +225,7 @@ export function TabLoteDosisUnica({ catalogo, usuario, esAdmin, onToast, isotopo
                 <div className="text-xs text-gray-400">{l.usuarioNombre}</div>
                 {esAdmin && estadoDe(l) !== "anulado" && (
                   <div className="flex justify-end mt-0.5">
-                    <button onClick={() => setMAnular(l)} className="text-xs text-orange-500 hover:text-orange-700 font-semibold px-2 py-1 rounded-lg hover:bg-orange-50 transition min-h-11 md:min-h-0">
+                    <button onClick={() => pedirAnulacion(l)} className="text-xs text-orange-500 hover:text-orange-700 font-semibold px-2 py-1 rounded-lg hover:bg-orange-50 transition min-h-11 md:min-h-0">
                       Anular
                     </button>
                   </div>
@@ -227,6 +246,32 @@ export function TabLoteDosisUnica({ catalogo, usuario, esAdmin, onToast, isotopo
           onConfirm={confirmarAnulacion}
           onClose={() => setMAnular(null)}
         />
+      )}
+
+      {/* Bloqueo de anulación con administración activa (ver
+          firestore.rules#loteTieneAdministracionActiva): el paciente no
+          puede quedar apuntando a un lote inválido -- primero hay que anular
+          esa administración en Libro 2, con el atajo de abajo para no tener
+          que buscarla a mano. */}
+      {loteBloqueado && (
+        <Modal open title="No se puede anular" onClose={() => setLoteBloqueado(null)} size="sm">
+          <div className="flex flex-col gap-4">
+            <div className="bg-orange-50 border border-orange-100 rounded-xl px-4 py-3 text-xs text-orange-800">
+              Este lote tiene una administración activa -- Paciente: <span className="font-bold">{loteBloqueado.uso.pacienteNombre}</span>, {fmtTs(loteBloqueado.uso.fecha)}. Anulá primero ese registro en Libro 2 antes de poder corregir el lote.
+            </div>
+            <div className="flex gap-2 justify-end">
+              <Btn variant="outline" onClick={() => setLoteBloqueado(null)}>Cerrar</Btn>
+              {onIrALibro2 && (
+                <Btn onClick={() => {
+                  onIrALibro2("pacientes", { busqueda: loteBloqueado.uso.pacienteDni });
+                  setLoteBloqueado(null);
+                }}>
+                  Ir a Libro 2
+                </Btn>
+              )}
+            </div>
+          </div>
+        </Modal>
       )}
     </div>
   );
