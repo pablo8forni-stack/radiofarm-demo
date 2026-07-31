@@ -115,7 +115,7 @@ export function ImportarTurnosI131({ open, onClose, sedeId, sedeNombre, usuario,
           <>
             <div className="bg-blue-50 border border-blue-100 rounded-xl px-4 py-3 text-xs text-blue-700 flex flex-col gap-1">
               <p>1. Descargá la plantilla (.xlsx) y completá un turno por fila en la hoja "Plantilla" (mirá la hoja "Instrucciones" para el detalle de cada columna).</p>
-              <p>2. Antes de subirla: en Excel, "Guardar como" → <strong>Texto Unicode (*.txt)</strong> -- no subas el .xlsx directamente, el importador lo rechaza a propósito.</p>
+              <p>2. Antes de subirla: en Excel de escritorio, "Guardar como" → <strong>Texto Unicode (*.txt)</strong>; desde el celular, exportá como <strong>TSV (*.tsv)</strong> -- no subas el .xlsx directamente, el importador lo rechaza a propósito.</p>
               <p>3. Subí ese archivo de texto acá: vas a ver una vista previa antes de que se cree ningún turno.</p>
             </div>
             <div className="text-xs text-gray-500">
@@ -126,12 +126,12 @@ export function ImportarTurnosI131({ open, onClose, sedeId, sedeNombre, usuario,
                 ↓ Descargar plantilla (.xlsx)
               </a>
               <label className="inline-flex items-center justify-center px-4 py-2 rounded-xl text-xs font-semibold border border-gray-200 text-gray-700 hover:bg-gray-50 cursor-pointer transition min-h-11 md:min-h-0">
-                {fase === "leyendo" ? "Leyendo..." : fase === "verificando" ? "Verificando duplicados..." : "Subir archivo completado (.txt)"}
-                <input type="file" accept=".csv,.txt" className="hidden" onChange={elegirArchivo} disabled={procesando} />
+                {fase === "leyendo" ? "Leyendo..." : fase === "verificando" ? "Verificando duplicados..." : "Subir archivo completado (.txt o .tsv)"}
+                <input type="file" accept=".txt,.tsv" className="hidden" onChange={elegirArchivo} disabled={procesando} />
               </label>
             </div>
             <div className="bg-orange-50 border border-orange-100 rounded-xl px-4 py-3 text-xs text-orange-700">
-              La plantilla es un .xlsx pensado para completarse cómodo en Excel, pero el importador de RadioFarm <strong>no lee archivos .xlsx</strong> directamente. Guardala como "Texto Unicode (*.txt)" antes de subirla -- si subís el .xlsx tal cual, la vas a ver rechazada con un error.
+              La plantilla es un .xlsx pensado para completarse cómodo en Excel, pero el importador de RadioFarm <strong>no lee archivos .xlsx</strong> directamente. Guardala como "Texto Unicode (*.txt)" en la compu, o exportala como TSV (*.tsv) desde el celular, antes de subirla -- si subís el .xlsx tal cual, la vas a ver rechazada con un error.
             </div>
             {errorArchivo && (
               <div className="bg-red-50 border border-red-200 text-red-700 text-xs rounded-xl px-3 py-2">{errorArchivo}</div>
