@@ -4,7 +4,7 @@ import { Btn } from "../../components/ui/Btn.jsx";
 import { Input } from "../../components/ui/Input.jsx";
 import { Sel } from "../../components/ui/Sel.jsx";
 import { Modal } from "../../components/ui/Modal.jsx";
-import { fmtF, hoy } from "../../helpers/formato.js";
+import { fmtF, hoy, capitalizarPalabras } from "../../helpers/formato.js";
 import { sedesActivas } from "../../helpers/stock.js";
 import { inicioSemana, finSemana, semanaSiguiente, semanaAnterior } from "../../helpers/semanaI131.js";
 import { listenTurnosSemana, turnosDeSemana, addTurno, updateTurno, deleteTurno } from "../../services/firestore/turnos.js";
@@ -260,7 +260,7 @@ export function TabAgendaI131({ catalogo, usuario, esAdmin, onToast }) {
             <Sel label="Tipo de dosis" value={form.tipoDosis} onChange={(e) => setForm((f) => ({ ...f, tipoDosis: e.target.value }))}>
               {TIPOS_TURNO.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
             </Sel>
-            <Input label="Paciente" value={form.pacienteNombre} onChange={(e) => setForm((f) => ({ ...f, pacienteNombre: e.target.value }))} placeholder="García Juan" />
+            <Input label="Paciente" value={form.pacienteNombre} onChange={(e) => setForm((f) => ({ ...f, pacienteNombre: capitalizarPalabras(e.target.value) }))} placeholder="García Juan" />
             <Input label="DNI" value={form.pacienteDni} onChange={(e) => setForm((f) => ({ ...f, pacienteDni: e.target.value }))} placeholder="28456789" />
             <Input label="Teléfono" value={form.telefono} onChange={(e) => setForm((f) => ({ ...f, telefono: e.target.value }))} placeholder="261..." />
             {unidadForm && (

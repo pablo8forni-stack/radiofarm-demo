@@ -62,7 +62,7 @@ export function VistaTerapiaI131({ catalogo, usuario, esAdmin, onToast, onIrAAdm
       {tab === "mibg" && (
         <TabLoteDosisUnica
           catalogo={catalogo} usuario={usuario} esAdmin={esAdmin} onToast={onToast}
-          isotopoId="mibg" titulo="MIBG" placeholderLote="Ej: MIBG-2026-014"
+          isotopoId="mibg" titulo="MIBG" placeholderLote="Ej: MIBG-2026-014" placeholderActividad="2,5"
           descripcion={'131I-MIBG (neuroblastoma/feocromocitoma/paraganglioma) -- cada lote es una dosis completa para un único paciente, se administra al llegar. Sin curva de decaimiento ni balance de volumen: para eso está "Stock de viales", que es otro material. La administración a un paciente se carga en Libro 2, eligiendo "MIBG" como tipo de registro.'}
           onIrALibro2={onIrAAdministracion}
         />

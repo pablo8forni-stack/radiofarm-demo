@@ -41,7 +41,7 @@ const CAMPO_LOTE_ID = { mibg: "mibgLoteId", lutecio177: "loteDosisUnicaId" };
 // contador): un lote deja de estarlo apenas existe un acta no anulada que lo
 // usa, o si el lote mismo se anula -- ambos vía listeners en vivo, nunca
 // queda "vencido" por refrescar la pantalla.
-export function TabLoteDosisUnica({ catalogo, usuario, esAdmin, onToast, isotopoId, titulo, descripcion, placeholderLote, onIrALibro2 }) {
+export function TabLoteDosisUnica({ catalogo, usuario, esAdmin, onToast, isotopoId, titulo, descripcion, placeholderLote, placeholderActividad = "150", onIrALibro2 }) {
   const [lotesTodos, setLotesTodos] = useState([]);
   const [usosRaw, setUsosRaw] = useState([]);
   const [anulacionesRaw, setAnulacionesRaw] = useState([]);
@@ -168,7 +168,7 @@ export function TabLoteDosisUnica({ catalogo, usuario, esAdmin, onToast, isotopo
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <Input label="N° de lote" value={form.numeroLote} onChange={(e) => setForm((f) => ({ ...f, numeroLote: e.target.value }))} placeholder={placeholderLote} />
             <Input label="Proveedor" value={form.proveedor} onChange={(e) => setForm((f) => ({ ...f, proveedor: e.target.value }))} placeholder="Ej: IPEN" />
-            <Input label="Actividad calibrada (mCi)" type="number" min={0} step={0.1} value={form.actividadCalibrada} onChange={(e) => setForm((f) => ({ ...f, actividadCalibrada: e.target.value }))} placeholder="150" />
+            <Input label="Actividad calibrada (mCi)" type="number" min={0} step={0.1} value={form.actividadCalibrada} onChange={(e) => setForm((f) => ({ ...f, actividadCalibrada: e.target.value }))} placeholder={placeholderActividad} />
             <Input label="Volumen (mL)" type="number" min={0} step={0.1} value={form.volumen} onChange={(e) => setForm((f) => ({ ...f, volumen: e.target.value }))} placeholder="10" />
             <Input label="Fecha/hora de calibración" type="datetime-local" value={form.fechaHoraCalibracion} onChange={(e) => setForm((f) => ({ ...f, fechaHoraCalibracion: e.target.value }))} />
             <Input label="Fecha de vencimiento" type="date" value={form.fechaVencimiento} onChange={(e) => setForm((f) => ({ ...f, fechaVencimiento: e.target.value }))} />
