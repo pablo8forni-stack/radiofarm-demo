@@ -1,5 +1,6 @@
 import { TIPO_LABEL_I131 } from "../constants/tipoI131.js";
 import { TIPOS_TURNO_VALIDOS } from "./turnosI131.js";
+import { fmtFLarga } from "./formato.js";
 
 // Importación de turnos desde un archivo "Excel" (Parte C, uso regular, no
 // script de una sola vez) -- a propósito NO se parsea un .xlsx real: la
@@ -18,20 +19,31 @@ export const HEADERS_TURNOS_I131 = [
 // Acepta AAAA-MM-DD (lo que ya usa fechaTurno internamente) o DD/MM/AAAA
 // (lo natural al tipear en Excel en AR) -- valida que la fecha exista de
 // verdad (no sólo el formato: 31/02 se rechaza).
+//
+// `ambigua`: sólo puede darse en la rama DD/MM/AAAA (el ISO AAAA-MM-DD nunca
+// es ambiguo, el año siempre va primero) -- caso real encontrado en
+// producción: una planilla exportada en formato americano (MM/DD/AAAA) con
+// día Y mes ≤12 pasa la validación sin ningún error, pero día y mes quedan
+// invertidos en silencio (ej. "08/05" tipeado como 8 de mayo, leído acá como
+// 5 de agosto). Si día == mes invertir no cambia nada, así que no hay
+// ambigüedad real en ese caso puntual.
 function parsearFechaFlexible(texto) {
   if (!texto) return null;
-  let y, mo, d;
+  let y, mo, d, ambigua = false;
   let m = texto.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
   if (m) [, y, mo, d] = m;
   else {
     m = texto.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-    if (m) [, d, mo, y] = m;
+    if (m) {
+      [, d, mo, y] = m;
+      ambigua = +d <= 12 && +mo <= 12 && +d !== +mo;
+    }
   }
   if (!m) return null;
   const mes = mo.padStart(2, "0"), dia = d.padStart(2, "0");
   const fecha = new Date(`${y}-${mes}-${dia}T00:00:00`);
   if (Number.isNaN(fecha.getTime()) || fecha.getFullYear() !== +y || fecha.getMonth() + 1 !== +mo || fecha.getDate() !== +d) return null;
-  return `${y}-${mes}-${dia}`;
+  return { iso: `${y}-${mes}-${dia}`, ambigua };
 }
 
 function celda(cols, idx, campo) {
@@ -49,8 +61,10 @@ function validarFilaTurno(cols, idx, numeroFila) {
   const errores = [];
   const advertencias = [];
 
-  const fechaTurno = parsearFechaFlexible(raw.fechaTurno);
-  if (!fechaTurno) errores.push("fechaTurno inválida o vacía (usá DD/MM/AAAA)");
+  const rFechaTurno = parsearFechaFlexible(raw.fechaTurno);
+  if (!rFechaTurno) errores.push("fechaTurno inválida o vacía (usá DD/MM/AAAA)");
+  else if (rFechaTurno.ambigua) advertencias.push(`fechaTurno "${raw.fechaTurno}" es ambigua (día y mes podrían estar invertidos) -- confirmá que sea DD/MM/AAAA`);
+  const fechaTurno = rFechaTurno?.iso || "";
 
   if (!raw.pacienteNombre) errores.push("falta pacienteNombre");
 
@@ -72,15 +86,21 @@ function validarFilaTurno(cols, idx, numeroFila) {
 
   let fechaBarrido = "";
   if (raw.fechaBarrido) {
-    const f = parsearFechaFlexible(raw.fechaBarrido);
-    if (!f) advertencias.push("fechaBarrido inválida, se guarda vacía");
-    else fechaBarrido = f;
+    const rFechaBarrido = parsearFechaFlexible(raw.fechaBarrido);
+    if (!rFechaBarrido) advertencias.push("fechaBarrido inválida, se guarda vacía");
+    else {
+      fechaBarrido = rFechaBarrido.iso;
+      if (rFechaBarrido.ambigua) advertencias.push(`fechaBarrido "${raw.fechaBarrido}" es ambigua (día y mes podrían estar invertidos) -- confirmá que sea DD/MM/AAAA`);
+    }
   }
 
   const estado = errores.length ? "error" : advertencias.length ? "advertencia" : "ok";
   return {
     numeroFila, estado, errores, advertencias, incluir: estado !== "error",
-    resumen: `${raw.pacienteNombre || "(sin nombre)"} · ${raw.tipoDosis || "—"} · ${raw.fechaTurno || "—"}`,
+    // Fecha en palabras (fmtFLarga), no el texto crudo del archivo -- así un
+    // DD/MM invertido en el original se nota a simple vista en la vista
+    // previa, en vez de quedar oculto en un formato numérico ambiguo.
+    resumen: `${raw.pacienteNombre || "(sin nombre)"} · ${raw.tipoDosis || "—"} · ${fechaTurno ? fmtFLarga(fechaTurno) : (raw.fechaTurno || "—")}`,
     datos: {
       fechaTurno: fechaTurno || "", pacienteNombre: raw.pacienteNombre, pacienteDni,
       telefono: raw.telefono, tipoDosis: tipoDosis || "", actividadPrevista,

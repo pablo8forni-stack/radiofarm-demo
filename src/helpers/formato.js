@@ -15,6 +15,18 @@ export const fmtF = (iso) => {
   return `${d}/${m}/${y}`;
 };
 
+// Fecha en palabras ("5 de agosto de 2026") -- a diferencia de fmtF
+// (numérica), no deja lugar a leer día y mes al revés. Pensada para la
+// vista previa de importación de turnos (ImportarTurnosI131.jsx): un
+// DD/MM invertido en el archivo original se nota a simple vista acá, cosa
+// que "05/08/2026" no deja ver.
+export const fmtFLarga = (iso) => {
+  if (!iso) return "—";
+  const d = new Date(`${iso}T00:00:00`);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleDateString("es-AR", { day: "numeric", month: "long", year: "numeric" });
+};
+
 // Acepta tanto ISO string como Firestore Timestamp (tiene .toDate()).
 export const fmtTs = (fecha) => {
   if (!fecha) return "—";
