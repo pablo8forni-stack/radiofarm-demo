@@ -3,7 +3,8 @@ import { Input } from "../../components/ui/Input.jsx";
 import { Badge } from "../../components/ui/Badge.jsx";
 import { CurvaTeoricaSVG } from "./CurvaDecaimiento.jsx";
 import { listenPedidoSemanal, guardarPedidoSemanal } from "../../services/firestore/pedidosSemanales.js";
-import { baldeDeTurno, remanenteBalde } from "../../helpers/pedidoSemanalI131.js";
+import { baldeDeTurno, remanenteBalde, promedioActividadSemana } from "../../helpers/pedidoSemanalI131.js";
+import { esTipoMci } from "../../helpers/turnosI131.js";
 import { diaDeSemana } from "../../helpers/semanaI131.js";
 import { fmtF } from "../../helpers/formato.js";
 
@@ -65,22 +66,34 @@ export function PedidoSemanalI131({ sedeId, semana, turnosSemana, onToast }) {
     }
   }
 
+  // Un solo promedio para toda la semana (no por balde) -- mismo dato que
+  // sumaMci usa para el tope de 500, reusado acá vía la misma prop
+  // turnosSemana, sin ninguna consulta nueva. null si esta semana todavía no
+  // tiene ningún turno ablativa/dosis cargado -- ver promedioActividadSemana.
+  const promedio = promedioActividadSemana(turnosSemana);
+
   return (
     <div className="bg-purple-50 border-2 border-purple-200 rounded-2xl p-4 flex flex-col gap-4">
       <div className="flex items-center gap-2 flex-wrap">
         <Badge color="purple">⚠️ Simulación</Badge>
         <h3 className="text-sm font-bold text-purple-800">Pedido semanal (proyección, no es material real)</h3>
       </div>
-      <p className="text-xs text-purple-600">
-        Estimación de cuánto I-131 va a quedar disponible según lo que se espera recibir esta semana, menos lo ya agendado. No refleja stock real -- para eso está "Stock de viales", con material efectivamente recibido y registrado.
-      </p>
+
+      {/* Banner fijo, sin botón de cerrar -- mismo criterio que
+          AvisoGuiaNoOficial (DesgloseCalculo.jsx, Stock de viales): tiene
+          que verse siempre, no sólo la primera vez que se abre el panel. */}
+      <div className="bg-purple-100 border border-purple-200 rounded-xl px-4 py-3 text-xs text-purple-800 font-medium">
+        ⚠ Esto es una simulación: estima cuánto I-131 va a quedar disponible según lo que se espera recibir esta semana, menos lo ya agendado. No es material real -- para eso está "Stock de viales", con lo efectivamente recibido y registrado.
+      </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {BALDES.map((b) => {
           const actividadEsperada = pedido?.[b.campoActividad];
           const fechaLlegada = pedido?.[b.campoFecha];
           const turnosDelBalde = turnosSemana.filter((t) => baldeDeTurno(t.fechaTurno, semana) === b.id);
+          const turnosQueConsumen = turnosDelBalde.filter((t) => esTipoMci(t.tipoDosis));
           const calculo = remanenteBalde(actividadEsperada, fechaLlegada, turnosDelBalde);
+          const pacientesMas = calculo && promedio ? Math.floor(calculo.remanente / promedio) : null;
           return (
             <div key={b.id} className="bg-white/70 border border-purple-100 rounded-xl p-3 flex flex-col gap-3">
               <div className="text-xs font-bold text-purple-700">{b.label} ({fmtF(diaDeSemana(semana, b.offsetDia))})</div>
@@ -100,6 +113,11 @@ export function PedidoSemanalI131({ sedeId, semana, turnosSemana, onToast }) {
               </div>
               {calculo ? (
                 <>
+                  {pacientesMas != null && (
+                    <div className="text-xs text-purple-800 font-semibold text-center">
+                      Con el remanente actual, alcanzaría para ~{pacientesMas} paciente{pacientesMas === 1 ? "" : "s"} más como los ya agendados esta semana (aproximado, según el promedio de {promedio.toFixed(1)} mCi/paciente ya cargado -- no es una promesa exacta).
+                    </div>
+                  )}
                   <CurvaTeoricaSVG actividadInicial={actividadEsperada} diasHoy={calculo.dias} actividadHoy={calculo.remanente} colorLinea={b.color} colorHoy={b.color} labelHoy="Ahora" />
                   <div className="text-xs text-purple-700 text-center">
                     Proyección a hoy ({calculo.dias.toFixed(1)} días desde la llegada esperada): {calculo.teorica.toFixed(2)} mCi teóricos − {calculo.consumido.toFixed(2)} mCi ya agendados (ablativa/dosis) = <span className="font-bold">{calculo.remanente.toFixed(2)} mCi</span> remanente proyectado
@@ -107,6 +125,17 @@ export function PedidoSemanalI131({ sedeId, semana, turnosSemana, onToast }) {
                 </>
               ) : (
                 <div className="text-xs text-purple-400 italic text-center py-4">Completá actividad esperada y fecha/hora de llegada para ver la proyección.</div>
+              )}
+              {turnosQueConsumen.length > 0 && (
+                <div className="border-t border-purple-100 pt-2 flex flex-col gap-1">
+                  <div className="text-xs font-semibold text-purple-700">Turnos que ya consumen de este balde:</div>
+                  {turnosQueConsumen.map((t) => (
+                    <div key={t.id} className="flex items-center justify-between gap-2 text-xs text-purple-600">
+                      <span className="truncate">{t.pacienteNombre}</span>
+                      <span className="font-mono font-semibold shrink-0">{t.actividadPrevista} mCi</span>
+                    </div>
+                  ))}
+                </div>
               )}
             </div>
           );

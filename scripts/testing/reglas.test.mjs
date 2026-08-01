@@ -5,9 +5,9 @@
 // restrictiva de lo debido.
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { collection, addDoc, doc, getDoc, setDoc, updateDoc, deleteDoc, serverTimestamp } from "firebase/firestore";
+import { collection, addDoc, doc, getDoc, setDoc, updateDoc, deleteDoc, serverTimestamp, writeBatch } from "firebase/firestore";
 import {
-  PERSONAS, SEDE_A, SEDE_B, FARM_ID, db, loguearComo, prepararFixturesGlobales, loteDePrueba, cerrarConexiones,
+  PERSONAS, SEDE_A, SEDE_B, FARM_ID, db, loguearComo, prepararFixturesGlobales, loteDePrueba, fichaDePrueba, cerrarConexiones,
   crearLoteDirecto, borrarLote,
 } from "./fixtures.mjs";
 
@@ -155,6 +155,172 @@ test("acta con mciMarcacion 0 es rechazada", async () => {
       usuarioEmail: PERSONAS.tecnicoA.email, mciMarcacion: 0,
     })
   );
+});
+
+// N° de Ficha (Libro 2): secuencia única y creciente para TODA la
+// institución (VM RIS), nunca por sede ni por día -- ver
+// helpers/fichaPaciente.js y firestore.rules#fichaUsadaValida/fichaLibre.
+// fichaValida (formato, sólo dígitos) se aplica en las 5 ramas de
+// actaValida() que tienen pacienteFicha -- se prueba acá con 'paciente'
+// (tc99m) y con 'i131_barrido' (representativos; la función es compartida,
+// no hace falta repetir en las 5).
+test("acta de paciente con N° de ficha no numérico es rechazada", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  await assertPermissionDenied(() =>
+    addDoc(collection(db, "actas"), {
+      tipo: "paciente", fecha: serverTimestamp(), sedeId: SEDE_A, farmId: FARM_ID, lote: loteDePrueba(),
+      usuarioEmail: PERSONAS.tecnicoA.email, mciAdministrados: 10, pacienteFicha: "45B1", isotopoId: "tc99m",
+      pacienteNombre: "Test", pacienteDni: "1", estudio: "Test",
+    })
+  );
+});
+
+test("i131_barrido con N° de ficha no numérico es rechazado", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  await assertPermissionDenied(() =>
+    addDoc(collection(db, "actas"), {
+      tipo: "i131_barrido", fecha: serverTimestamp(), sedeId: SEDE_A,
+      usuarioEmail: PERSONAS.tecnicoA.email, pacienteFicha: "45 21",
+      pacienteNombre: "Test", pacienteDni: "1",
+    })
+  );
+});
+
+// fichaLibre: refuerzo real de unicidad DENTRO de actaValida() (ver nota
+// larga en firestore.rules) -- si ya existe un marcador fichasUsadas para
+// ese número (como el que crea el camino oficial, o como se simula acá con
+// un setDoc directo), CUALQUIER acta nueva con ese mismo número queda
+// bloqueada, sin importar el tipo.
+function fichaUsadaDoc(ficha, overrides = {}) {
+  return {
+    pacienteFicha: ficha, pacienteFichaNum: parseInt(ficha, 10),
+    pacienteNombre: "Paciente Ya Registrado", sedeId: SEDE_A,
+    actaId: "test-acta-id", tipo: "paciente", fecha: serverTimestamp(),
+    ...overrides,
+  };
+}
+
+test("acta con N° de ficha que YA tiene marcador fichasUsadas es rechazada, aunque sea de otro tipo", async () => {
+  await loguearComo(PERSONAS.admin);
+  const ficha = fichaDePrueba();
+  await setDoc(doc(db, "fichasUsadas", ficha), fichaUsadaDoc(ficha));
+  await assertPermissionDenied(() =>
+    addDoc(collection(db, "actas"), {
+      tipo: "i131_barrido", fecha: serverTimestamp(), sedeId: SEDE_A,
+      usuarioEmail: PERSONAS.admin.email, pacienteFicha: ficha,
+      pacienteNombre: "Otro Paciente", pacienteDni: "2",
+    })
+  );
+});
+
+test("control positivo: acta con N° de ficha SIN marcador previo se acepta normalmente", async () => {
+  await loguearComo(PERSONAS.admin);
+  const ficha = fichaDePrueba();
+  const ref = await addDoc(collection(db, "actas"), {
+    tipo: "i131_barrido", fecha: serverTimestamp(), sedeId: SEDE_A,
+    usuarioEmail: PERSONAS.admin.email, pacienteFicha: ficha,
+    pacienteNombre: "Paciente Nuevo", pacienteDni: "3",
+  });
+  const snap = await getDoc(ref);
+  assert.ok(snap.exists());
+});
+
+// Colección fichasUsadas -- marcador create-only, mismo patrón que
+// generadoresVistos, pero de lectura GLOBAL (sin scoping por sede, ver nota
+// en firestore.rules): la unicidad y el mensaje de conflicto tienen que
+// funcionar entre sedes distintas.
+test("control positivo: técnico SÍ puede crear un marcador fichasUsadas válido en su sede", async () => {
+  await loguearComo(PERSONAS.tecnicoA); // sede central == SEDE_A
+  const ficha = fichaDePrueba();
+  const ref = doc(db, "fichasUsadas", ficha);
+  await setDoc(ref, fichaUsadaDoc(ficha, { usuarioEmail: PERSONAS.tecnicoA.email }));
+  const snap = await getDoc(ref);
+  assert.ok(snap.exists());
+});
+
+test("fichasUsadas con id que no coincide con pacienteFicha es rechazado", async () => {
+  await loguearComo(PERSONAS.admin);
+  const ficha = fichaDePrueba();
+  await assertPermissionDenied(() =>
+    setDoc(doc(db, "fichasUsadas", ficha + "X"), fichaUsadaDoc(ficha))
+  );
+});
+
+test("fichasUsadas con pacienteFicha no numérico es rechazado", async () => {
+  await loguearComo(PERSONAS.admin);
+  await assertPermissionDenied(() =>
+    setDoc(doc(db, "fichasUsadas", "45B1"), fichaUsadaDoc("45B1"))
+  );
+});
+
+test("fichasUsadas sin pacienteFichaNum es rechazado", async () => {
+  await loguearComo(PERSONAS.admin);
+  const ficha = fichaDePrueba();
+  const { pacienteFichaNum: _n, ...sinNum } = fichaUsadaDoc(ficha);
+  await assertPermissionDenied(() => setDoc(doc(db, "fichasUsadas", ficha), sinNum));
+});
+
+test("técnico NO puede crear un marcador fichasUsadas de OTRA sede", async () => {
+  await loguearComo(PERSONAS.tecnicoA); // sede central == SEDE_A
+  const ficha = fichaDePrueba();
+  await assertPermissionDenied(() =>
+    setDoc(doc(db, "fichasUsadas", ficha), fichaUsadaDoc(ficha, { sedeId: SEDE_B, usuarioEmail: PERSONAS.tecnicoA.email }))
+  );
+});
+
+test("fichasUsadas no admite update ni delete (create-only)", async () => {
+  await loguearComo(PERSONAS.admin);
+  const ficha = fichaDePrueba();
+  const ref = doc(db, "fichasUsadas", ficha);
+  await setDoc(ref, fichaUsadaDoc(ficha));
+  await assertPermissionDenied(() => updateDoc(ref, { pacienteNombre: "Otro" }));
+  await assertPermissionDenied(() => deleteDoc(ref));
+});
+
+test("control positivo: técnico de OTRA sede puede LEER un marcador fichasUsadas (lectura global, no por sede)", async () => {
+  await loguearComo(PERSONAS.admin);
+  const ficha = fichaDePrueba();
+  await setDoc(doc(db, "fichasUsadas", ficha), fichaUsadaDoc(ficha, { sedeId: SEDE_A }));
+
+  await loguearComo(PERSONAS.tecnicoB); // sede italiano == SEDE_B
+  const snap = await getDoc(doc(db, "fichasUsadas", ficha));
+  assert.ok(snap.exists(), "la unicidad es global -- cualquier sede tiene que poder ver que este número ya se usó");
+});
+
+// Integración de punta a punta del mecanismo real (crearActaConFicha en
+// services/firestore/actas.js): acta + marcador en el MISMO batch. Un
+// segundo batch con el mismo N° de Ficha tiene que fallar ENTERO -- ni la
+// acta ni el marcador quedan creados (atómico).
+test("control positivo: batch acta+marcador de ficha (mecanismo real) se acepta, y un segundo batch con la misma ficha se rechaza entero", async () => {
+  await loguearComo(PERSONAS.admin);
+  const ficha = fichaDePrueba();
+
+  const batch1 = writeBatch(db);
+  const actaRef1 = doc(collection(db, "actas"));
+  batch1.set(actaRef1, {
+    tipo: "i131_barrido", fecha: serverTimestamp(), sedeId: SEDE_A,
+    usuarioEmail: PERSONAS.admin.email, pacienteFicha: ficha,
+    pacienteNombre: "Paciente Uno", pacienteDni: "1",
+  });
+  batch1.set(doc(db, "fichasUsadas", ficha), fichaUsadaDoc(ficha, { pacienteNombre: "Paciente Uno", actaId: actaRef1.id, tipo: "i131_barrido" }));
+  await batch1.commit();
+  assert.ok((await getDoc(actaRef1)).exists());
+  assert.ok((await getDoc(doc(db, "fichasUsadas", ficha))).exists());
+
+  const batch2 = writeBatch(db);
+  const actaRef2 = doc(collection(db, "actas"));
+  batch2.set(actaRef2, {
+    tipo: "i131_barrido", fecha: serverTimestamp(), sedeId: SEDE_A,
+    usuarioEmail: PERSONAS.admin.email, pacienteFicha: ficha,
+    pacienteNombre: "Paciente Dos", pacienteDni: "2",
+  });
+  batch2.set(doc(db, "fichasUsadas", ficha), fichaUsadaDoc(ficha, { pacienteNombre: "Paciente Dos", actaId: actaRef2.id, tipo: "i131_barrido" }));
+  await assertPermissionDenied(() => batch2.commit());
+
+  // Ni la segunda acta ni ningún cambio al marcador quedaron -- atómico.
+  assert.equal((await getDoc(actaRef2)).exists(), false);
+  const fichaSnap = await getDoc(doc(db, "fichasUsadas", ficha));
+  assert.equal(fichaSnap.data().pacienteNombre, "Paciente Uno", "el marcador original no debería haber cambiado");
 });
 
 // Controles positivos: si estos fallaran, la regla estaría siendo más

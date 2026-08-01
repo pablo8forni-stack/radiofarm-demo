@@ -1,6 +1,8 @@
 import { addDoc, collection, doc, onSnapshot, query, runTransaction, serverTimestamp, where } from "firebase/firestore";
 import { db } from "../../firebase.js";
 import { conMensajeDeContingencia } from "../../helpers/erroresRed.js";
+import { fmtTs } from "../../helpers/formato.js";
+import { fichaUsadaRef, datosFichaUsada } from "./actas.js";
 
 // Colección de lotes de dosis única -- nombre histórico "mibg_lote" (quedó
 // así a propósito, ver isotopoId más abajo: cambiar el nombre de la
@@ -72,6 +74,19 @@ function administrarLoteDosisUnicaTransaction(loteId, dataActa, { prefijo, tipo,
       const anulaSnap = await tx.get(anulaLoteRef);
       if (anulaSnap.exists()) throw new Error("Este lote fue anulado -- no se puede usar.");
 
+      // N° de Ficha (Libro 2): único en TODA la institución, ver
+      // firestore.rules#fichaUsadaValida -- mismo marcador create-only que
+      // usan addActaPaciente/addActaI131* (services/firestore/actas.js), acá
+      // dentro de la MISMA transacción en vez de un batch (ya hay una
+      // transacción abierta para el lote/intento). dataActa.pacienteFicha
+      // llega ya normalizado desde TabPacientes.jsx.
+      const fichaRef = fichaUsadaRef(dataActa.pacienteFicha);
+      const fichaSnap = await tx.get(fichaRef);
+      if (fichaSnap.exists()) {
+        const u = fichaSnap.data();
+        throw new Error(`Este N° de Ficha ya fue usado el ${fmtTs(u.fecha)} para el paciente ${u.pacienteNombre}.`);
+      }
+
       // Compatibilidad con actas de antes de este esquema (id sin sufijo
       // _n) -- si alguna quedara activa, sigue bloqueando una nueva
       // administración, sin necesitar migrar ningún dato existente.
@@ -86,6 +101,7 @@ function administrarLoteDosisUnicaTransaction(loteId, dataActa, { prefijo, tipo,
         const usoSnap = await tx.get(usoRef);
         if (!usoSnap.exists()) {
           tx.set(usoRef, { ...dataActa, tipo, [campoLoteId]: loteId, intentoNro: String(n), fecha: serverTimestamp() });
+          tx.set(fichaRef, datosFichaUsada(dataActa, tipo, usoRef.id));
           return;
         }
         const anulaUsoSnap = await tx.get(doc(actasCol, `anula_${prefijo}${loteId}_${n}`));

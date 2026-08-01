@@ -105,6 +105,14 @@ export function loteDePrueba() {
   return `TEST-${randomUUID().slice(0, 8)}`;
 }
 
+// N° de Ficha de prueba -- a diferencia de loteDePrueba, tiene que ser
+// PURAMENTE numérico (fichaValida en firestore.rules lo exige). Timestamp +
+// sufijo random para no colisionar ni entre corridas ni entre llamadas en el
+// mismo milisegundo dentro del mismo test.
+export function fichaDePrueba() {
+  return String(Date.now()) + String(Math.floor(Math.random() * 1000)).padStart(3, "0");
+}
+
 // Crea un lote directamente (sin pasar por ingresoBatch, que además crea un
 // movimiento -- acá sólo interesa el punto de partida del stock). Requiere
 // estar logueado como admin (única identidad con create sobre lotes).

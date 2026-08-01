@@ -477,7 +477,7 @@ service cloud.firestore {
                  (d.actividadCalibrada is number && d.actividadCalibrada > 0)))
             : esTipoDosisI131(d.tipo)
               ? (tieneAccesoI131() &&
-                 d.pacienteFicha is string && d.pacienteFicha.size() > 0 &&
+                 fichaValida(d.pacienteFicha) && fichaLibre(d.pacienteFicha) &&
                  d.pacienteNombre is string && d.pacienteNombre.size() > 0 &&
                  d.pacienteDni is string && d.pacienteDni.size() > 0 &&
                  d.actividadAdministrada is number && d.actividadAdministrada > 0 &&
@@ -485,17 +485,17 @@ service cloud.firestore {
                  d.lote is string && d.lote.size() > 0)
               : esTipoDiagnosticoI131(d.tipo)
                 ? (tieneAccesoI131() &&
-                   d.pacienteFicha is string && d.pacienteFicha.size() > 0 &&
+                   fichaValida(d.pacienteFicha) && fichaLibre(d.pacienteFicha) &&
                    d.pacienteNombre is string && d.pacienteNombre.size() > 0 &&
                    d.pacienteDni is string && d.pacienteDni.size() > 0 &&
                    d.actividadAdministrada is number && d.actividadAdministrada > 0 &&
                    d.unidadActividad == 'uCi')
                 : d.tipo == 'i131_barrido'
-                  ? (d.pacienteFicha is string && d.pacienteFicha.size() > 0 &&
+                  ? (fichaValida(d.pacienteFicha) && fichaLibre(d.pacienteFicha) &&
                      d.pacienteNombre is string && d.pacienteNombre.size() > 0 &&
                      d.pacienteDni is string && d.pacienteDni.size() > 0)
                   : d.tipo == 'i131_mibg'
-                    ? (d.pacienteFicha is string && d.pacienteFicha.size() > 0 &&
+                    ? (fichaValida(d.pacienteFicha) && fichaLibre(d.pacienteFicha) &&
                        d.pacienteNombre is string && d.pacienteNombre.size() > 0 &&
                        d.pacienteDni is string && d.pacienteDni.size() > 0 &&
                        d.mibgLoteId is string && d.mibgLoteId.size() > 0 &&
@@ -549,7 +549,7 @@ service cloud.firestore {
                           : (d.lote is string && d.lote.size() > 0 &&
                    (d.tipo == 'paciente'
                      ? (d.mciAdministrados is number && d.mciAdministrados > 0 &&
-                        d.pacienteFicha is string && d.pacienteFicha.size() > 0 &&
+                        fichaValida(d.pacienteFicha) && fichaLibre(d.pacienteFicha) &&
                         d.isotopoId is string && d.isotopoId.size() > 0 &&
                         (d.isotopoId != 'lu177'
                           ? (d.farmId is string && d.farmId.size() > 0)
@@ -623,6 +623,84 @@ service cloud.firestore {
     match /generadoresVistos/{id} {
       allow read: if tieneAcceso();
       allow create: if tieneAcceso() && generadorValido(id);
+      allow update, delete: if false;
+    }
+
+    // N° de Ficha (Libro 2): secuencia ÚNICA y CRECIENTE para TODA la
+    // institución, asignada por VM RIS -- nunca por sede, nunca se reinicia
+    // ni se repite. Mismo patrón que generadoresVistos: un marcador
+    // create-only con id determinístico (acá, directamente el número de
+    // ficha ya normalizado) es la garantía real -- un segundo intento con el
+    // mismo número choca contra un doc ya existente (allow update:false lo
+    // trata como update, se rechaza solo) sin necesitar ningún exists()
+    // dentro de actaValida() (que ya está bastante cargada). Cada función
+    // que crea una acta con pacienteFicha (addActaPaciente, los 6 de
+    // addActaI131*, administrarMibgTransaction, administrarLutecioTransaction
+    // -- ver services/firestore/actas.js y mibgLotes.js) crea este marcador
+    // en el MISMO batch/transacción que la acta: si el marcador choca, el
+    // batch/transacción entero falla, así que la acta tampoco se crea.
+    //
+    // A diferencia de generadoresVistos (sede propia) o de actas (lectura
+    // restringida por sede, Ley 25.326), acá la lectura es deliberadamente
+    // GLOBAL (tieneAcceso(), sin chequeo de sede) -- la unicidad tiene que
+    // funcionar entre sedes distintas, y el mensaje de error necesita poder
+    // mostrar a qué paciente pertenece el número ya usado aunque sea de otra
+    // sede (confirmado explícitamente: el objetivo es que el técnico pueda
+    // llamar a la otra sede y resolver el conflicto).
+    //
+    // pacienteFichaNum (número, no string) es lo que permite la sugerencia
+    // del último N° de Ficha sin mantener ningún contador mutable: una sola
+    // query indexada (orderBy pacienteFichaNum desc, limit 1) alcanza -- ver
+    // listenUltimaFicha en services/firestore/actas.js. Un contador aparte
+    // (ej. config/ultimaFicha) hubiera significado que TODAS las sedes
+    // escriban al mismo doc en cada alta, y encima obligaría a transacción
+    // hasta en el alta simple de tc99m (hoy deliberadamente offline-safe sin
+    // transacción) -- se descartó por eso.
+    // Sólo dígitos -- en la práctica el N° de Ficha siempre es numérico
+    // (secuencia de VM RIS), mismo criterio que ya usa pacienteDni en el
+    // importador de turnos (helpers/importarTurnosI131.js). El cliente ya
+    // normaliza (sin ceros a la izquierda, ver helpers/fichaPaciente.js)
+    // antes de llegar acá -- esto respalda del lado servidor que no se cuele
+    // texto libre ni un valor sin normalizar.
+    function fichaValida(ficha) {
+      return ficha is string && ficha.matches('^[0-9]+$');
+    }
+
+    // Refuerzo real de unicidad DENTRO de actaValida() -- sin esto, el
+    // marcador fichasUsadas sólo protege el camino "oficial" (batch/
+    // transacción que crea acta+marcador juntos, ver services/firestore/
+    // actas.js y mibgLotes.js): alguien escribiendo DIRECTO a /actas por
+    // SDK (saltándose la UI, exactamente lo que este archivo de tests
+    // simula) podría crear una acta con un pacienteFicha ya usado sin
+    // tocar fichasUsadas para nada, y esta regla no lo vería. Con
+    // !exists(...) acá, CUALQUIER acta nueva (oficial o no) queda
+    // bloqueada en cuanto el número ya tiene un marcador -- cierra el
+    // caso real (duplicar un número YA registrado por el camino oficial),
+    // que es la enorme mayoría de los casos. Límite que sigue quedando
+    // abierto, a conciencia: dos escrituras DIRECTAS que además se salteen
+    // la creación del marcador las dos veces no chocarían entre sí (nadie
+    // creó nunca el marcador) -- Firestore Rules no puede exigir que una
+    // escritura a /actas venga acompañada de otra a /fichasUsadas en el
+    // mismo batch, sólo puede validar cada escritura por separado.
+    function fichaLibre(ficha) {
+      return !exists(/databases/$(database)/documents/fichasUsadas/$(ficha));
+    }
+
+    function fichaUsadaValida(fichaId) {
+      let d = request.resource.data;
+      return fichaValida(d.pacienteFicha) &&
+        d.pacienteFichaNum is number && d.pacienteFichaNum > 0 &&
+        d.pacienteNombre is string && d.pacienteNombre.size() > 0 &&
+        d.sedeId is string && d.sedeId.size() > 0 &&
+        (isAdmin() || miRol().sede == d.sedeId) &&
+        d.actaId is string && d.actaId.size() > 0 &&
+        d.tipo is string && d.tipo.size() > 0 &&
+        fichaId == d.pacienteFicha;
+    }
+
+    match /fichasUsadas/{id} {
+      allow read: if tieneAcceso();
+      allow create: if tieneAcceso() && fichaUsadaValida(id);
       allow update, delete: if false;
     }
 

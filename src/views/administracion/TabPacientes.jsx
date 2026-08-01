@@ -9,11 +9,13 @@ import { fmtF, fmtTs, fmtFechaISO, hoy, capitalizarPalabras, agruparPorFecha } f
 import { descargarArchivo } from "../../helpers/descargarArchivo.js";
 import { parseQR } from "../../helpers/qr.js";
 import { sedesActivas, farmsDeSede } from "../../helpers/stock.js";
+import { normalizarFicha } from "../../helpers/fichaPaciente.js";
 import { TIPO_LABEL_I131 } from "../../constants/tipoI131.js";
 import {
   listenActas, addActaPaciente, actasPorRango, anularActaTransaction, listenAnulacionesActas,
   addActaI131Ablativa, addActaI131Dosis, addActaI131Barrido,
   addActaI131Captacion, addActaI131Centellograma, addActaI131CaptacionCentellograma,
+  fichaYaUsada, listenUltimaFicha,
 } from "../../services/firestore/actas.js";
 import { listenMibgLotes, administrarMibgTransaction, administrarLutecioTransaction } from "../../services/firestore/mibgLotes.js";
 import { estadoMibgLote } from "../../helpers/mibgLote.js";
@@ -92,6 +94,13 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
   }
 
   const [fichaNro, setFichaNro] = useState("");
+  // null | { tipo: "formato" } | { tipo: "usada", data } -- se limpia solo
+  // apenas fichaNro cambia (ver onChange más abajo), así nunca queda un
+  // error viejo pegado a un valor ya distinto. ultimaFicha alimenta sólo el
+  // placeholder (sugerencia visual, nunca se autocompleta) -- ver
+  // listenUltimaFicha en services/firestore/actas.js.
+  const [fichaEstado, setFichaEstado] = useState(null);
+  const [ultimaFicha, setUltimaFicha] = useState(null);
   // isotopoId siempre presente al guardar (nunca ausente) -- "tc99m" es el
   // comportamiento por defecto sin selector visible (99% de los casos, cero
   // fricción). mostrarIsotopo sólo controla si el link "¿Es un caso
@@ -128,8 +137,9 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
   // Un listener por tipo de I-131 (mismo criterio que dosis/barrido ya
   // tenían) -- dosisI131/ablativaI131 alimentan además el picker "Dosis
   // relacionada" de los 3 diagnósticos (ver dosisParaVincular). Todos se
-  // mezclan en el listado principal -- el N° de Ficha es un correlativo
-  // diario único compartido por todos los pacientes del servicio, así que
+  // mezclan en el listado principal -- el N° de Ficha es una secuencia
+  // única y creciente para TODA la institución (asignada por VM RIS, nunca
+  // por sede ni por día -- ver helpers/fichaPaciente.js), así que
   // "Registros del día" tiene que mostrar los 7 tipos intercalados por hora
   // para no dejar saltos de ficha sin explicación visible. La pestaña
   // "Gestión I-131" (consulta) sigue siendo el filtro específico de estos
@@ -146,6 +156,23 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
   // en tiempo real: un lote usado por otra técnica desaparece para todos al
   // instante, sin importar el día (ver lotesMibgDisponibles).
   useEffect(() => listenMibgLotes(setMibgLotes, { esAdmin, sedeId: usuario.sede }), []);
+  // N° de Ficha: único en TODA la institución (VM RIS), no por sede ni por
+  // día -- listener chico (limit(1)) sólo para la sugerencia del
+  // placeholder, ver nota en firestore.rules#fichaUsadaValida.
+  useEffect(() => listenUltimaFicha(setUltimaFicha), []);
+
+  // Pre-chequeo amigable (aviso inmediato antes de intentar guardar) -- la
+  // garantía real es el choque server-side contra el marcador create-only
+  // (fichaUsadaRef), esto es sólo para no hacerle esperar al técnico hasta
+  // el intento de guardado. Se dispara al perder el foco del campo, no en
+  // cada tecla (evita una consulta por cada dígito tipeado).
+  async function chequearFicha() {
+    const normalizada = normalizarFicha(fichaNro);
+    if (!fichaNro.trim()) { setFichaEstado(null); return; }
+    if (!normalizada) { setFichaEstado({ tipo: "formato" }); return; }
+    const usada = await fichaYaUsada(normalizada);
+    setFichaEstado(usada ? { tipo: "usada", data: usada } : null);
+  }
 
   // nav ({busqueda, token}) llega desde "Ir a Libro 2" (bloqueo de anulación
   // de un lote de MIBG/Lutecio-177 con administración activa,
@@ -271,7 +298,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
   }
 
   function limpiarForm() {
-    setFichaNro(""); setNombre(""); setDni(""); setPeso(""); setTalla(""); setEstudio(""); setEstudioOtro(""); setMci(""); setFarmId(""); setLote(""); setObs("");
+    setFichaNro(""); setFichaEstado(null); setNombre(""); setDni(""); setPeso(""); setTalla(""); setEstudio(""); setEstudioOtro(""); setMci(""); setFarmId(""); setLote(""); setObs("");
     setMostrarIsotopo(false); setIsotopoId("tc99m"); setMedicoResponsable("");
     setTipoI131("barrido"); setActividadAdministrada(""); setIndicacion(""); setDosisVinculada(""); setMibgLoteSeleccionado(""); setLutecioLoteSeleccionado("");
     setSedeId(usuario.sede);
@@ -286,9 +313,9 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
   // a radioisotopos no debe hacer aparecer nada acá por sí sola (ver nota en
   // services/firestore/radioisotopos.js). I-131 ya no tiene pestaña propia de
   // carga -- toda la carga de pacientes (sea cual sea el isótopo) vive acá,
-  // porque el N° de Ficha es un correlativo diario único compartido por
-  // todos; Gestión I-131 pasó a ser sólo una vista de consulta de estos
-  // mismos registros (6 tipos, sin cambios de modelo).
+  // porque el N° de Ficha es una secuencia única para toda la institución,
+  // compartida por todos; Gestión I-131 pasó a ser sólo una vista de
+  // consulta de estos mismos registros (6 tipos, sin cambios de modelo).
   const isotoposCasoDistinto = (catalogo.radioisotopos || []).filter((i) => i.id === "lu177" || i.id === "i131");
 
   const tipoI131Actual = TIPOS_I131.find((t) => t.id === tipoI131);
@@ -305,11 +332,12 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
   }, [dosisI131, ablativaI131, dni]);
 
   function guardar() {
-    if (!fichaNro.trim() || !nombre.trim() || !dni.trim()) return;
+    const fichaNormalizada = normalizarFicha(fichaNro);
+    if (!fichaNormalizada || !nombre.trim() || !dni.trim() || fichaEstado?.tipo === "usada") return;
     if (esI131) {
       const base = {
         sedeId, sedeNombre: catalogo.sedes[sedeId]?.nombre,
-        pacienteFicha: fichaNro.trim(), pacienteNombre: nombre.trim(), pacienteDni: dni.trim(),
+        pacienteFicha: fichaNormalizada, pacienteNombre: nombre.trim(), pacienteDni: dni.trim(),
         // Opcionales para I-131 -- se omiten del todo si quedaron vacíos, en
         // vez de mandar 0 (que se leería como "pesa 0kg", no "sin dato").
         ...(peso.trim() ? { peso: parseFloat(peso) || 0 } : {}),
@@ -367,7 +395,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
       if (!loteElegido) return;
       administrarLutecioTransaction(lutecioLoteSeleccionado, {
         sedeId, sedeNombre: catalogo.sedes[sedeId]?.nombre,
-        pacienteFicha: fichaNro.trim(), pacienteNombre: nombre.trim(), pacienteDni: dni.trim(),
+        pacienteFicha: fichaNormalizada, pacienteNombre: nombre.trim(), pacienteDni: dni.trim(),
         peso: parseFloat(peso) || 0, talla: parseFloat(talla) || 0,
         mciAdministrados: parseFloat(actividadAdministrada) || 0, actividadCalibrada: loteElegido.actividadCalibrada,
         isotopoId, lote: loteElegido.numeroLote,
@@ -385,7 +413,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
     const farm = catalogo.farms.find((f) => f.id === farmId);
     addActaPaciente({
       sedeId, sedeNombre: catalogo.sedes[sedeId]?.nombre,
-      pacienteFicha: fichaNro.trim(),
+      pacienteFicha: fichaNormalizada,
       pacienteNombre: nombre.trim(), pacienteDni: dni.trim(),
       peso: parseFloat(peso) || 0, talla: parseFloat(talla) || 0,
       estudio: estudio === "Otro" ? estudioOtro.trim() : estudio, mciAdministrados: parseFloat(mci) || 0,
@@ -748,7 +776,19 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
             </button>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <Input label="N° de Ficha" value={fichaNro} onChange={(e) => setFichaNro(e.target.value)} placeholder="4521" />
+            <Input
+              label="N° de Ficha" value={fichaNro}
+              onChange={(e) => { setFichaNro(e.target.value); setFichaEstado(null); }}
+              onBlur={chequearFicha}
+              placeholder={ultimaFicha != null ? String(ultimaFicha + 1) : "4521"}
+            />
+            {fichaEstado && (
+              <div className="sm:col-span-2 -mt-2 text-xs text-red-600">
+                {fichaEstado.tipo === "formato"
+                  ? "El N° de Ficha debe ser sólo números."
+                  : `Este N° de Ficha ya fue usado el ${fmtTs(fichaEstado.data.fecha)} para el paciente ${fichaEstado.data.pacienteNombre} (${catalogo.sedes[fichaEstado.data.sedeId]?.nombre || fichaEstado.data.sedeId}).`}
+              </div>
+            )}
             <Input label="Apellido y nombre" value={nombre} onChange={(e) => setNombre(capitalizarPalabras(e.target.value))} placeholder="García Juan" />
             <Input label="DNI" value={dni} onChange={(e) => setDni(e.target.value)} placeholder="28456789" />
             {esAdmin && (
@@ -766,10 +806,11 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
                 defecto, cero fricción. Este link revela el selector de
                 isótopo sólo cuando hace falta (Lutecio-177 o I-131, lista
                 blanca explícita más arriba). I-131 no tiene pestaña propia de
-                carga: el N° de Ficha es un correlativo diario único
-                compartido por todos los pacientes del servicio, así que toda
-                la carga vive acá sin importar el isótopo -- Gestión I-131 es
-                sólo una vista de consulta de estos mismos registros. */}
+                carga: el N° de Ficha es una secuencia única para toda la
+                institución, compartida por todos los pacientes del
+                servicio, así que toda la carga vive acá sin importar el
+                isótopo -- Gestión I-131 es sólo una vista de consulta de
+                estos mismos registros. */}
             {!mostrarIsotopo && isotoposCasoDistinto.length > 0 && (
               <div className="sm:col-span-2">
                 <button type="button" onClick={() => setMostrarIsotopo(true)} className="text-xs text-blue-600 hover:text-blue-800 underline underline-offset-2">
@@ -898,7 +939,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
           <div className="flex gap-2 justify-end mt-4">
             <Btn variant="outline" onClick={() => { setMostrarForm(false); limpiarForm(); }}>Cancelar</Btn>
             <Btn onClick={guardar} disabled={
-              !fichaNro.trim() || !nombre.trim() || !dni.trim() ||
+              !normalizarFicha(fichaNro) || !nombre.trim() || !dni.trim() || fichaEstado?.tipo === "usada" ||
               (esI131
                 ? ((tipoI131Actual.requierePermiso && !puedeCargarDosisI131) ||
                    (tipoI131Actual.categoria !== "barrido" && !actividadAdministrada) ||

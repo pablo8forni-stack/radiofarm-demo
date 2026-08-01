@@ -4,6 +4,7 @@ import { conMensajeDeContingencia } from "../../helpers/erroresRed.js";
 
 const actasCol = collection(db, "actas");
 const generadoresCol = collection(db, "generadoresVistos");
+const fichasUsadasCol = collection(db, "fichasUsadas");
 // El id determinístico no puede depender de mayúsculas/espacios tal como los
 // tipeó cada quien -- un teclado de celular autocapitaliza/autocorrige
 // distinto entre dos cargas del "mismo" lote, y eso alcanza para que
@@ -59,11 +60,54 @@ export async function actasPorPacienteDni(tipo, { dni, sedeId, esAdmin }) {
   return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
 }
 
-// Alta simple, sin lectura previa -> offline-safe (se encola sola).
-export function addActaPaciente(data) {
+// N° de Ficha (Libro 2): id determinístico = el número ya normalizado (ver
+// helpers/fichaPaciente.js) -- mismo patrón que generadorRef arriba, un
+// marcador create-only en su propia colección (fichasUsadas, lectura GLOBAL
+// a propósito -- ver firestore.rules). data.pacienteFicha llega YA
+// normalizado desde el llamador (TabPacientes.jsx), nunca se renormaliza
+// acá para no tener dos fuentes de verdad sobre qué id corresponde.
+export const fichaUsadaRef = (pacienteFicha) => doc(fichasUsadasCol, pacienteFicha);
+export function datosFichaUsada(data, tipo, actaId) {
+  return {
+    pacienteFicha: data.pacienteFicha, pacienteFichaNum: parseInt(data.pacienteFicha, 10),
+    pacienteNombre: data.pacienteNombre, sedeId: data.sedeId, actaId, tipo,
+    fecha: serverTimestamp(),
+  };
+}
+
+// Pre-chequeo amigable del lado cliente (aviso inmediato antes de intentar
+// guardar) -- la garantía real es el choque contra el marcador create-only
+// en el batch/transacción de guardado (ver crearActaConFicha más abajo y
+// administrarLoteDosisUnicaTransaction en mibgLotes.js), esto es sólo para
+// no hacerle esperar al técnico hasta el intento de guardado para avisarle.
+export async function fichaYaUsada(pacienteFicha) {
+  const snap = await getDoc(fichaUsadaRef(pacienteFicha));
+  return snap.exists() ? snap.data() : null;
+}
+
+// Sugerencia de placeholder (punto 1) -- NUNCA se envía sola, es sólo una
+// referencia visual. Una única query indexada (orderBy de un solo campo,
+// sin índice compuesto) en vez de mantener un contador mutable -- ver nota
+// larga en firestore.rules sobre por qué se descartó un doc contador.
+export function listenUltimaFicha(callback) {
+  const q = query(fichasUsadasCol, orderBy("pacienteFichaNum", "desc"), limit(1));
+  return onSnapshot(q, (snap) => callback(snap.empty ? null : snap.docs[0].data().pacienteFichaNum));
+}
+
+// Crea la acta Y el marcador de ficha usada en el MISMO batch -- si el
+// marcador choca (ficha ya usada por otra acta), el batch entero se
+// rechaza, así que la acta tampoco se crea. Sigue siendo offline-safe (un
+// solo batch, sin lectura previa), igual que antes de este campo.
+function crearActaConFicha(tipo, data) {
   const batch = writeBatch(db);
-  batch.set(doc(actasCol), { ...data, tipo: "paciente", fecha: serverTimestamp() });
+  const actaRef = doc(actasCol);
+  batch.set(actaRef, { ...data, tipo, fecha: serverTimestamp() });
+  batch.set(fichaUsadaRef(data.pacienteFicha), datosFichaUsada(data, tipo, actaRef.id));
   return batch.commit();
+}
+
+export function addActaPaciente(data) {
+  return crearActaConFicha("paciente", data);
 }
 
 export function addActaMarcacion(data) {
@@ -79,9 +123,7 @@ export function addActaMarcacion(data) {
 // Captación y Centellograma) exigen accesoTerapiaI131 (o admin) del lado
 // servidor; Barrido corporal no.
 function addActaI131(tipo, data) {
-  const batch = writeBatch(db);
-  batch.set(doc(actasCol), { ...data, tipo, fecha: serverTimestamp() });
-  return batch.commit();
+  return crearActaConFicha(tipo, data);
 }
 
 // unidadActividad la fija el llamador según el tipo (nunca a elección del

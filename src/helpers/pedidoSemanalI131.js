@@ -29,3 +29,14 @@ export function remanenteBalde(actividadEsperada, fechaHoraLlegada, turnosDelBal
   const consumido = turnosDelBalde.filter((t) => esTipoMci(t.tipoDosis)).reduce((s, t) => s + (t.actividadPrevista || 0), 0);
   return { dias, teorica, consumido, remanente: Math.max(0, teorica - consumido) };
 }
+
+// Promedio real de actividadPrevista (ablativa/dosis, mCi) ya agendado ESTA
+// semana -- mismo dato/mismo filtro que sumaMci usa para el tope de 500
+// (turnosSemana completo, no por balde), reusado acá para traducir el
+// remanente a "cuántos pacientes más" sin inventar una dosis típica fija.
+// null si todavía no hay ningún turno mCi cargado esta semana -- nada real
+// de dónde sacar un promedio, así que el llamador no debe mostrar la frase.
+export function promedioActividadSemana(turnosSemana) {
+  const valores = turnosSemana.filter((t) => esTipoMci(t.tipoDosis) && t.actividadPrevista > 0).map((t) => t.actividadPrevista);
+  return valores.length ? valores.reduce((s, v) => s + v, 0) / valores.length : null;
+}
