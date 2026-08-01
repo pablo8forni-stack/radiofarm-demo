@@ -15,7 +15,7 @@ import {
   listenActas, addActaPaciente, actasPorRango, anularActaTransaction, listenAnulacionesActas,
   addActaI131Ablativa, addActaI131Dosis, addActaI131Barrido,
   addActaI131Captacion, addActaI131Centellograma, addActaI131CaptacionCentellograma,
-  fichaYaUsada, listenUltimaFicha,
+  resolverFichaIntento, listenUltimaFicha,
 } from "../../services/firestore/actas.js";
 import { listenMibgLotes, administrarMibgTransaction, administrarLutecioTransaction } from "../../services/firestore/mibgLotes.js";
 import { estadoMibgLote } from "../../helpers/mibgLote.js";
@@ -163,15 +163,31 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
 
   // Pre-chequeo amigable (aviso inmediato antes de intentar guardar) -- la
   // garantía real es el choque server-side contra el marcador create-only
-  // (fichaUsadaRef), esto es sólo para no hacerle esperar al técnico hasta
-  // el intento de guardado. Se dispara al perder el foco del campo, no en
-  // cada tecla (evita una consulta por cada dígito tipeado).
-  async function chequearFicha() {
-    const normalizada = normalizarFicha(fichaNro);
-    if (!fichaNro.trim()) { setFichaEstado(null); return; }
+  // de ese intento puntual (fichaUsadaRef/fichaIntentoHabilitado en
+  // firestore.rules), esto es sólo para no hacerle esperar al técnico
+  // hasta el intento de guardado. Se dispara al perder el foco del campo,
+  // no en cada tecla (evita una consulta por cada dígito tipeado).
+  // fichaEstado.intento (cuando tipo=="ok") es el intento 1..5 YA resuelto
+  // que guardar() manda tal cual -- Guardar queda deshabilitado hasta que
+  // esto resuelva, ver disabled del botón más abajo.
+  //
+  // Recibe el valor a chequear como parámetro (no lee fichaNro del estado)
+  // porque confirmarAnulacion precarga el campo y necesita disparar el
+  // chequeo en el mismo instante -- si leyera fichaNro de React state
+  // ahí, todavía tendría el valor viejo (closure stale, el setFichaNro de
+  // la precarga no se refleja hasta el próximo render).
+  async function resolverYSetFichaEstado(valorFicha) {
+    const normalizada = normalizarFicha(valorFicha);
+    if (!valorFicha?.trim()) { setFichaEstado(null); return; }
     if (!normalizada) { setFichaEstado({ tipo: "formato" }); return; }
-    const usada = await fichaYaUsada(normalizada);
-    setFichaEstado(usada ? { tipo: "usada", data: usada } : null);
+    setFichaEstado("verificando");
+    const r = await resolverFichaIntento(normalizada);
+    if (r.intento) setFichaEstado({ tipo: "ok", intento: r.intento });
+    else if (r.agotado) setFichaEstado({ tipo: "agotado" });
+    else setFichaEstado({ tipo: "usada", data: r.bloqueadaPor });
+  }
+  function chequearFicha() {
+    return resolverYSetFichaEstado(fichaNro);
   }
 
   // nav ({busqueda, token}) llega desde "Ir a Libro 2" (bloqueo de anulación
@@ -262,6 +278,12 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
       // criterio isotopoId de abajo (los 6 subtipos de I-131 no tienen ese
       // campo, distinguen por tipo).
       setSedeId(acta.sedeId); setFichaNro(acta.pacienteFicha || ""); setNombre(acta.pacienteNombre); setDni(acta.pacienteDni);
+      // Dispara el chequeo/resolución del intento siguiente de una (no
+      // espera a que el técnico toque el campo) -- recién anulamos el
+      // intento anterior arriba, así que este chequeo YA lo ve anulado y
+      // resuelve el próximo libre. Sin esto, Guardar quedaría deshabilitado
+      // hasta que el técnico clickeara el campo de Ficha y saliera de él.
+      resolverYSetFichaEstado(acta.pacienteFicha || "");
       setPeso(String(acta.peso ?? "")); setTalla(String(acta.talla ?? "")); setEstudio(acta.estudio || "");
       setObs(acta.observacion || "");
       if (acta.tipo === "i131_mibg") {
@@ -333,11 +355,16 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
 
   function guardar() {
     const fichaNormalizada = normalizarFicha(fichaNro);
-    if (!fichaNormalizada || !nombre.trim() || !dni.trim() || fichaEstado?.tipo === "usada") return;
+    if (!fichaNormalizada || !nombre.trim() || !dni.trim() || fichaEstado?.tipo !== "ok") return;
     if (esI131) {
       const base = {
         sedeId, sedeNombre: catalogo.sedes[sedeId]?.nombre,
-        pacienteFicha: fichaNormalizada, pacienteNombre: nombre.trim(), pacienteDni: dni.trim(),
+        // fichaIntentoNro: sólo hace falta para las 4 categorías que son
+        // alta simple (dosis/diagnostico/barrido -- ver crearActaConFicha
+        // en actas.js); para "mibg" administrarMibgTransaction lo vuelve a
+        // resolver DENTRO de su transacción y pisa este valor, así que
+        // mandarlo acá también no hace daño.
+        pacienteFicha: fichaNormalizada, fichaIntentoNro: fichaEstado?.intento, pacienteNombre: nombre.trim(), pacienteDni: dni.trim(),
         // Opcionales para I-131 -- se omiten del todo si quedaron vacíos, en
         // vez de mandar 0 (que se leería como "pesa 0kg", no "sin dato").
         ...(peso.trim() ? { peso: parseFloat(peso) || 0 } : {}),
@@ -413,7 +440,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
     const farm = catalogo.farms.find((f) => f.id === farmId);
     addActaPaciente({
       sedeId, sedeNombre: catalogo.sedes[sedeId]?.nombre,
-      pacienteFicha: fichaNormalizada,
+      pacienteFicha: fichaNormalizada, fichaIntentoNro: fichaEstado?.intento,
       pacienteNombre: nombre.trim(), pacienteDni: dni.trim(),
       peso: parseFloat(peso) || 0, talla: parseFloat(talla) || 0,
       estudio: estudio === "Otro" ? estudioOtro.trim() : estudio, mciAdministrados: parseFloat(mci) || 0,
@@ -782,11 +809,16 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
               onBlur={chequearFicha}
               placeholder={ultimaFicha != null ? String(ultimaFicha + 1) : "4521"}
             />
-            {fichaEstado && (
+            {fichaEstado === "verificando" && (
+              <div className="sm:col-span-2 -mt-2 text-xs text-gray-400">Verificando N° de Ficha...</div>
+            )}
+            {fichaEstado && fichaEstado !== "verificando" && fichaEstado.tipo !== "ok" && (
               <div className="sm:col-span-2 -mt-2 text-xs text-red-600">
                 {fichaEstado.tipo === "formato"
                   ? "El N° de Ficha debe ser sólo números."
-                  : `Este N° de Ficha ya fue usado el ${fmtTs(fichaEstado.data.fecha)} para el paciente ${fichaEstado.data.pacienteNombre} (${catalogo.sedes[fichaEstado.data.sedeId]?.nombre || fichaEstado.data.sedeId}).`}
+                  : fichaEstado.tipo === "agotado"
+                    ? "Este N° de Ficha ya tuvo demasiadas correcciones (5) -- contactá a soporte."
+                    : `Este N° de Ficha ya fue usado el ${fmtTs(fichaEstado.data.fecha)} para el paciente ${fichaEstado.data.pacienteNombre} (${catalogo.sedes[fichaEstado.data.sedeId]?.nombre || fichaEstado.data.sedeId}).`}
               </div>
             )}
             <Input label="Apellido y nombre" value={nombre} onChange={(e) => setNombre(capitalizarPalabras(e.target.value))} placeholder="García Juan" />
@@ -939,7 +971,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
           <div className="flex gap-2 justify-end mt-4">
             <Btn variant="outline" onClick={() => { setMostrarForm(false); limpiarForm(); }}>Cancelar</Btn>
             <Btn onClick={guardar} disabled={
-              !normalizarFicha(fichaNro) || !nombre.trim() || !dni.trim() || fichaEstado?.tipo === "usada" ||
+              !normalizarFicha(fichaNro) || !nombre.trim() || !dni.trim() || fichaEstado?.tipo !== "ok" ||
               (esI131
                 ? ((tipoI131Actual.requierePermiso && !puedeCargarDosisI131) ||
                    (tipoI131Actual.categoria !== "barrido" && !actividadAdministrada) ||

@@ -60,29 +60,67 @@ export async function actasPorPacienteDni(tipo, { dni, sedeId, esAdmin }) {
   return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
 }
 
-// N° de Ficha (Libro 2): id determinístico = el número ya normalizado (ver
-// helpers/fichaPaciente.js) -- mismo patrón que generadorRef arriba, un
-// marcador create-only en su propia colección (fichasUsadas, lectura GLOBAL
-// a propósito -- ver firestore.rules). data.pacienteFicha llega YA
-// normalizado desde el llamador (TabPacientes.jsx), nunca se renormaliza
-// acá para no tener dos fuentes de verdad sobre qué id corresponde.
-export const fichaUsadaRef = (pacienteFicha) => doc(fichasUsadasCol, pacienteFicha);
+// N° de Ficha (Libro 2): mismo esquema de intento secuencial que
+// mibg_${loteId}_${n}/lote_${loteId}_${n} (ver firestore.rules#
+// fichaIntentoHabilitado) -- bug real: un marcador único y fijo por número
+// (diseño original) no dejaba ningún id libre para volver a guardar la
+// acta después de anularla y corregirla (ej. error de DNI). Cada intento
+// es su propio marcador inmutable en su propia colección (fichasUsadas,
+// lectura GLOBAL a propósito -- ver firestore.rules).
+// data.pacienteFicha/fichaIntentoNro llegan YA resueltos desde el
+// llamador (TabPacientes.jsx via resolverFichaIntento, o
+// administrarLoteDosisUnicaTransaction en mibgLotes.js), nunca se
+// recalculan acá para no tener dos fuentes de verdad sobre qué id
+// corresponde.
+const CAP_FICHA_INTENTOS = 5;
+export const fichaUsadaRef = (pacienteFicha, fichaIntentoNro) => doc(fichasUsadasCol, `${pacienteFicha}_${fichaIntentoNro}`);
+// Marcador SIN sufijo _n -- sólo existe por compatibilidad con fichas
+// creadas antes de este esquema (tanda anterior). Nunca se escribe de
+// nuevo, sólo se lee para el chequeo de "está usado" (ver
+// resolverFichaIntento) -- no hay desbloqueo automático para éstos,
+// decisión explícita (ver nota larga en firestore.rules).
+export const fichaUsadaBareRef = (pacienteFicha) => doc(fichasUsadasCol, pacienteFicha);
+// Anulación de un intento de ficha -- vive en `actas` (mismo namespace
+// `anula_...` de siempre), NO dentro de fichasUsadas: reusa la rama
+// genérica 'anulacion' de actaValida() sin necesitar ninguna regla nueva.
+// Ver anularActaTransaction más abajo, que la crea en la MISMA
+// transacción que la anulación de la acta cuando corresponde.
+export const anulaFichaRef = (pacienteFicha, fichaIntentoNro) => doc(actasCol, `anula_ficha_${pacienteFicha}_${fichaIntentoNro}`);
+
 export function datosFichaUsada(data, tipo, actaId) {
   return {
     pacienteFicha: data.pacienteFicha, pacienteFichaNum: parseInt(data.pacienteFicha, 10),
+    fichaIntentoNro: data.fichaIntentoNro,
     pacienteNombre: data.pacienteNombre, sedeId: data.sedeId, actaId, tipo,
     fecha: serverTimestamp(),
   };
 }
 
 // Pre-chequeo amigable del lado cliente (aviso inmediato antes de intentar
-// guardar) -- la garantía real es el choque contra el marcador create-only
-// en el batch/transacción de guardado (ver crearActaConFicha más abajo y
-// administrarLoteDosisUnicaTransaction en mibgLotes.js), esto es sólo para
-// no hacerle esperar al técnico hasta el intento de guardado para avisarle.
-export async function fichaYaUsada(pacienteFicha) {
-  const snap = await getDoc(fichaUsadaRef(pacienteFicha));
-  return snap.exists() ? snap.data() : null;
+// guardar, TabPacientes.jsx#chequearFicha) -- resuelve el PRIMER intento
+// libre (1..5) para este número, igual que hace
+// administrarLoteDosisUnicaTransaction en mibgLotes.js pero con getDoc
+// suelto en vez de tx.get (no hay ninguna transacción abierta acá: los
+// tipos que usan esto -- paciente/tc99m, los 6 de I-131 salvo MIBG -- son
+// altas simples offline-safe, sin lectura previa real; esto es sólo para
+// UX, la garantía real sigue siendo el choque server-side). La garantía
+// real es la regla de Firestore, no esto -- si el estado cambió entre el
+// chequeo y el guardado (carrera rara), el batch de guardado falla solo y
+// se ve un error genérico, mismo riesgo residual que el resto del sistema.
+//
+// Devuelve { intento } si hay uno libre, o { bloqueadaPor } con los datos
+// de quién lo tiene activo, o { agotado: true } si los 5 intentos están
+// ocupados y activos.
+export async function resolverFichaIntento(pacienteFicha) {
+  const bareSnap = await getDoc(fichaUsadaBareRef(pacienteFicha));
+  if (bareSnap.exists()) return { bloqueadaPor: bareSnap.data() };
+  for (let n = 1; n <= CAP_FICHA_INTENTOS; n++) {
+    const snap = await getDoc(fichaUsadaRef(pacienteFicha, String(n)));
+    if (!snap.exists()) return { intento: String(n) };
+    const anulaSnap = await getDoc(anulaFichaRef(pacienteFicha, String(n)));
+    if (!anulaSnap.exists()) return { bloqueadaPor: snap.data() };
+  }
+  return { agotado: true };
 }
 
 // Sugerencia de placeholder (punto 1) -- NUNCA se envía sola, es sólo una
@@ -95,14 +133,15 @@ export function listenUltimaFicha(callback) {
 }
 
 // Crea la acta Y el marcador de ficha usada en el MISMO batch -- si el
-// marcador choca (ficha ya usada por otra acta), el batch entero se
-// rechaza, así que la acta tampoco se crea. Sigue siendo offline-safe (un
-// solo batch, sin lectura previa), igual que antes de este campo.
+// marcador choca (ficha ya usada por otra acta en ese mismo intento), el
+// batch entero se rechaza, así que la acta tampoco se crea. Sigue siendo
+// offline-safe (un solo batch, sin lectura previa) -- data.fichaIntentoNro
+// ya viene resuelto por el llamador (ver resolverFichaIntento arriba).
 function crearActaConFicha(tipo, data) {
   const batch = writeBatch(db);
   const actaRef = doc(actasCol);
   batch.set(actaRef, { ...data, tipo, fecha: serverTimestamp() });
-  batch.set(fichaUsadaRef(data.pacienteFicha), datosFichaUsada(data, tipo, actaRef.id));
+  batch.set(fichaUsadaRef(data.pacienteFicha, data.fichaIntentoNro), datosFichaUsada(data, tipo, actaRef.id));
   return batch.commit();
 }
 
@@ -223,8 +262,20 @@ export function addActaElucion(data, esPrimeraVez) {
 // en vez de pisar el motivo del primero. No hace falta el mismo mecanismo de
 // operacionId que egreso/transferencia -- acá el id de la propia acta ya es
 // una clave estable, no generada por el cliente en cada click.
+// Si la acta que se anula tiene pacienteFicha/fichaIntentoNro (los 5 tipos
+// que pasan por crearActaConFicha/administrarLoteDosisUnicaTransaction),
+// en la MISMA transacción se anula también ESE intento de ficha
+// (actas/anula_ficha_${numero}_${intento}, ver fichaAnulada en
+// firestore.rules) -- así el siguiente intento queda libre para corregir
+// (ej. error de DNI), mismo mecanismo que ya libera un lote de MIBG/
+// Lutecio-177 al anular su acta de uso. Genérica: los tipos SIN ficha
+// (marcación, elución, lotes, movimientos) no llevan estos campos, así
+// que acá no pasa nada extra para ellos.
 export function anularActaTransaction(acta, motivo, usuario) {
   const anulacionRef = doc(actasCol, `anula_${acta.id}`);
+  const fichaAnulaRef = acta.pacienteFicha && acta.fichaIntentoNro
+    ? anulaFichaRef(acta.pacienteFicha, acta.fichaIntentoNro)
+    : null;
   return conMensajeDeContingencia(() =>
     runTransaction(db, async (tx) => {
       const yaAnuladaSnap = await tx.get(anulacionRef);
@@ -234,6 +285,13 @@ export function anularActaTransaction(acta, motivo, usuario) {
         fecha: serverTimestamp(), motivo,
         usuarioNombre: usuario.nombre, usuarioEmail: usuario.email,
       });
+      if (fichaAnulaRef) {
+        tx.set(fichaAnulaRef, {
+          tipo: "anulacion", anulaId: `ficha_${acta.pacienteFicha}_${acta.fichaIntentoNro}`, sedeId: acta.sedeId,
+          fecha: serverTimestamp(), motivo,
+          usuarioNombre: usuario.nombre, usuarioEmail: usuario.email,
+        });
+      }
     })
   );
 }

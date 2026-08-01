@@ -477,7 +477,7 @@ service cloud.firestore {
                  (d.actividadCalibrada is number && d.actividadCalibrada > 0)))
             : esTipoDosisI131(d.tipo)
               ? (tieneAccesoI131() &&
-                 fichaValida(d.pacienteFicha) && fichaLibre(d.pacienteFicha) &&
+                 fichaValida(d.pacienteFicha) && d.fichaIntentoNro in ['1', '2', '3', '4', '5'] && fichaIntentoHabilitado(d.pacienteFicha, d.fichaIntentoNro) &&
                  d.pacienteNombre is string && d.pacienteNombre.size() > 0 &&
                  d.pacienteDni is string && d.pacienteDni.size() > 0 &&
                  d.actividadAdministrada is number && d.actividadAdministrada > 0 &&
@@ -485,17 +485,17 @@ service cloud.firestore {
                  d.lote is string && d.lote.size() > 0)
               : esTipoDiagnosticoI131(d.tipo)
                 ? (tieneAccesoI131() &&
-                   fichaValida(d.pacienteFicha) && fichaLibre(d.pacienteFicha) &&
+                   fichaValida(d.pacienteFicha) && d.fichaIntentoNro in ['1', '2', '3', '4', '5'] && fichaIntentoHabilitado(d.pacienteFicha, d.fichaIntentoNro) &&
                    d.pacienteNombre is string && d.pacienteNombre.size() > 0 &&
                    d.pacienteDni is string && d.pacienteDni.size() > 0 &&
                    d.actividadAdministrada is number && d.actividadAdministrada > 0 &&
                    d.unidadActividad == 'uCi')
                 : d.tipo == 'i131_barrido'
-                  ? (fichaValida(d.pacienteFicha) && fichaLibre(d.pacienteFicha) &&
+                  ? (fichaValida(d.pacienteFicha) && d.fichaIntentoNro in ['1', '2', '3', '4', '5'] && fichaIntentoHabilitado(d.pacienteFicha, d.fichaIntentoNro) &&
                      d.pacienteNombre is string && d.pacienteNombre.size() > 0 &&
                      d.pacienteDni is string && d.pacienteDni.size() > 0)
                   : d.tipo == 'i131_mibg'
-                    ? (fichaValida(d.pacienteFicha) && fichaLibre(d.pacienteFicha) &&
+                    ? (fichaValida(d.pacienteFicha) && d.fichaIntentoNro in ['1', '2', '3', '4', '5'] && fichaIntentoHabilitado(d.pacienteFicha, d.fichaIntentoNro) &&
                        d.pacienteNombre is string && d.pacienteNombre.size() > 0 &&
                        d.pacienteDni is string && d.pacienteDni.size() > 0 &&
                        d.mibgLoteId is string && d.mibgLoteId.size() > 0 &&
@@ -549,7 +549,7 @@ service cloud.firestore {
                           : (d.lote is string && d.lote.size() > 0 &&
                    (d.tipo == 'paciente'
                      ? (d.mciAdministrados is number && d.mciAdministrados > 0 &&
-                        fichaValida(d.pacienteFicha) && fichaLibre(d.pacienteFicha) &&
+                        fichaValida(d.pacienteFicha) && d.fichaIntentoNro in ['1', '2', '3', '4', '5'] && fichaIntentoHabilitado(d.pacienteFicha, d.fichaIntentoNro) &&
                         d.isotopoId is string && d.isotopoId.size() > 0 &&
                         (d.isotopoId != 'lu177'
                           ? (d.farmId is string && d.farmId.size() > 0)
@@ -672,30 +672,72 @@ service cloud.firestore {
     // actas.js y mibgLotes.js): alguien escribiendo DIRECTO a /actas por
     // SDK (saltándose la UI, exactamente lo que este archivo de tests
     // simula) podría crear una acta con un pacienteFicha ya usado sin
-    // tocar fichasUsadas para nada, y esta regla no lo vería. Con
-    // !exists(...) acá, CUALQUIER acta nueva (oficial o no) queda
-    // bloqueada en cuanto el número ya tiene un marcador -- cierra el
-    // caso real (duplicar un número YA registrado por el camino oficial),
-    // que es la enorme mayoría de los casos. Límite que sigue quedando
-    // abierto, a conciencia: dos escrituras DIRECTAS que además se salteen
-    // la creación del marcador las dos veces no chocarían entre sí (nadie
-    // creó nunca el marcador) -- Firestore Rules no puede exigir que una
-    // escritura a /actas venga acompañada de otra a /fichasUsadas en el
-    // mismo batch, sólo puede validar cada escritura por separado.
-    function fichaLibre(ficha) {
-      return !exists(/databases/$(database)/documents/fichasUsadas/$(ficha));
+    // tocar fichasUsadas para nada, y esta regla no lo vería.
+    //
+    // Mismo esquema de intento secuencial que ya usa mibg_${loteId}_${n}/
+    // lote_${loteId}_${n} (ver intentoHabilitado más arriba) -- bug real
+    // encontrado en producción: un marcador único y fijo por número
+    // (`fichasUsadas/{numero}`, diseño original) no dejaba ningún id libre
+    // para volver a guardar la acta después de anularla y corregirla (ej.
+    // error de DNI), por el mismo motivo que mibg_${loteId} fijo tampoco
+    // dejaba. La garantía real (nunca dos actas ACTIVAS con el mismo N° de
+    // Ficha) se sostiene igual por inducción: el intento N (N>1) sólo se
+    // puede crear si el intento N-1 existe Y está anulado -- alcanza con
+    // revisar un solo intento anterior.
+    //
+    // La anulación del intento vive en `actas` (`anula_ficha_{numero}_{n}`),
+    // NO en una anulación propia dentro de fichasUsadas -- reusa la MISMA
+    // rama genérica 'anulacion' de actaValida() que ya usa todo el sistema
+    // (anularActaTransaction en services/firestore/actas.js), sin necesitar
+    // ninguna regla nueva para eso.
+    //
+    // fichasUsadas/{numero} SIN sufijo (marcadores de antes de este
+    // esquema) siguen bloqueando el intento 1 para siempre -- decisión
+    // explícita, sin desbloqueo automático (no hay ningún anula_ propio
+    // para ellos; agregarlo hubiera costado un get() extra por cada
+    // choque). Los pocos números afectados se liberan a mano desde
+    // Firebase Console si hace falta, no hay backfill.
+    function fichaAnulada(numero, n) {
+      return exists(/databases/$(database)/documents/fichasUsadas/$(numero + '_' + n)) &&
+        exists(/databases/$(database)/documents/actas/$('anula_ficha_' + numero + '_' + n));
+    }
+    // usoPropioLibre: a diferencia de mibg_${loteId}_${n}/lote_${loteId}_${n}
+    // (donde el id de la ACTA misma es el determinístico, así que Firestore
+    // ya impide que dos actas distintas reclamen el mismo intentoNro -- es
+    // un update sobre un id existente, allow update:false lo rechaza solo),
+    // acá las 4 ramas que NO son MIBG/Lutecio (paciente, dosis, diagnóstico,
+    // barrido) usan un id de acta AUTOGENERADO -- nada impide, en el
+    // esquema, que dos actas distintas reclamen el mismo fichaIntentoNro
+    // para el mismo número. Hace falta este chequeo extra (el marcador de
+    // ESE intento puntual no puede existir todavía) además de mirar el
+    // intento anterior -- confirmado empíricamente que sigue sin acercarse
+    // al tope de document-access calls (ver esquema-intentos-lote-dosis-
+    // unica.md), pero es una llamada más que el esquema de lote/MIBG.
+    function usoPropioLibre(numero, n) {
+      return !exists(/databases/$(database)/documents/fichasUsadas/$(numero + '_' + n));
+    }
+    function fichaIntentoHabilitado(numero, intentoNro) {
+      return usoPropioLibre(numero, intentoNro) &&
+        (intentoNro == '1'
+          ? !exists(/databases/$(database)/documents/fichasUsadas/$(numero))
+          : intentoNro == '2' ? fichaAnulada(numero, '1')
+          : intentoNro == '3' ? fichaAnulada(numero, '2')
+          : intentoNro == '4' ? fichaAnulada(numero, '3')
+          : fichaAnulada(numero, '4'));
     }
 
     function fichaUsadaValida(fichaId) {
       let d = request.resource.data;
       return fichaValida(d.pacienteFicha) &&
+        d.fichaIntentoNro in ['1', '2', '3', '4', '5'] &&
+        fichaIntentoHabilitado(d.pacienteFicha, d.fichaIntentoNro) &&
         d.pacienteFichaNum is number && d.pacienteFichaNum > 0 &&
         d.pacienteNombre is string && d.pacienteNombre.size() > 0 &&
         d.sedeId is string && d.sedeId.size() > 0 &&
         (isAdmin() || miRol().sede == d.sedeId) &&
         d.actaId is string && d.actaId.size() > 0 &&
         d.tipo is string && d.tipo.size() > 0 &&
-        fichaId == d.pacienteFicha;
+        fichaId == d.pacienteFicha + '_' + d.fichaIntentoNro;
     }
 
     match /fichasUsadas/{id} {
