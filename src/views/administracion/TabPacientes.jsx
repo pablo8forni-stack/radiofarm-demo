@@ -190,6 +190,20 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
     return resolverYSetFichaEstado(fichaNro);
   }
 
+  // Precarga el campo N° de Ficha con la sugerencia (último real cargado +
+  // 1) como valor REAL y editable, no sólo placeholder -- así un Tab/clic
+  // afuera sin tipear nada la acepta tal cual (ver onFocus del Input más
+  // abajo, que selecciona todo para que escribir encima reemplace al
+  // instante). Resuelve fichaEstado de una, mismo motivo que
+  // confirmarAnulacion ya hace con su propio precargado: si el técnico
+  // nunca visita el campo, Guardar no debe quedar esperando un blur que no
+  // va a llegar.
+  function precargarSugerenciaFicha() {
+    const sugerida = ultimaFicha != null ? String(ultimaFicha + 1) : "";
+    setFichaNro(sugerida);
+    resolverYSetFichaEstado(sugerida);
+  }
+
   // nav ({busqueda, token}) llega desde "Ir a Libro 2" (bloqueo de anulación
   // de un lote de MIBG/Lutecio-177 con administración activa,
   // TabLoteDosisUnica.jsx) -- limpia los filtros de fecha/sede (la
@@ -311,10 +325,19 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
     if (data) {
       setNombre(data.pacienteNombre); setDni(data.pacienteDni);
       setPeso(data.peso); setTalla(data.talla); setEstudio(data.estudio || "");
+      // Pulseras nuevas traen el N° de Ficha como 6to campo del QR (ver
+      // parseQR) -- si viene y es un formato válido, se precarga ESE
+      // número en vez de la sugerencia genérica de "último + 1". Un QR
+      // viejo de 5 campos (o el campo vacío/no numérico) cae al mismo
+      // fallback de siempre.
+      const fichaDelQR = normalizarFicha(data.pacienteFicha);
+      if (fichaDelQR) { setFichaNro(fichaDelQR); resolverYSetFichaEstado(fichaDelQR); }
+      else precargarSugerenciaFicha();
       setMostrarForm(true);
       onToast("Pulsera leída correctamente", "success");
     } else {
       onToast("QR no reconocido. Ingresá los datos manualmente.", "error");
+      precargarSugerenciaFicha();
       setMostrarForm(true);
     }
   }
@@ -756,7 +779,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
                 </Btn>
               </>
             )}
-            <Btn size="sm" variant="ghost" onClick={() => { limpiarForm(); setMostrarForm(true); }} className="md:order-3">+ Manual</Btn>
+            <Btn size="sm" variant="ghost" onClick={() => { limpiarForm(); precargarSugerenciaFicha(); setMostrarForm(true); }} className="md:order-3">+ Manual</Btn>
           </div>
           <Btn size="sm" variant="primary" onClick={() => setMostrarQR(true)} className="order-1 md:order-2 w-full md:w-auto">
             <span className="flex items-center gap-1.5 justify-center">
@@ -807,6 +830,13 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
               label="N° de Ficha" value={fichaNro}
               onChange={(e) => { setFichaNro(e.target.value); setFichaEstado(null); }}
               onBlur={chequearFicha}
+              // Selecciona todo al enfocar: el valor ya viene precargado
+              // (sugerencia, dato del QR, o reintento post-anulación, ver
+              // precargarSugerenciaFicha/confirmarAnulacion/handleQRResult)
+              // como valor real editable, no sólo placeholder -- así un
+              // Tab/clic afuera sin tipear nada lo acepta tal cual, y
+              // escribir encima lo reemplaza al instante sin borrar primero.
+              onFocus={(e) => e.target.select()}
               placeholder={ultimaFicha != null ? String(ultimaFicha + 1) : "4521"}
             />
             {fichaEstado === "verificando" && (

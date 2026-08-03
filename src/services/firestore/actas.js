@@ -185,8 +185,25 @@ export const addActaI131CaptacionCentellograma = (data) => addActaI131("i131_cap
 // compartido de alta concurrencia. Su desglosePorVial queda congelado con los
 // valores calculados en el momento de guardar, para que una consulta futura
 // nunca recalcule (y por lo tanto nunca cambie) el número ya mostrado/usado.
-export const addActaI131Vial = (data) => addActaI131("i131_vial", data);
-export const addActaI131Extraccion = (data) => addActaI131("i131_extraccion", data);
+//
+// NO pasan por addActaI131()/crearActaConFicha (bug real, visto al probar
+// "Nuevo vial de I-131"): un vial y una extracción no son registros de
+// paciente, nunca tienen pacienteFicha/fichaIntentoNro -- crearActaConFicha
+// intentaba igual escribir un marcador en fichasUsadas con esos campos
+// undefined, y el SDK cliente de Firestore rechaza cualquier set() con un
+// campo undefined antes de llegar al server. Mismo patrón simple que
+// addActaMarcacion: un único set() del acta, sin marcador de ficha.
+export function addActaI131Vial(data) {
+  const batch = writeBatch(db);
+  batch.set(doc(actasCol), { ...data, tipo: "i131_vial", fecha: serverTimestamp() });
+  return batch.commit();
+}
+
+export function addActaI131Extraccion(data) {
+  const batch = writeBatch(db);
+  batch.set(doc(actasCol), { ...data, tipo: "i131_extraccion", fecha: serverTimestamp() });
+  return batch.commit();
+}
 
 // Resultado de %Captación (espacio de cálculo, Parte B) -- vinculado por
 // dosisActaId al registro original de Captación/Centellograma/Captación y

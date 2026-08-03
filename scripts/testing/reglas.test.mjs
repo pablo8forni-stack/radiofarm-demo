@@ -10,6 +10,7 @@ import {
   PERSONAS, SEDE_A, SEDE_B, FARM_ID, db, loguearComo, prepararFixturesGlobales, loteDePrueba, fichaDePrueba, cerrarConexiones,
   crearLoteDirecto, borrarLote,
 } from "./fixtures.mjs";
+import { addActaI131Vial, addActaI131Extraccion } from "../../src/services/firestore/actas.js";
 
 before(async () => { await prepararFixturesGlobales(); });
 after(cerrarConexiones);
@@ -804,6 +805,25 @@ function extraccionBase(vialId, overrides = {}) {
     ...overrides,
   };
 }
+
+// Regresión: addActaI131Vial/addActaI131Extraccion pasaban antes por
+// crearActaConFicha (misma función que los 6 tipos de registro de paciente),
+// que siempre intentaba escribir un marcador en fichasUsadas usando
+// data.pacienteFicha/fichaIntentoNro -- campos que un vial/extracción nunca
+// tienen. El SDK cliente rechaza cualquier set() con un campo undefined
+// antes de llegar al servidor, así que esto nunca lo hubiera atrapado un
+// test contra addDoc crudo (como el resto de este archivo): hace falta
+// llamar la función real de src/ para reproducirlo.
+test("addActaI131Vial (servicio real) no falla por pacienteFicha undefined", async () => {
+  await loguearComo(PERSONAS.admin);
+  await addActaI131Vial(vialBase({ sedeId: SEDE_B, usuarioEmail: PERSONAS.admin.email, lote: "REGRESION-VIAL" }));
+});
+
+test("addActaI131Extraccion (servicio real) no falla por pacienteFicha undefined", async () => {
+  await loguearComo(PERSONAS.admin);
+  const v = await addDoc(collection(db, "actas"), vialBase({ sedeId: SEDE_B, usuarioEmail: PERSONAS.admin.email, lote: "REGRESION-EXT" }));
+  await addActaI131Extraccion(extraccionBase(v.id, { sedeId: SEDE_B, usuarioEmail: PERSONAS.admin.email }));
+});
 
 test("técnico sin accesoTerapiaI131 NO puede crear un vial de I-131", async () => {
   await loguearComo(PERSONAS.tecnicoA);
