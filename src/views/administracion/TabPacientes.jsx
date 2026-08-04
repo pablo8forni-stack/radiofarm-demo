@@ -766,7 +766,13 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
           </div>
           {esAdmin && (
             <div className="w-full md:w-auto">
-              <Sel value={filtroSede} onChange={(e) => setFiltroSede(e.target.value)}>
+              {/* Sólo filtra qué actas YA GUARDADAS se muestran abajo --
+                  NO tiene ninguna relación con dónde se guarda un registro
+                  nuevo (eso es "Guardar en sede", el banner del formulario
+                  más abajo). Nombre explícito a propósito: un admin
+                  confundió este control con ese otro, real bug encontrado
+                  en producción -- ver el banner de "Guardar en sede". */}
+              <Sel label="Ver registros de" value={filtroSede} onChange={(e) => setFiltroSede(e.target.value)}>
                 <option value="">Todas las sedes</option>
                 {sedesActivas(catalogo).map((s) => <option key={s.id} value={s.id}>{s.short}</option>)}
               </Sel>
@@ -839,6 +845,34 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
             </button>
           </div>
+          {esAdmin && (
+            // Bug real en producción: un admin cambió "Ver registros de"
+            // (el filtro de arriba de la lista, sin relación con esto) y
+            // asumió que eso redirigía dónde se guarda un registro NUEVO.
+            // El N° de Ficha es único POR SEDE, así que guardar en la sede
+            // equivocada no tira ningún error -- queda una acta real
+            // atribuida a la sede que no era. Por eso este control vive acá
+            // arriba, ANTES de cualquier otro campo (no perdido en la
+            // grilla, no hay que scrollear para verlo) y con un tratamiento
+            // visual que no se confunde con un campo más del formulario.
+            <div className="mb-4 bg-amber-50 border border-amber-200 rounded-xl p-3 flex flex-col gap-1.5">
+              <Sel label="Guardar en sede" value={sedeId} onChange={(e) => {
+                const nuevaSede = e.target.value;
+                setSedeId(nuevaSede); setFarmId(""); setLote("");
+                // El N° de Ficha es único POR SEDE -- un intento ya
+                // resuelto para la sede anterior no vale para la nueva, así
+                // que cambiar de sede re-dispara el chequeo contra el
+                // número YA tipeado (sin pisar el valor: mismo principio de
+                // nunca autocompletar en silencio que rige el resto de este
+                // campo). Si el campo está vacío no hay nada que
+                // re-verificar.
+                if (fichaNro.trim()) resolverYSetFichaEstado(nuevaSede, fichaNro);
+              }}>
+                {sedesActivas(catalogo).map((s) => <option key={s.id} value={s.id}>{s.short}</option>)}
+              </Sel>
+              <p className="text-xs text-amber-700">Este registro se guarda acá, sin importar el filtro "Ver registros de" de arriba.</p>
+            </div>
+          )}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <Input
               label="N° de Ficha" value={fichaNro}
@@ -867,21 +901,6 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
             )}
             <Input label="Apellido y nombre" value={nombre} onChange={(e) => setNombre(capitalizarPalabras(e.target.value))} placeholder="García Juan" />
             <Input label="DNI" value={dni} onChange={(e) => setDni(e.target.value)} placeholder="28456789" />
-            {esAdmin && (
-              // El N° de Ficha es único POR SEDE -- un intento ya resuelto
-              // para la sede anterior no vale para la nueva, así que cambiar
-              // de sede re-dispara el chequeo contra el número YA tipeado
-              // (sin pisar el valor: mismo principio de nunca autocompletar
-              // en silencio que rige el resto de este campo). Si el campo
-              // está vacío no hay nada que re-verificar.
-              <Sel label="Sede" value={sedeId} onChange={(e) => {
-                const nuevaSede = e.target.value;
-                setSedeId(nuevaSede); setFarmId(""); setLote("");
-                if (fichaNro.trim()) resolverYSetFichaEstado(nuevaSede, fichaNro);
-              }}>
-                {sedesActivas(catalogo).map((s) => <option key={s.id} value={s.id}>{s.short}</option>)}
-              </Sel>
-            )}
             {/* Peso/Talla se piden siempre, para los 3 casos (Tc-99m/Lutecio/
                 I-131) -- para I-131 son opcionales (no bloquean Guardar, ver
                 el disabled del botón), para Tc-99m/Lutecio quedan igual que
