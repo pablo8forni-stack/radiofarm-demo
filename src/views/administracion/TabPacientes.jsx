@@ -96,9 +96,10 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
   const [fichaNro, setFichaNro] = useState("");
   // null | { tipo: "formato" } | { tipo: "usada", data } -- se limpia solo
   // apenas fichaNro cambia (ver onChange más abajo), así nunca queda un
-  // error viejo pegado a un valor ya distinto. ultimaFicha alimenta sólo el
-  // placeholder (sugerencia visual, nunca se autocompleta) -- ver
-  // listenUltimaFicha en services/firestore/actas.js.
+  // error viejo pegado a un valor ya distinto. ultimaFicha alimenta la
+  // sugerencia de precarga (ver precargarSugerenciaFicha), filtrada por la
+  // sede activa del formulario -- ver listenUltimaFicha en
+  // services/firestore/actas.js.
   const [fichaEstado, setFichaEstado] = useState(null);
   const [ultimaFicha, setUltimaFicha] = useState(null);
   // isotopoId siempre presente al guardar (nunca ausente) -- "tc99m" es el
@@ -138,10 +139,10 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
   // tenían) -- dosisI131/ablativaI131 alimentan además el picker "Dosis
   // relacionada" de los 3 diagnósticos (ver dosisParaVincular). Todos se
   // mezclan en el listado principal -- el N° de Ficha es una secuencia
-  // única y creciente para TODA la institución (asignada por VM RIS, nunca
-  // por sede ni por día -- ver helpers/fichaPaciente.js), así que
-  // "Registros del día" tiene que mostrar los 7 tipos intercalados por hora
-  // para no dejar saltos de ficha sin explicación visible. La pestaña
+  // correlativa propia de CADA SEDE (asignada por VM RIS -- ver
+  // helpers/fichaPaciente.js), así que "Registros del día" tiene que
+  // mostrar los 7 tipos intercalados por hora para no dejar saltos de
+  // ficha sin explicación visible dentro de la misma sede. La pestaña
   // "Gestión I-131" (consulta) sigue siendo el filtro específico de estos
   // mismos 7 tipos, sin cambios.
   useEffect(() => listenActas("i131_ablativa", setAblativaI131, { esAdmin, sedeId: usuario.sede }), []);
@@ -156,10 +157,14 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
   // en tiempo real: un lote usado por otra técnica desaparece para todos al
   // instante, sin importar el día (ver lotesMibgDisponibles).
   useEffect(() => listenMibgLotes(setMibgLotes, { esAdmin, sedeId: usuario.sede }), []);
-  // N° de Ficha: único en TODA la institución (VM RIS), no por sede ni por
-  // día -- listener chico (limit(1)) sólo para la sugerencia del
-  // placeholder, ver nota en firestore.rules#fichaUsadaValida.
-  useEffect(() => listenUltimaFicha(setUltimaFicha), []);
+  // N° de Ficha: correlativo propio de CADA SEDE (VM RIS) -- listener chico
+  // (limit(1)) filtrado por la sede activa del formulario (sedeId, la del
+  // técnico si es fija, o la elegida por el admin), sólo para la sugerencia
+  // de precarga, ver nota en firestore.rules#fichaUsadaValida. Se
+  // re-suscribe cada vez que cambia sedeId (dep array), así que si un admin
+  // cambia de sede en el formulario, la sugerencia pasa a reflejar la otra
+  // sede.
+  useEffect(() => listenUltimaFicha(sedeId, setUltimaFicha), [sedeId]);
 
   // Pre-chequeo amigable (aviso inmediato antes de intentar guardar) -- la
   // garantía real es el choque server-side contra el marcador create-only
@@ -171,37 +176,40 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
   // que guardar() manda tal cual -- Guardar queda deshabilitado hasta que
   // esto resuelva, ver disabled del botón más abajo.
   //
-  // Recibe el valor a chequear como parámetro (no lee fichaNro del estado)
-  // porque confirmarAnulacion precarga el campo y necesita disparar el
-  // chequeo en el mismo instante -- si leyera fichaNro de React state
-  // ahí, todavía tendría el valor viejo (closure stale, el setFichaNro de
-  // la precarga no se refleja hasta el próximo render).
-  async function resolverYSetFichaEstado(valorFicha) {
+  // Recibe sede y valor a chequear como parámetros explícitos (no los lee
+  // del estado) porque confirmarAnulacion/precargarSugerenciaFicha precargan
+  // el campo (y a veces la sede) y necesitan disparar el chequeo en el
+  // mismo instante -- si leyeran de React state ahí, todavía tendrían el
+  // valor viejo (closure stale, un setState no se refleja hasta el próximo
+  // render). La unicidad es por (sede, número) -- ver nota larga en
+  // firestore.rules -- así que sedeId es tan parte de la consulta como el
+  // número mismo.
+  async function resolverYSetFichaEstado(sedeIdChequeo, valorFicha) {
     const normalizada = normalizarFicha(valorFicha);
     if (!valorFicha?.trim()) { setFichaEstado(null); return; }
     if (!normalizada) { setFichaEstado({ tipo: "formato" }); return; }
     setFichaEstado("verificando");
-    const r = await resolverFichaIntento(normalizada);
+    const r = await resolverFichaIntento(sedeIdChequeo, normalizada);
     if (r.intento) setFichaEstado({ tipo: "ok", intento: r.intento });
     else if (r.agotado) setFichaEstado({ tipo: "agotado" });
     else setFichaEstado({ tipo: "usada", data: r.bloqueadaPor });
   }
   function chequearFicha() {
-    return resolverYSetFichaEstado(fichaNro);
+    return resolverYSetFichaEstado(sedeId, fichaNro);
   }
 
   // Precarga el campo N° de Ficha con la sugerencia (último real cargado +
-  // 1) como valor REAL y editable, no sólo placeholder -- así un Tab/clic
-  // afuera sin tipear nada la acepta tal cual (ver onFocus del Input más
-  // abajo, que selecciona todo para que escribir encima reemplace al
-  // instante). Resuelve fichaEstado de una, mismo motivo que
-  // confirmarAnulacion ya hace con su propio precargado: si el técnico
-  // nunca visita el campo, Guardar no debe quedar esperando un blur que no
-  // va a llegar.
+  // 1, de la SEDE activa del formulario) como valor REAL y editable, no
+  // sólo placeholder -- así un Tab/clic afuera sin tipear nada la acepta
+  // tal cual (ver onFocus del Input más abajo, que selecciona todo para
+  // que escribir encima reemplace al instante). Resuelve fichaEstado de
+  // una, mismo motivo que confirmarAnulacion ya hace con su propio
+  // precargado: si el técnico nunca visita el campo, Guardar no debe
+  // quedar esperando un blur que no va a llegar.
   function precargarSugerenciaFicha() {
     const sugerida = ultimaFicha != null ? String(ultimaFicha + 1) : "";
     setFichaNro(sugerida);
-    resolverYSetFichaEstado(sugerida);
+    resolverYSetFichaEstado(sedeId, sugerida);
   }
 
   // nav ({busqueda, token}) llega desde "Ir a Libro 2" (bloqueo de anulación
@@ -297,7 +305,9 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
       // intento anterior arriba, así que este chequeo YA lo ve anulado y
       // resuelve el próximo libre. Sin esto, Guardar quedaría deshabilitado
       // hasta que el técnico clickeara el campo de Ficha y saliera de él.
-      resolverYSetFichaEstado(acta.pacienteFicha || "");
+      // acta.sedeId directo (no el sedeId de estado): el setSedeId de arriba
+      // recién se aplica en el próximo render, closure stale si se leyera acá.
+      resolverYSetFichaEstado(acta.sedeId, acta.pacienteFicha || "");
       setPeso(String(acta.peso ?? "")); setTalla(String(acta.talla ?? "")); setEstudio(acta.estudio || "");
       setObs(acta.observacion || "");
       if (acta.tipo === "i131_mibg") {
@@ -329,9 +339,12 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
       // parseQR) -- si viene y es un formato válido, se precarga ESE
       // número en vez de la sugerencia genérica de "último + 1". Un QR
       // viejo de 5 campos (o el campo vacío/no numérico) cae al mismo
-      // fallback de siempre.
+      // fallback de siempre. Se valida contra `sedeId` (la sede ACTIVA del
+      // formulario, no una global) -- este flujo no cambia de sede, así que
+      // el valor de estado es válido acá (sin el riesgo de closure stale
+      // que sí aplica en confirmarAnulacion).
       const fichaDelQR = normalizarFicha(data.pacienteFicha);
-      if (fichaDelQR) { setFichaNro(fichaDelQR); resolverYSetFichaEstado(fichaDelQR); }
+      if (fichaDelQR) { setFichaNro(fichaDelQR); resolverYSetFichaEstado(sedeId, fichaDelQR); }
       else precargarSugerenciaFicha();
       setMostrarForm(true);
       onToast("Pulsera leída correctamente", "success");
@@ -358,9 +371,10 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
   // a radioisotopos no debe hacer aparecer nada acá por sí sola (ver nota en
   // services/firestore/radioisotopos.js). I-131 ya no tiene pestaña propia de
   // carga -- toda la carga de pacientes (sea cual sea el isótopo) vive acá,
-  // porque el N° de Ficha es una secuencia única para toda la institución,
-  // compartida por todos; Gestión I-131 pasó a ser sólo una vista de
-  // consulta de estos mismos registros (6 tipos, sin cambios de modelo).
+  // porque el N° de Ficha es una secuencia única DENTRO DE CADA SEDE,
+  // compartida por todos los isótopos de esa sede (no por isótopo); Gestión
+  // I-131 pasó a ser sólo una vista de consulta de estos mismos registros
+  // (6 tipos, sin cambios de modelo).
   const isotoposCasoDistinto = (catalogo.radioisotopos || []).filter((i) => i.id === "lu177" || i.id === "i131");
 
   const tipoI131Actual = TIPOS_I131.find((t) => t.id === tipoI131);
@@ -848,13 +862,23 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
                   ? "El N° de Ficha debe ser sólo números."
                   : fichaEstado.tipo === "agotado"
                     ? "Este N° de Ficha ya tuvo demasiadas correcciones (5) -- contactá a soporte."
-                    : `Este N° de Ficha ya fue usado el ${fmtTs(fichaEstado.data.fecha)} para el paciente ${fichaEstado.data.pacienteNombre} (${catalogo.sedes[fichaEstado.data.sedeId]?.nombre || fichaEstado.data.sedeId}).`}
+                    : `Este N° de Ficha ya fue usado el ${fmtTs(fichaEstado.data.fecha)} para el paciente ${fichaEstado.data.pacienteNombre}.`}
               </div>
             )}
             <Input label="Apellido y nombre" value={nombre} onChange={(e) => setNombre(capitalizarPalabras(e.target.value))} placeholder="García Juan" />
             <Input label="DNI" value={dni} onChange={(e) => setDni(e.target.value)} placeholder="28456789" />
             {esAdmin && (
-              <Sel label="Sede" value={sedeId} onChange={(e) => { setSedeId(e.target.value); setFarmId(""); setLote(""); }}>
+              // El N° de Ficha es único POR SEDE -- un intento ya resuelto
+              // para la sede anterior no vale para la nueva, así que cambiar
+              // de sede re-dispara el chequeo contra el número YA tipeado
+              // (sin pisar el valor: mismo principio de nunca autocompletar
+              // en silencio que rige el resto de este campo). Si el campo
+              // está vacío no hay nada que re-verificar.
+              <Sel label="Sede" value={sedeId} onChange={(e) => {
+                const nuevaSede = e.target.value;
+                setSedeId(nuevaSede); setFarmId(""); setLote("");
+                if (fichaNro.trim()) resolverYSetFichaEstado(nuevaSede, fichaNro);
+              }}>
                 {sedesActivas(catalogo).map((s) => <option key={s.id} value={s.id}>{s.short}</option>)}
               </Sel>
             )}
@@ -868,11 +892,11 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
                 defecto, cero fricción. Este link revela el selector de
                 isótopo sólo cuando hace falta (Lutecio-177 o I-131, lista
                 blanca explícita más arriba). I-131 no tiene pestaña propia de
-                carga: el N° de Ficha es una secuencia única para toda la
-                institución, compartida por todos los pacientes del
-                servicio, así que toda la carga vive acá sin importar el
-                isótopo -- Gestión I-131 es sólo una vista de consulta de
-                estos mismos registros. */}
+                carga: el N° de Ficha es una secuencia única dentro de cada
+                sede, compartida por todos los isótopos de esa sede, así que
+                toda la carga vive acá sin importar el isótopo -- Gestión
+                I-131 es sólo una vista de consulta de estos mismos
+                registros. */}
             {!mostrarIsotopo && isotoposCasoDistinto.length > 0 && (
               <div className="sm:col-span-2">
                 <button type="button" onClick={() => setMostrarIsotopo(true)} className="text-xs text-blue-600 hover:text-blue-800 underline underline-offset-2">

@@ -60,32 +60,36 @@ export async function actasPorPacienteDni(tipo, { dni, sedeId, esAdmin }) {
   return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
 }
 
-// N° de Ficha (Libro 2): mismo esquema de intento secuencial que
-// mibg_${loteId}_${n}/lote_${loteId}_${n} (ver firestore.rules#
-// fichaIntentoHabilitado) -- bug real: un marcador único y fijo por número
-// (diseño original) no dejaba ningún id libre para volver a guardar la
-// acta después de anularla y corregirla (ej. error de DNI). Cada intento
-// es su propio marcador inmutable en su propia colección (fichasUsadas,
-// lectura GLOBAL a propósito -- ver firestore.rules).
+// N° de Ficha (Libro 2): CORREGIDO para ser por sede, no global (confirmado
+// con el usuario real -- cada sede lleva su propio libro de Actas en VM
+// RIS, con numeración correlativa independiente; el mismo número se repite
+// legítimamente entre sedes distintas). El id lleva sedeId como prefijo
+// (mismo criterio que generadorRef arriba), así que la unicidad es por
+// (sede, número), no por número solo -- ver nota larga en firestore.rules
+// sobre por qué los marcadores de antes de esta corrección (sin sedeId en
+// el id) quedan huérfanos, sin backfill.
+//
+// Mismo esquema de intento secuencial que mibg_${loteId}_${n}/
+// lote_${loteId}_${n} (ver firestore.rules#fichaIntentoHabilitado) -- bug
+// real: un marcador único y fijo por número (diseño original) no dejaba
+// ningún id libre para volver a guardar la acta después de anularla y
+// corregirla (ej. error de DNI). Cada intento es su propio marcador
+// inmutable en su propia colección (fichasUsadas, lectura GLOBAL a
+// propósito -- eso no cambió, sólo la unicidad pasó a ser por sede -- ver
+// firestore.rules).
 // data.pacienteFicha/fichaIntentoNro llegan YA resueltos desde el
 // llamador (TabPacientes.jsx via resolverFichaIntento, o
 // administrarLoteDosisUnicaTransaction en mibgLotes.js), nunca se
 // recalculan acá para no tener dos fuentes de verdad sobre qué id
 // corresponde.
 const CAP_FICHA_INTENTOS = 5;
-export const fichaUsadaRef = (pacienteFicha, fichaIntentoNro) => doc(fichasUsadasCol, `${pacienteFicha}_${fichaIntentoNro}`);
-// Marcador SIN sufijo _n -- sólo existe por compatibilidad con fichas
-// creadas antes de este esquema (tanda anterior). Nunca se escribe de
-// nuevo, sólo se lee para el chequeo de "está usado" (ver
-// resolverFichaIntento) -- no hay desbloqueo automático para éstos,
-// decisión explícita (ver nota larga en firestore.rules).
-export const fichaUsadaBareRef = (pacienteFicha) => doc(fichasUsadasCol, pacienteFicha);
+export const fichaUsadaRef = (sedeId, pacienteFicha, fichaIntentoNro) => doc(fichasUsadasCol, `${sedeId}_${pacienteFicha}_${fichaIntentoNro}`);
 // Anulación de un intento de ficha -- vive en `actas` (mismo namespace
 // `anula_...` de siempre), NO dentro de fichasUsadas: reusa la rama
 // genérica 'anulacion' de actaValida() sin necesitar ninguna regla nueva.
 // Ver anularActaTransaction más abajo, que la crea en la MISMA
 // transacción que la anulación de la acta cuando corresponde.
-export const anulaFichaRef = (pacienteFicha, fichaIntentoNro) => doc(actasCol, `anula_ficha_${pacienteFicha}_${fichaIntentoNro}`);
+export const anulaFichaRef = (sedeId, pacienteFicha, fichaIntentoNro) => doc(actasCol, `anula_ficha_${sedeId}_${pacienteFicha}_${fichaIntentoNro}`);
 
 export function datosFichaUsada(data, tipo, actaId) {
   return {
@@ -111,24 +115,25 @@ export function datosFichaUsada(data, tipo, actaId) {
 // Devuelve { intento } si hay uno libre, o { bloqueadaPor } con los datos
 // de quién lo tiene activo, o { agotado: true } si los 5 intentos están
 // ocupados y activos.
-export async function resolverFichaIntento(pacienteFicha) {
-  const bareSnap = await getDoc(fichaUsadaBareRef(pacienteFicha));
-  if (bareSnap.exists()) return { bloqueadaPor: bareSnap.data() };
+export async function resolverFichaIntento(sedeId, pacienteFicha) {
   for (let n = 1; n <= CAP_FICHA_INTENTOS; n++) {
-    const snap = await getDoc(fichaUsadaRef(pacienteFicha, String(n)));
+    const snap = await getDoc(fichaUsadaRef(sedeId, pacienteFicha, String(n)));
     if (!snap.exists()) return { intento: String(n) };
-    const anulaSnap = await getDoc(anulaFichaRef(pacienteFicha, String(n)));
+    const anulaSnap = await getDoc(anulaFichaRef(sedeId, pacienteFicha, String(n)));
     if (!anulaSnap.exists()) return { bloqueadaPor: snap.data() };
   }
   return { agotado: true };
 }
 
-// Sugerencia de placeholder (punto 1) -- NUNCA se envía sola, es sólo una
-// referencia visual. Una única query indexada (orderBy de un solo campo,
-// sin índice compuesto) en vez de mantener un contador mutable -- ver nota
-// larga en firestore.rules sobre por qué se descartó un doc contador.
-export function listenUltimaFicha(callback) {
-  const q = query(fichasUsadasCol, orderBy("pacienteFichaNum", "desc"), limit(1));
+// Sugerencia de precarga (ver TabPacientes.jsx#precargarSugerenciaFicha) --
+// filtrada por sede (la del formulario activo), requiere el índice
+// compuesto sedeId+pacienteFichaNum en firestore.indexes.json. Los
+// marcadores de antes de la corrección de alcance por sede siguen
+// contando acá (ya tenían sedeId como campo, sólo no estaba en el id), así
+// que la sugerencia no "vuelve a cero" para ninguna sede -- ver nota larga
+// más arriba sobre por qué en cambio SÍ dejan de bloquear.
+export function listenUltimaFicha(sedeId, callback) {
+  const q = query(fichasUsadasCol, where("sedeId", "==", sedeId), orderBy("pacienteFichaNum", "desc"), limit(1));
   return onSnapshot(q, (snap) => callback(snap.empty ? null : snap.docs[0].data().pacienteFichaNum));
 }
 
@@ -141,7 +146,7 @@ function crearActaConFicha(tipo, data) {
   const batch = writeBatch(db);
   const actaRef = doc(actasCol);
   batch.set(actaRef, { ...data, tipo, fecha: serverTimestamp() });
-  batch.set(fichaUsadaRef(data.pacienteFicha, data.fichaIntentoNro), datosFichaUsada(data, tipo, actaRef.id));
+  batch.set(fichaUsadaRef(data.sedeId, data.pacienteFicha, data.fichaIntentoNro), datosFichaUsada(data, tipo, actaRef.id));
   return batch.commit();
 }
 
@@ -282,7 +287,7 @@ export function addActaElucion(data, esPrimeraVez) {
 // Si la acta que se anula tiene pacienteFicha/fichaIntentoNro (los 5 tipos
 // que pasan por crearActaConFicha/administrarLoteDosisUnicaTransaction),
 // en la MISMA transacción se anula también ESE intento de ficha
-// (actas/anula_ficha_${numero}_${intento}, ver fichaAnulada en
+// (actas/anula_ficha_${sedeId}_${numero}_${intento}, ver fichaAnulada en
 // firestore.rules) -- así el siguiente intento queda libre para corregir
 // (ej. error de DNI), mismo mecanismo que ya libera un lote de MIBG/
 // Lutecio-177 al anular su acta de uso. Genérica: los tipos SIN ficha
@@ -291,7 +296,7 @@ export function addActaElucion(data, esPrimeraVez) {
 export function anularActaTransaction(acta, motivo, usuario) {
   const anulacionRef = doc(actasCol, `anula_${acta.id}`);
   const fichaAnulaRef = acta.pacienteFicha && acta.fichaIntentoNro
-    ? anulaFichaRef(acta.pacienteFicha, acta.fichaIntentoNro)
+    ? anulaFichaRef(acta.sedeId, acta.pacienteFicha, acta.fichaIntentoNro)
     : null;
   return conMensajeDeContingencia(() =>
     runTransaction(db, async (tx) => {
@@ -303,8 +308,11 @@ export function anularActaTransaction(acta, motivo, usuario) {
         usuarioNombre: usuario.nombre, usuarioEmail: usuario.email,
       });
       if (fichaAnulaRef) {
+        // anulaId tiene que coincidir con `actaId == 'anula_' + d.anulaId`
+        // en firestore.rules -- mismo prefijo de sede que fichaAnulaRef
+        // (línea 299), sin el 'anula_' inicial.
         tx.set(fichaAnulaRef, {
-          tipo: "anulacion", anulaId: `ficha_${acta.pacienteFicha}_${acta.fichaIntentoNro}`, sedeId: acta.sedeId,
+          tipo: "anulacion", anulaId: `ficha_${acta.sedeId}_${acta.pacienteFicha}_${acta.fichaIntentoNro}`, sedeId: acta.sedeId,
           fecha: serverTimestamp(), motivo,
           usuarioNombre: usuario.nombre, usuarioEmail: usuario.email,
         });

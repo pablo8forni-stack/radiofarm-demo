@@ -1,8 +1,9 @@
-// N° de Ficha (Libro 2): secuencia ÚNICA y CRECIENTE para TODA la
-// institución, asignada por VM RIS -- nunca por sede, nunca se reinicia ni
-// se repite. Normalizamos a la forma canónica (sólo dígitos, sin ceros a la
-// izquierda) para que "4521" y "04521" no puedan colisionar como fichas
-// "distintas" y burlar la unicidad (fichasUsadas/{ficha}, ver
+// N° de Ficha (Libro 2): secuencia correlativa asignada por VM RIS, propia
+// de CADA SEDE (no global -- cada sede lleva su propio libro de Actas,
+// numeración independiente, ver nota larga en firestore.rules). Normalizamos
+// a la forma canónica (sólo dígitos, sin ceros a la izquierda) para que
+// "4521" y "04521" no puedan colisionar como fichas "distintas" y burlar la
+// unicidad (fichasUsadas/{sedeId}_{ficha}_{intento}, ver
 // services/firestore/actas.js) -- mismo criterio de limpieza que ya usa
 // pacienteDni en el importador de turnos (helpers/importarTurnosI131.js).
 // null si el texto (después de limpiar separadores) no es puramente

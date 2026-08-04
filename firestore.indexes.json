@@ -51,6 +51,14 @@
         { "fieldPath": "sedeId", "order": "ASCENDING" },
         { "fieldPath": "fechaTurno", "order": "ASCENDING" }
       ]
+    },
+    {
+      "collectionGroup": "fichasUsadas",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "sedeId", "order": "ASCENDING" },
+        { "fieldPath": "pacienteFichaNum", "order": "DESCENDING" }
+      ]
     }
   ],
   "fieldOverrides": []

@@ -2,7 +2,7 @@ import { addDoc, collection, doc, onSnapshot, query, runTransaction, serverTimes
 import { db } from "../../firebase.js";
 import { conMensajeDeContingencia } from "../../helpers/erroresRed.js";
 import { fmtTs } from "../../helpers/formato.js";
-import { fichaUsadaRef, fichaUsadaBareRef, datosFichaUsada, anulaFichaRef } from "./actas.js";
+import { fichaUsadaRef, datosFichaUsada, anulaFichaRef } from "./actas.js";
 
 // Colección de lotes de dosis única -- nombre histórico "mibg_lote" (quedó
 // así a propósito, ver isotopoId más abajo: cambiar el nombre de la
@@ -75,21 +75,18 @@ function administrarLoteDosisUnicaTransaction(loteId, dataActa, { prefijo, tipo,
       const anulaSnap = await tx.get(anulaLoteRef);
       if (anulaSnap.exists()) throw new Error("Este lote fue anulado -- no se puede usar.");
 
-      // N° de Ficha (Libro 2): único en TODA la institución, mismo esquema
-      // de intento secuencial que el lote (ver firestore.rules#
-      // fichaIntentoHabilitado) -- dentro de la MISMA transacción en vez
-      // de un batch (ya hay una transacción abierta para el lote/intento).
-      // dataActa.pacienteFicha llega ya normalizado desde TabPacientes.jsx.
-      const fichaBareSnap = await tx.get(fichaUsadaBareRef(dataActa.pacienteFicha));
-      if (fichaBareSnap.exists()) {
-        const u = fichaBareSnap.data();
-        throw new Error(`Este N° de Ficha ya fue usado el ${fmtTs(u.fecha)} para el paciente ${u.pacienteNombre}.`);
-      }
+      // N° de Ficha (Libro 2): por sede (CORREGIDO -- cada sede lleva su
+      // propio libro, numeración independiente, ver nota larga en
+      // firestore.rules), mismo esquema de intento secuencial que el lote
+      // (ver firestore.rules#fichaIntentoHabilitado) -- dentro de la MISMA
+      // transacción en vez de un batch (ya hay una transacción abierta
+      // para el lote/intento). dataActa.pacienteFicha llega ya normalizado
+      // desde TabPacientes.jsx, dataActa.sedeId ya viene en la data base.
       let fichaIntentoNro = null;
       for (let n = 1; n <= CAP_FICHA_INTENTOS; n++) {
-        const fichaSnap = await tx.get(fichaUsadaRef(dataActa.pacienteFicha, String(n)));
+        const fichaSnap = await tx.get(fichaUsadaRef(dataActa.sedeId, dataActa.pacienteFicha, String(n)));
         if (!fichaSnap.exists()) { fichaIntentoNro = String(n); break; }
-        const fichaAnulaSnap = await tx.get(anulaFichaRef(dataActa.pacienteFicha, String(n)));
+        const fichaAnulaSnap = await tx.get(anulaFichaRef(dataActa.sedeId, dataActa.pacienteFicha, String(n)));
         if (!fichaAnulaSnap.exists()) {
           const u = fichaSnap.data();
           throw new Error(`Este N° de Ficha ya fue usado el ${fmtTs(u.fecha)} para el paciente ${u.pacienteNombre}.`);
@@ -111,7 +108,7 @@ function administrarLoteDosisUnicaTransaction(loteId, dataActa, { prefijo, tipo,
         const usoSnap = await tx.get(usoRef);
         if (!usoSnap.exists()) {
           tx.set(usoRef, { ...dataActa, tipo, [campoLoteId]: loteId, intentoNro: String(n), fichaIntentoNro, fecha: serverTimestamp() });
-          tx.set(fichaUsadaRef(dataActa.pacienteFicha, fichaIntentoNro), datosFichaUsada({ ...dataActa, fichaIntentoNro }, tipo, usoRef.id));
+          tx.set(fichaUsadaRef(dataActa.sedeId, dataActa.pacienteFicha, fichaIntentoNro), datosFichaUsada({ ...dataActa, fichaIntentoNro }, tipo, usoRef.id));
           return;
         }
         const anulaUsoSnap = await tx.get(doc(actasCol, `anula_${prefijo}${loteId}_${n}`));

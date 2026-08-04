@@ -477,7 +477,7 @@ service cloud.firestore {
                  (d.actividadCalibrada is number && d.actividadCalibrada > 0)))
             : esTipoDosisI131(d.tipo)
               ? (tieneAccesoI131() &&
-                 fichaValida(d.pacienteFicha) && d.fichaIntentoNro in ['1', '2', '3', '4', '5'] && fichaIntentoHabilitado(d.pacienteFicha, d.fichaIntentoNro) &&
+                 fichaValida(d.pacienteFicha) && d.fichaIntentoNro in ['1', '2', '3', '4', '5'] && fichaIntentoHabilitado(d.sedeId, d.pacienteFicha, d.fichaIntentoNro) &&
                  d.pacienteNombre is string && d.pacienteNombre.size() > 0 &&
                  d.pacienteDni is string && d.pacienteDni.size() > 0 &&
                  d.actividadAdministrada is number && d.actividadAdministrada > 0 &&
@@ -485,17 +485,17 @@ service cloud.firestore {
                  d.lote is string && d.lote.size() > 0)
               : esTipoDiagnosticoI131(d.tipo)
                 ? (tieneAccesoI131() &&
-                   fichaValida(d.pacienteFicha) && d.fichaIntentoNro in ['1', '2', '3', '4', '5'] && fichaIntentoHabilitado(d.pacienteFicha, d.fichaIntentoNro) &&
+                   fichaValida(d.pacienteFicha) && d.fichaIntentoNro in ['1', '2', '3', '4', '5'] && fichaIntentoHabilitado(d.sedeId, d.pacienteFicha, d.fichaIntentoNro) &&
                    d.pacienteNombre is string && d.pacienteNombre.size() > 0 &&
                    d.pacienteDni is string && d.pacienteDni.size() > 0 &&
                    d.actividadAdministrada is number && d.actividadAdministrada > 0 &&
                    d.unidadActividad == 'uCi')
                 : d.tipo == 'i131_barrido'
-                  ? (fichaValida(d.pacienteFicha) && d.fichaIntentoNro in ['1', '2', '3', '4', '5'] && fichaIntentoHabilitado(d.pacienteFicha, d.fichaIntentoNro) &&
+                  ? (fichaValida(d.pacienteFicha) && d.fichaIntentoNro in ['1', '2', '3', '4', '5'] && fichaIntentoHabilitado(d.sedeId, d.pacienteFicha, d.fichaIntentoNro) &&
                      d.pacienteNombre is string && d.pacienteNombre.size() > 0 &&
                      d.pacienteDni is string && d.pacienteDni.size() > 0)
                   : d.tipo == 'i131_mibg'
-                    ? (fichaValida(d.pacienteFicha) && d.fichaIntentoNro in ['1', '2', '3', '4', '5'] && fichaIntentoHabilitado(d.pacienteFicha, d.fichaIntentoNro) &&
+                    ? (fichaValida(d.pacienteFicha) && d.fichaIntentoNro in ['1', '2', '3', '4', '5'] && fichaIntentoHabilitado(d.sedeId, d.pacienteFicha, d.fichaIntentoNro) &&
                        d.pacienteNombre is string && d.pacienteNombre.size() > 0 &&
                        d.pacienteDni is string && d.pacienteDni.size() > 0 &&
                        d.mibgLoteId is string && d.mibgLoteId.size() > 0 &&
@@ -549,7 +549,7 @@ service cloud.firestore {
                           : (d.lote is string && d.lote.size() > 0 &&
                    (d.tipo == 'paciente'
                      ? (d.mciAdministrados is number && d.mciAdministrados > 0 &&
-                        fichaValida(d.pacienteFicha) && d.fichaIntentoNro in ['1', '2', '3', '4', '5'] && fichaIntentoHabilitado(d.pacienteFicha, d.fichaIntentoNro) &&
+                        fichaValida(d.pacienteFicha) && d.fichaIntentoNro in ['1', '2', '3', '4', '5'] && fichaIntentoHabilitado(d.sedeId, d.pacienteFicha, d.fichaIntentoNro) &&
                         d.isotopoId is string && d.isotopoId.size() > 0 &&
                         (d.isotopoId != 'lu177'
                           ? (d.farmId is string && d.farmId.size() > 0)
@@ -626,12 +626,37 @@ service cloud.firestore {
       allow update, delete: if false;
     }
 
-    // N° de Ficha (Libro 2): secuencia ÚNICA y CRECIENTE para TODA la
-    // institución, asignada por VM RIS -- nunca por sede, nunca se reinicia
-    // ni se repite. Mismo patrón que generadoresVistos: un marcador
-    // create-only con id determinístico (acá, directamente el número de
-    // ficha ya normalizado) es la garantía real -- un segundo intento con el
-    // mismo número choca contra un doc ya existente (allow update:false lo
+    // N° de Ficha (Libro 2): secuencia correlativa asignada por VM RIS --
+    // CORRECCIÓN de diseño (confirmado con el usuario real, esto NO es una
+    // secuencia global): cada sede lleva su propio libro de Actas, con su
+    // propia numeración, independiente de las demás -- el mismo número se
+    // repite legítimamente entre sedes distintas para pacientes distintos.
+    // La primera versión de este esquema (2026-07-31/08-01, hoy corregida)
+    // trataba el número como único en TODA la institución; eso bloqueaba
+    // cruzado entre sedes sin motivo real. El id ahora lleva el sedeId como
+    // prefijo (mismo criterio que generadoresVistos: sedeId + '_' + resto),
+    // así que la unicidad -- y el bloqueo -- son por (sede, número), no por
+    // número solo.
+    //
+    // Marcadores viejos (de antes de esta corrección, sin sedeId en el id --
+    // tanto los bare `fichasUsadas/{numero}` de la primera versión como los
+    // `fichasUsadas/{numero}_{intento}` sin sede de la segunda) quedan
+    // HUÉRFANOS a propósito: ya no se consultan para bloquear altas nuevas.
+    // Decisión explícita, sin backfill -- seguir respetándolos perpetuaría
+    // el mismo bug que se está corrigiendo (un número usado por una sede
+    // seguiría bloqueado para siempre en las demás). Mismo criterio de "no
+    // hay backfill retroactivo" ya usado con los marcadores bare de
+    // MIBG/Lutecio-177, con una diferencia importante: acá el legacy NO se
+    // seguirá chequeando como blocker (a diferencia de mibgLotes.js) porque
+    // el problema no es el FORMATO del id sino el ALCANCE -- honrarlos
+    // significaría seguir aplicando la unicidad global que se quiere sacar.
+    // Los pocos números afectados (~3-4 días de producción) siguen
+    // aportando a la sugerencia "último + 1" igual (ver más abajo, ya tienen
+    // sedeId como campo del documento), sólo pierden su rol de bloqueo.
+    //
+    // Mismo patrón que generadoresVistos: un marcador create-only con id
+    // determinístico es la garantía real -- un segundo intento con el mismo
+    // (sede, número) choca contra un doc ya existente (allow update:false lo
     // trata como update, se rechaza solo) sin necesitar ningún exists()
     // dentro de actaValida() (que ya está bastante cargada). Cada función
     // que crea una acta con pacienteFicha (addActaPaciente, los 6 de
@@ -640,22 +665,21 @@ service cloud.firestore {
     // en el MISMO batch/transacción que la acta: si el marcador choca, el
     // batch/transacción entero falla, así que la acta tampoco se crea.
     //
-    // A diferencia de generadoresVistos (sede propia) o de actas (lectura
-    // restringida por sede, Ley 25.326), acá la lectura es deliberadamente
-    // GLOBAL (tieneAcceso(), sin chequeo de sede) -- la unicidad tiene que
-    // funcionar entre sedes distintas, y el mensaje de error necesita poder
-    // mostrar a qué paciente pertenece el número ya usado aunque sea de otra
-    // sede (confirmado explícitamente: el objetivo es que el técnico pueda
-    // llamar a la otra sede y resolver el conflicto).
+    // La lectura sigue siendo deliberadamente GLOBAL (tieneAcceso(), sin
+    // chequeo de sede) -- eso NO cambia con esta corrección: un técnico
+    // puede seguir viendo el detalle de un marcador de otra sede si hiciera
+    // falta comparar. Lo único que pasa a ser por sede es la UNICIDAD (la
+    // clave del id), no quién puede leer.
     //
     // pacienteFichaNum (número, no string) es lo que permite la sugerencia
     // del último N° de Ficha sin mantener ningún contador mutable: una sola
-    // query indexada (orderBy pacienteFichaNum desc, limit 1) alcanza -- ver
-    // listenUltimaFicha en services/firestore/actas.js. Un contador aparte
-    // (ej. config/ultimaFicha) hubiera significado que TODAS las sedes
-    // escriban al mismo doc en cada alta, y encima obligaría a transacción
-    // hasta en el alta simple de tc99m (hoy deliberadamente offline-safe sin
-    // transacción) -- se descartó por eso.
+    // query indexada (where sedeId ==, orderBy pacienteFichaNum desc, limit
+    // 1 -- requiere el índice compuesto en firestore.indexes.json) alcanza
+    // -- ver listenUltimaFicha en services/firestore/actas.js. Un contador
+    // aparte (ej. config/ultimaFicha) hubiera significado que TODAS las
+    // sedes escriban al mismo doc en cada alta, y encima obligaría a
+    // transacción hasta en el alta simple de tc99m (hoy deliberadamente
+    // offline-safe sin transacción) -- se descartó por eso.
     // Sólo dígitos -- en la práctica el N° de Ficha siempre es numérico
     // (secuencia de VM RIS), mismo criterio que ya usa pacienteDni en el
     // importador de turnos (helpers/importarTurnosI131.js). El cliente ya
@@ -685,21 +709,24 @@ service cloud.firestore {
     // puede crear si el intento N-1 existe Y está anulado -- alcanza con
     // revisar un solo intento anterior.
     //
-    // La anulación del intento vive en `actas` (`anula_ficha_{numero}_{n}`),
-    // NO en una anulación propia dentro de fichasUsadas -- reusa la MISMA
+    // La anulación del intento vive en `actas`
+    // (`anula_ficha_{sedeId}_{numero}_{n}`), NO en una anulación propia
+    // dentro de fichasUsadas -- reusa la MISMA
     // rama genérica 'anulacion' de actaValida() que ya usa todo el sistema
     // (anularActaTransaction en services/firestore/actas.js), sin necesitar
     // ninguna regla nueva para eso.
     //
-    // fichasUsadas/{numero} SIN sufijo (marcadores de antes de este
-    // esquema) siguen bloqueando el intento 1 para siempre -- decisión
-    // explícita, sin desbloqueo automático (no hay ningún anula_ propio
-    // para ellos; agregarlo hubiera costado un get() extra por cada
-    // choque). Los pocos números afectados se liberan a mano desde
-    // Firebase Console si hace falta, no hay backfill.
-    function fichaAnulada(numero, n) {
-      return exists(/databases/$(database)/documents/fichasUsadas/$(numero + '_' + n)) &&
-        exists(/databases/$(database)/documents/actas/$('anula_ficha_' + numero + '_' + n));
+    // Marcadores de antes de la corrección de alcance por sede (sin sedeId
+    // en el id, ver nota larga arriba del match /fichasUsadas/) quedan
+    // HUÉRFANOS a propósito -- ya no se consultan acá, ni el bare
+    // `fichasUsadas/{numero}` ni el `fichasUsadas/{numero}_{n}` sin sede.
+    // Decisión explícita, sin backfill: seguir chequeándolos perpetuaría la
+    // unicidad global que se está corrigiendo. Los pocos números afectados
+    // (~3-4 días de producción) se liberan solos: como nunca más se escribe
+    // en ese formato de id, simplemente dejan de bloquear nada.
+    function fichaAnulada(sedeId, numero, n) {
+      return exists(/databases/$(database)/documents/fichasUsadas/$(sedeId + '_' + numero + '_' + n)) &&
+        exists(/databases/$(database)/documents/actas/$('anula_ficha_' + sedeId + '_' + numero + '_' + n));
     }
     // usoPropioLibre: a diferencia de mibg_${loteId}_${n}/lote_${loteId}_${n}
     // (donde el id de la ACTA misma es el determinístico, así que Firestore
@@ -708,36 +735,37 @@ service cloud.firestore {
     // acá las 4 ramas que NO son MIBG/Lutecio (paciente, dosis, diagnóstico,
     // barrido) usan un id de acta AUTOGENERADO -- nada impide, en el
     // esquema, que dos actas distintas reclamen el mismo fichaIntentoNro
-    // para el mismo número. Hace falta este chequeo extra (el marcador de
-    // ESE intento puntual no puede existir todavía) además de mirar el
-    // intento anterior -- confirmado empíricamente que sigue sin acercarse
-    // al tope de document-access calls (ver esquema-intentos-lote-dosis-
-    // unica.md), pero es una llamada más que el esquema de lote/MIBG.
-    function usoPropioLibre(numero, n) {
-      return !exists(/databases/$(database)/documents/fichasUsadas/$(numero + '_' + n));
+    // para el mismo (sede, número). Hace falta este chequeo extra (el
+    // marcador de ESE intento puntual no puede existir todavía) además de
+    // mirar el intento anterior -- confirmado empíricamente que sigue sin
+    // acercarse al tope de document-access calls (ver esquema-intentos-
+    // lote-dosis-unica.md), pero es una llamada más que el esquema de
+    // lote/MIBG.
+    function usoPropioLibre(sedeId, numero, n) {
+      return !exists(/databases/$(database)/documents/fichasUsadas/$(sedeId + '_' + numero + '_' + n));
     }
-    function fichaIntentoHabilitado(numero, intentoNro) {
-      return usoPropioLibre(numero, intentoNro) &&
+    function fichaIntentoHabilitado(sedeId, numero, intentoNro) {
+      return usoPropioLibre(sedeId, numero, intentoNro) &&
         (intentoNro == '1'
-          ? !exists(/databases/$(database)/documents/fichasUsadas/$(numero))
-          : intentoNro == '2' ? fichaAnulada(numero, '1')
-          : intentoNro == '3' ? fichaAnulada(numero, '2')
-          : intentoNro == '4' ? fichaAnulada(numero, '3')
-          : fichaAnulada(numero, '4'));
+          ? true
+          : intentoNro == '2' ? fichaAnulada(sedeId, numero, '1')
+          : intentoNro == '3' ? fichaAnulada(sedeId, numero, '2')
+          : intentoNro == '4' ? fichaAnulada(sedeId, numero, '3')
+          : fichaAnulada(sedeId, numero, '4'));
     }
 
     function fichaUsadaValida(fichaId) {
       let d = request.resource.data;
       return fichaValida(d.pacienteFicha) &&
         d.fichaIntentoNro in ['1', '2', '3', '4', '5'] &&
-        fichaIntentoHabilitado(d.pacienteFicha, d.fichaIntentoNro) &&
+        d.sedeId is string && d.sedeId.size() > 0 &&
+        fichaIntentoHabilitado(d.sedeId, d.pacienteFicha, d.fichaIntentoNro) &&
         d.pacienteFichaNum is number && d.pacienteFichaNum > 0 &&
         d.pacienteNombre is string && d.pacienteNombre.size() > 0 &&
-        d.sedeId is string && d.sedeId.size() > 0 &&
         (isAdmin() || miRol().sede == d.sedeId) &&
         d.actaId is string && d.actaId.size() > 0 &&
         d.tipo is string && d.tipo.size() > 0 &&
-        fichaId == d.pacienteFicha + '_' + d.fichaIntentoNro;
+        fichaId == d.sedeId + '_' + d.pacienteFicha + '_' + d.fichaIntentoNro;
     }
 
     match /fichasUsadas/{id} {

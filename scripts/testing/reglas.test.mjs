@@ -158,13 +158,17 @@ test("acta con mciMarcacion 0 es rechazada", async () => {
   );
 });
 
-// N° de Ficha (Libro 2): secuencia única y creciente para TODA la
-// institución (VM RIS), nunca por sede ni por día -- ver
-// helpers/fichaPaciente.js y firestore.rules#fichaUsadaValida/
-// fichaIntentoHabilitado. fichaValida (formato, sólo dígitos) se aplica en
-// las 5 ramas de actaValida() que tienen pacienteFicha -- se prueba acá
-// con 'paciente' (tc99m) y con 'i131_barrido' (representativos; la función
-// es compartida, no hace falta repetir en las 5).
+// N° de Ficha (Libro 2): secuencia correlativa asignada por VM RIS, propia
+// de CADA SEDE -- corrección de alcance (esto NO es una secuencia global,
+// ver nota larga en firestore.rules) -- ver helpers/fichaPaciente.js y
+// firestore.rules#fichaUsadaValida/fichaIntentoHabilitado. fichaValida
+// (formato, sólo dígitos) se aplica en las 5 ramas de actaValida() que
+// tienen pacienteFicha -- se prueba acá con 'paciente' (tc99m) y con
+// 'i131_barrido' (representativos; la función es compartida, no hace
+// falta repetir en las 5).
+function fichaUsadaId(sedeId, ficha, intentoNro) {
+  return `${sedeId}_${ficha}_${intentoNro}`;
+}
 test("acta de paciente con N° de ficha no numérico es rechazada", async () => {
   await loguearComo(PERSONAS.tecnicoA);
   await assertPermissionDenied(() =>
@@ -213,9 +217,9 @@ function fichaUsadaDoc(ficha, intentoNro, overrides = {}) {
     ...overrides,
   };
 }
-function anulacionFichaDoc(ficha, intentoNro, overrides = {}) {
+function anulacionFichaDoc(sedeId, ficha, intentoNro, overrides = {}) {
   return {
-    tipo: "anulacion", anulaId: `ficha_${ficha}_${intentoNro}`, sedeId: SEDE_A,
+    tipo: "anulacion", anulaId: `ficha_${sedeId}_${ficha}_${intentoNro}`, sedeId,
     fecha: serverTimestamp(), motivo: "Test", usuarioNombre: "Admin", usuarioEmail: PERSONAS.admin.email,
     ...overrides,
   };
@@ -224,7 +228,7 @@ function anulacionFichaDoc(ficha, intentoNro, overrides = {}) {
 test("acta con N° de ficha que YA tiene el intento 1 ACTIVO es rechazada, aunque sea de otro tipo", async () => {
   await loguearComo(PERSONAS.admin);
   const ficha = fichaDePrueba();
-  await setDoc(doc(db, "fichasUsadas", `${ficha}_1`), fichaUsadaDoc(ficha, "1"));
+  await setDoc(doc(db, "fichasUsadas", fichaUsadaId(SEDE_A, ficha, "1")), fichaUsadaDoc(ficha, "1"));
   await assertPermissionDenied(() =>
     addDoc(collection(db, "actas"), {
       tipo: "i131_barrido", fecha: serverTimestamp(), sedeId: SEDE_A,
@@ -246,6 +250,28 @@ test("control positivo: acta con N° de ficha SIN marcador previo se acepta norm
   assert.ok(snap.exists());
 });
 
+// Regresión del bug de ALCANCE (confirmado con el usuario real): dos sedes
+// distintas usan el MISMO N° de Ficha para pacientes distintos, sin chocar
+// -- antes de esta corrección esto se rechazaba (unicidad global), y era
+// exactamente el comportamiento incorrecto. Prueba el fix real, no sólo la
+// ausencia de un choque -- ambas actas tienen que quedar creadas.
+test("control positivo: dos sedes distintas pueden usar el MISMO N° de Ficha sin chocar", async () => {
+  await loguearComo(PERSONAS.admin);
+  const ficha = fichaDePrueba();
+  const refA = await addDoc(collection(db, "actas"), {
+    tipo: "i131_barrido", fecha: serverTimestamp(), sedeId: SEDE_A,
+    usuarioEmail: PERSONAS.admin.email, pacienteFicha: ficha, fichaIntentoNro: "1",
+    pacienteNombre: "Paciente Central", pacienteDni: "1",
+  });
+  const refB = await addDoc(collection(db, "actas"), {
+    tipo: "i131_barrido", fecha: serverTimestamp(), sedeId: SEDE_B,
+    usuarioEmail: PERSONAS.admin.email, pacienteFicha: ficha, fichaIntentoNro: "1",
+    pacienteNombre: "Paciente Italiano", pacienteDni: "2",
+  });
+  assert.ok((await getDoc(refA)).exists());
+  assert.ok((await getDoc(refB)).exists());
+});
+
 // Regresión directa del bug reportado: anular la acta que usó el intento 1
 // de una ficha (misma anulación genérica de siempre, actas/anula_ficha_...)
 // tiene que liberar el intento 2 para esa MISMA ficha -- sin esto, el
@@ -260,12 +286,12 @@ test("control positivo: anular la acta libera el intento 2 de la misma ficha", a
     usuarioEmail: PERSONAS.admin.email, pacienteFicha: ficha, fichaIntentoNro: "1",
     pacienteNombre: "Paciente Uno", pacienteDni: "1",
   });
-  await setDoc(doc(db, "fichasUsadas", `${ficha}_1`), fichaUsadaDoc(ficha, "1", { pacienteNombre: "Paciente Uno", actaId: actaRef1.id, tipo: "i131_barrido" }));
+  await setDoc(doc(db, "fichasUsadas", fichaUsadaId(SEDE_A, ficha, "1")), fichaUsadaDoc(ficha, "1", { pacienteNombre: "Paciente Uno", actaId: actaRef1.id, tipo: "i131_barrido" }));
   // anularActaTransaction real (services/firestore/actas.js) anula la
   // acta Y, en la misma transacción, el intento de ficha -- acá se simulan
   // los dos writes por separado, mismo resultado final.
   await setDoc(doc(db, "actas", `anula_${actaRef1.id}`), { tipo: "anulacion", anulaId: actaRef1.id, sedeId: SEDE_A, fecha: serverTimestamp(), motivo: "Error de DNI", usuarioNombre: "Admin", usuarioEmail: PERSONAS.admin.email });
-  await setDoc(doc(db, "actas", `anula_ficha_${ficha}_1`), anulacionFichaDoc(ficha, "1"));
+  await setDoc(doc(db, "actas", `anula_ficha_${SEDE_A}_${ficha}_1`), anulacionFichaDoc(SEDE_A, ficha, "1"));
 
   const ref2 = await addDoc(collection(db, "actas"), {
     tipo: "i131_barrido", fecha: serverTimestamp(), sedeId: SEDE_A,
@@ -279,7 +305,7 @@ test("control positivo: anular la acta libera el intento 2 de la misma ficha", a
 test("un intento 2 de ficha con el intento 1 activo (no anulado) es rechazado", async () => {
   await loguearComo(PERSONAS.admin);
   const ficha = fichaDePrueba();
-  await setDoc(doc(db, "fichasUsadas", `${ficha}_1`), fichaUsadaDoc(ficha, "1"));
+  await setDoc(doc(db, "fichasUsadas", fichaUsadaId(SEDE_A, ficha, "1")), fichaUsadaDoc(ficha, "1"));
   await assertPermissionDenied(() =>
     addDoc(collection(db, "actas"), {
       tipo: "i131_barrido", fecha: serverTimestamp(), sedeId: SEDE_A,
@@ -289,41 +315,43 @@ test("un intento 2 de ficha con el intento 1 activo (no anulado) es rechazado", 
   );
 });
 
-// NO hay test automatizado para "marcador fichasUsadas SIN sufijo (legacy)
-// bloquea el intento 1" -- mismo gap ya reconocido para el legacy bare de
-// mibg_${loteId}/lote_${loteId} (ver esquema-intentos-lote-dosis-unica.md):
-// fichaUsadaValida ya exige el sufijo _n para CUALQUIER escritura nueva, así
-// que no hay forma de crear un doc bare a través del SDK bajo las reglas
-// actuales para simular uno de la tanda anterior -- sólo existen los que ya
-// quedaron en producción de antes de este cambio. Verificado a mano contra
-// staging (con un doc bare real, ya existente de una corrida de tests
-// anterior) que sigue bloqueando -- ver conversación, no repetible acá.
+// NO hay test automatizado para "marcador fichasUsadas de antes de esta
+// corrección (bare `{numero}` de la primera versión, o `{numero}_{intento}`
+// sin sede de la segunda) sigue bloqueando" -- porque, a propósito, YA NO
+// bloquea nada (ver nota larga en firestore.rules: honrarlos perpetuaría la
+// unicidad global que se está corrigiendo). Mismo gap de siempre para
+// simular un doc de una tanda anterior por SDK (fichaUsadaValida ya exige
+// el formato de id vigente para CUALQUIER escritura nueva) -- sólo que acá
+// el resultado esperado cambió: antes bloqueaban (verificado a mano),
+// ahora no deberían bloquear nada (no hay forma de probarlo automatizado
+// sin datos reales de antes de este fix, tampoco).
 
 // Colección fichasUsadas -- marcador create-only, mismo patrón que
-// generadoresVistos, pero de lectura GLOBAL (sin scoping por sede, ver nota
-// en firestore.rules): la unicidad y el mensaje de conflicto tienen que
-// funcionar entre sedes distintas.
+// generadoresVistos. La LECTURA sigue siendo GLOBAL (sin scoping por sede,
+// ver nota en firestore.rules) -- eso no cambió con la corrección de
+// alcance; lo que pasó a ser por sede es la UNICIDAD (la clave del id), no
+// quién puede leer un marcador puntual.
 test("control positivo: técnico SÍ puede crear un marcador fichasUsadas válido en su sede", async () => {
   await loguearComo(PERSONAS.tecnicoA); // sede central == SEDE_A
   const ficha = fichaDePrueba();
-  const ref = doc(db, "fichasUsadas", `${ficha}_1`);
+  const ref = doc(db, "fichasUsadas", fichaUsadaId(SEDE_A, ficha, "1"));
   await setDoc(ref, fichaUsadaDoc(ficha, "1", { usuarioEmail: PERSONAS.tecnicoA.email }));
   const snap = await getDoc(ref);
   assert.ok(snap.exists());
 });
 
-test("fichasUsadas con id que no coincide con pacienteFicha_fichaIntentoNro es rechazado", async () => {
+test("fichasUsadas con id que no coincide con sedeId_pacienteFicha_fichaIntentoNro es rechazado", async () => {
   await loguearComo(PERSONAS.admin);
   const ficha = fichaDePrueba();
   await assertPermissionDenied(() =>
-    setDoc(doc(db, "fichasUsadas", `${ficha}X_1`), fichaUsadaDoc(ficha, "1"))
+    setDoc(doc(db, "fichasUsadas", fichaUsadaId(SEDE_A, ficha, "1") + "X"), fichaUsadaDoc(ficha, "1"))
   );
 });
 
 test("fichasUsadas con pacienteFicha no numérico es rechazado", async () => {
   await loguearComo(PERSONAS.admin);
   await assertPermissionDenied(() =>
-    setDoc(doc(db, "fichasUsadas", "45B1_1"), fichaUsadaDoc("45B1", "1"))
+    setDoc(doc(db, "fichasUsadas", fichaUsadaId(SEDE_A, "45B1", "1")), fichaUsadaDoc("45B1", "1"))
   );
 });
 
@@ -331,7 +359,7 @@ test("fichasUsadas con fichaIntentoNro fuera de 1..5 es rechazado", async () => 
   await loguearComo(PERSONAS.admin);
   const ficha = fichaDePrueba();
   await assertPermissionDenied(() =>
-    setDoc(doc(db, "fichasUsadas", `${ficha}_6`), fichaUsadaDoc(ficha, "6"))
+    setDoc(doc(db, "fichasUsadas", fichaUsadaId(SEDE_A, ficha, "6")), fichaUsadaDoc(ficha, "6"))
   );
 });
 
@@ -339,34 +367,34 @@ test("fichasUsadas sin pacienteFichaNum es rechazado", async () => {
   await loguearComo(PERSONAS.admin);
   const ficha = fichaDePrueba();
   const { pacienteFichaNum: _n, ...sinNum } = fichaUsadaDoc(ficha, "1");
-  await assertPermissionDenied(() => setDoc(doc(db, "fichasUsadas", `${ficha}_1`), sinNum));
+  await assertPermissionDenied(() => setDoc(doc(db, "fichasUsadas", fichaUsadaId(SEDE_A, ficha, "1")), sinNum));
 });
 
 test("técnico NO puede crear un marcador fichasUsadas de OTRA sede", async () => {
   await loguearComo(PERSONAS.tecnicoA); // sede central == SEDE_A
   const ficha = fichaDePrueba();
   await assertPermissionDenied(() =>
-    setDoc(doc(db, "fichasUsadas", `${ficha}_1`), fichaUsadaDoc(ficha, "1", { sedeId: SEDE_B, usuarioEmail: PERSONAS.tecnicoA.email }))
+    setDoc(doc(db, "fichasUsadas", fichaUsadaId(SEDE_B, ficha, "1")), fichaUsadaDoc(ficha, "1", { sedeId: SEDE_B, usuarioEmail: PERSONAS.tecnicoA.email }))
   );
 });
 
 test("fichasUsadas no admite update ni delete (create-only)", async () => {
   await loguearComo(PERSONAS.admin);
   const ficha = fichaDePrueba();
-  const ref = doc(db, "fichasUsadas", `${ficha}_1`);
+  const ref = doc(db, "fichasUsadas", fichaUsadaId(SEDE_A, ficha, "1"));
   await setDoc(ref, fichaUsadaDoc(ficha, "1"));
   await assertPermissionDenied(() => updateDoc(ref, { pacienteNombre: "Otro" }));
   await assertPermissionDenied(() => deleteDoc(ref));
 });
 
-test("control positivo: técnico de OTRA sede puede LEER un marcador fichasUsadas (lectura global, no por sede)", async () => {
+test("control positivo: técnico de OTRA sede puede LEER un marcador fichasUsadas (lectura global -- la UNICIDAD es por sede, la lectura no)", async () => {
   await loguearComo(PERSONAS.admin);
   const ficha = fichaDePrueba();
-  await setDoc(doc(db, "fichasUsadas", `${ficha}_1`), fichaUsadaDoc(ficha, "1", { sedeId: SEDE_A }));
+  await setDoc(doc(db, "fichasUsadas", fichaUsadaId(SEDE_A, ficha, "1")), fichaUsadaDoc(ficha, "1", { sedeId: SEDE_A }));
 
   await loguearComo(PERSONAS.tecnicoB); // sede italiano == SEDE_B
-  const snap = await getDoc(doc(db, "fichasUsadas", `${ficha}_1`));
-  assert.ok(snap.exists(), "la unicidad es global -- cualquier sede tiene que poder ver que este número ya se usó");
+  const snap = await getDoc(doc(db, "fichasUsadas", fichaUsadaId(SEDE_A, ficha, "1")));
+  assert.ok(snap.exists(), "la lectura sigue siendo global -- cualquier sede tiene que poder ver el detalle de un marcador de otra, aunque ya no compitan por el mismo número");
 });
 
 // Integración de punta a punta del mecanismo real (crearActaConFicha en
@@ -384,10 +412,10 @@ test("control positivo: batch acta+marcador de ficha (mecanismo real) se acepta,
     usuarioEmail: PERSONAS.admin.email, pacienteFicha: ficha, fichaIntentoNro: "1",
     pacienteNombre: "Paciente Uno", pacienteDni: "1",
   });
-  batch1.set(doc(db, "fichasUsadas", `${ficha}_1`), fichaUsadaDoc(ficha, "1", { pacienteNombre: "Paciente Uno", actaId: actaRef1.id, tipo: "i131_barrido" }));
+  batch1.set(doc(db, "fichasUsadas", fichaUsadaId(SEDE_A, ficha, "1")), fichaUsadaDoc(ficha, "1", { pacienteNombre: "Paciente Uno", actaId: actaRef1.id, tipo: "i131_barrido" }));
   await batch1.commit();
   assert.ok((await getDoc(actaRef1)).exists());
-  assert.ok((await getDoc(doc(db, "fichasUsadas", `${ficha}_1`))).exists());
+  assert.ok((await getDoc(doc(db, "fichasUsadas", fichaUsadaId(SEDE_A, ficha, "1")))).exists());
 
   const batch2 = writeBatch(db);
   const actaRef2 = doc(collection(db, "actas"));
@@ -396,12 +424,12 @@ test("control positivo: batch acta+marcador de ficha (mecanismo real) se acepta,
     usuarioEmail: PERSONAS.admin.email, pacienteFicha: ficha, fichaIntentoNro: "1",
     pacienteNombre: "Paciente Dos", pacienteDni: "2",
   });
-  batch2.set(doc(db, "fichasUsadas", `${ficha}_1`), fichaUsadaDoc(ficha, "1", { pacienteNombre: "Paciente Dos", actaId: actaRef2.id, tipo: "i131_barrido" }));
+  batch2.set(doc(db, "fichasUsadas", fichaUsadaId(SEDE_A, ficha, "1")), fichaUsadaDoc(ficha, "1", { pacienteNombre: "Paciente Dos", actaId: actaRef2.id, tipo: "i131_barrido" }));
   await assertPermissionDenied(() => batch2.commit());
 
   // Ni la segunda acta ni ningún cambio al marcador quedaron -- atómico.
   assert.equal((await getDoc(actaRef2)).exists(), false);
-  const fichaSnap = await getDoc(doc(db, "fichasUsadas", `${ficha}_1`));
+  const fichaSnap = await getDoc(doc(db, "fichasUsadas", fichaUsadaId(SEDE_A, ficha, "1")));
   assert.equal(fichaSnap.data().pacienteNombre, "Paciente Uno", "el marcador original no debería haber cambiado");
 });
 
@@ -1672,10 +1700,10 @@ test("control positivo: lote en intentoNro=2 Y ficha en fichaIntentoNro=2 a la v
   const lote = await addDoc(collection(db, "mibg_lote"), mibgLoteBase({ usuarioEmail: PERSONAS.admin.email, usuarioNombre: "Admin" }));
 
   await setDoc(doc(db, "actas", `mibg_${lote.id}_1`), mibgActaBase(lote.id, { pacienteFicha: ficha, fichaIntentoNro: "1", usuarioEmail: PERSONAS.admin.email, usuarioNombre: "Admin" }));
-  await setDoc(doc(db, "fichasUsadas", `${ficha}_1`), fichaUsadaDoc(ficha, "1", { pacienteNombre: "Paciente MIBG", actaId: `mibg_${lote.id}_1`, tipo: "i131_mibg" }));
+  await setDoc(doc(db, "fichasUsadas", fichaUsadaId(SEDE_A, ficha, "1")), fichaUsadaDoc(ficha, "1", { pacienteNombre: "Paciente MIBG", actaId: `mibg_${lote.id}_1`, tipo: "i131_mibg" }));
 
   await setDoc(doc(db, "actas", `anula_mibg_${lote.id}_1`), anulacionDoc(`mibg_${lote.id}_1`, SEDE_A, "Dosis mal cargada, se corrige"));
-  await setDoc(doc(db, "actas", `anula_ficha_${ficha}_1`), anulacionFichaDoc(ficha, "1"));
+  await setDoc(doc(db, "actas", `anula_ficha_${SEDE_A}_${ficha}_1`), anulacionFichaDoc(SEDE_A, ficha, "1"));
 
   const ref2 = doc(db, "actas", `mibg_${lote.id}_2`);
   await setDoc(ref2, mibgActaBase(lote.id, {
