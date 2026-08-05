@@ -137,6 +137,18 @@ export function listenUltimaFicha(sedeId, callback) {
   return onSnapshot(q, (snap) => callback(snap.empty ? null : snap.docs[0].data().pacienteFichaNum));
 }
 
+// Versión one-shot (getDocs, no onSnapshot) del mismo query -- para
+// refrescar la sugerencia de una sede recién elegida SIN esperar al
+// primer snapshot del listener de arriba (que tras un cambio de sede
+// todavía no llegó, mismo tipo de desfasaje que ya nos mordió con
+// sedeId -- ver TabPacientes.jsx#precargarSugerenciaFicha). Mismo índice
+// compuesto, ninguno nuevo.
+export async function obtenerUltimaFicha(sedeId) {
+  const q = query(fichasUsadasCol, where("sedeId", "==", sedeId), orderBy("pacienteFichaNum", "desc"), limit(1));
+  const snap = await getDocs(q);
+  return snap.empty ? null : snap.docs[0].data().pacienteFichaNum;
+}
+
 // Crea la acta Y el marcador de ficha usada en el MISMO batch -- si el
 // marcador choca (ficha ya usada por otra acta en ese mismo intento), el
 // batch entero se rechaza, así que la acta tampoco se crea. Sigue siendo

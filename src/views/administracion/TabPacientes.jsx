@@ -15,7 +15,7 @@ import {
   listenActas, addActaPaciente, actasPorRango, anularActaTransaction, listenAnulacionesActas,
   addActaI131Ablativa, addActaI131Dosis, addActaI131Barrido,
   addActaI131Captacion, addActaI131Centellograma, addActaI131CaptacionCentellograma,
-  resolverFichaIntento, listenUltimaFicha,
+  resolverFichaIntento, listenUltimaFicha, obtenerUltimaFicha,
 } from "../../services/firestore/actas.js";
 import { listenMibgLotes, administrarMibgTransaction, administrarLutecioTransaction } from "../../services/firestore/mibgLotes.js";
 import { estadoMibgLote } from "../../helpers/mibgLote.js";
@@ -102,6 +102,16 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
   // services/firestore/actas.js.
   const [fichaEstado, setFichaEstado] = useState(null);
   const [ultimaFicha, setUltimaFicha] = useState(null);
+  // true apenas el campo de Ficha recibe un input REAL del usuario (ver
+  // onChange del Input más abajo) -- false cada vez que la propia app lo
+  // rellena (precarga, refresco al cambiar de sede, dato del QR, reintento
+  // post-anulación, o limpiarForm). Un <input> controlado sólo dispara su
+  // onChange ante una interacción real -- un setFichaNro(x) desde código
+  // nunca lo hace, así que el flag es tan simple como marcar true ahí y
+  // false en cada lugar que precarga el valor. Sirve para decidir, al
+  // cambiar de sede (banner "Guardar en sede"), si hay que REFRESCAR la
+  // sugerencia (valor todavía intacto) o sólo REVALIDAR lo ya tipeado.
+  const [fichaTocada, setFichaTocada] = useState(false);
   // isotopoId siempre presente al guardar (nunca ausente) -- "tc99m" es el
   // comportamiento por defecto sin selector visible (99% de los casos, cero
   // fricción). mostrarIsotopo sólo controla si el link "¿Es un caso
@@ -199,17 +209,30 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
   }
 
   // Precarga el campo N° de Ficha con la sugerencia (último real cargado +
-  // 1, de la SEDE activa del formulario) como valor REAL y editable, no
+  // 1, de la sede recibida como parámetro) como valor REAL y editable, no
   // sólo placeholder -- así un Tab/clic afuera sin tipear nada la acepta
   // tal cual (ver onFocus del Input más abajo, que selecciona todo para
   // que escribir encima reemplace al instante). Resuelve fichaEstado de
   // una, mismo motivo que confirmarAnulacion ya hace con su propio
   // precargado: si el técnico nunca visita el campo, Guardar no debe
   // quedar esperando un blur que no va a llegar.
-  function precargarSugerenciaFicha() {
-    const sugerida = ultimaFicha != null ? String(ultimaFicha + 1) : "";
+  //
+  // sedeIdDestino es OBLIGATORIO, nunca lee sedeId del estado -- mismo
+  // motivo de siempre (closure stale si se llama justo después de un
+  // setSedeId en el mismo handler síncrono, ver resolverYSetFichaEstado).
+  // Usa obtenerUltimaFicha (one-shot) en vez del ultimaFicha reactivo:
+  // tras un cambio de sede recién disparado, el listener de listenUltimaFicha
+  // (atado a [sedeId]) todavía no trajo el primer snapshot de la sede
+  // nueva -- ultimaFicha seguiría reflejando la sede VIEJA por un
+  // instante. Limpia el campo de una (sin dejar ver, ni un instante, el
+  // número de la sede vieja) mientras resuelve.
+  async function precargarSugerenciaFicha(sedeIdDestino) {
+    setFichaNro(""); setFichaTocada(false); setFichaEstado(null);
+    const ultima = await obtenerUltimaFicha(sedeIdDestino);
+    const sugerida = ultima != null ? String(ultima + 1) : "";
     setFichaNro(sugerida);
-    resolverYSetFichaEstado(sedeId, sugerida);
+    setFichaTocada(false);
+    resolverYSetFichaEstado(sedeIdDestino, sugerida);
   }
 
   // nav ({busqueda, token}) llega desde "Ir a Libro 2" (bloqueo de anulación
@@ -299,7 +322,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
       // a tipo:"paciente") -- necesita su propia rama, no la reconoce el
       // criterio isotopoId de abajo (los 6 subtipos de I-131 no tienen ese
       // campo, distinguen por tipo).
-      setSedeId(acta.sedeId); setFichaNro(acta.pacienteFicha || ""); setNombre(acta.pacienteNombre); setDni(acta.pacienteDni);
+      setSedeId(acta.sedeId); setFichaNro(acta.pacienteFicha || ""); setFichaTocada(false); setNombre(acta.pacienteNombre); setDni(acta.pacienteDni);
       // Dispara el chequeo/resolución del intento siguiente de una (no
       // espera a que el técnico toque el campo) -- recién anulamos el
       // intento anterior arriba, así que este chequeo YA lo ve anulado y
@@ -344,19 +367,19 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
       // el valor de estado es válido acá (sin el riesgo de closure stale
       // que sí aplica en confirmarAnulacion).
       const fichaDelQR = normalizarFicha(data.pacienteFicha);
-      if (fichaDelQR) { setFichaNro(fichaDelQR); resolverYSetFichaEstado(sedeId, fichaDelQR); }
-      else precargarSugerenciaFicha();
+      if (fichaDelQR) { setFichaNro(fichaDelQR); setFichaTocada(false); resolverYSetFichaEstado(sedeId, fichaDelQR); }
+      else precargarSugerenciaFicha(sedeId);
       setMostrarForm(true);
       onToast("Pulsera leída correctamente", "success");
     } else {
       onToast("QR no reconocido. Ingresá los datos manualmente.", "error");
-      precargarSugerenciaFicha();
+      precargarSugerenciaFicha(sedeId);
       setMostrarForm(true);
     }
   }
 
   function limpiarForm() {
-    setFichaNro(""); setFichaEstado(null); setNombre(""); setDni(""); setPeso(""); setTalla(""); setEstudio(""); setEstudioOtro(""); setMci(""); setFarmId(""); setLote(""); setObs("");
+    setFichaNro(""); setFichaTocada(false); setFichaEstado(null); setNombre(""); setDni(""); setPeso(""); setTalla(""); setEstudio(""); setEstudioOtro(""); setMci(""); setFarmId(""); setLote(""); setObs("");
     setMostrarIsotopo(false); setIsotopoId("tc99m"); setMedicoResponsable("");
     setTipoI131("barrido"); setActividadAdministrada(""); setIndicacion(""); setDosisVinculada(""); setMibgLoteSeleccionado(""); setLutecioLoteSeleccionado("");
     setSedeId(usuario.sede);
@@ -799,7 +822,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
                 </Btn>
               </>
             )}
-            <Btn size="sm" variant="ghost" onClick={() => { limpiarForm(); precargarSugerenciaFicha(); setMostrarForm(true); }} className="md:order-3">+ Manual</Btn>
+            <Btn size="sm" variant="ghost" onClick={() => { limpiarForm(); precargarSugerenciaFicha(usuario.sede); setMostrarForm(true); }} className="md:order-3">+ Manual</Btn>
           </div>
           <Btn size="sm" variant="primary" onClick={() => setMostrarQR(true)} className="order-1 md:order-2 w-full md:w-auto">
             <span className="flex items-center gap-1.5 justify-center">
@@ -859,14 +882,16 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
               <Sel label="Guardar en sede" value={sedeId} onChange={(e) => {
                 const nuevaSede = e.target.value;
                 setSedeId(nuevaSede); setFarmId(""); setLote("");
-                // El N° de Ficha es único POR SEDE -- un intento ya
-                // resuelto para la sede anterior no vale para la nueva, así
-                // que cambiar de sede re-dispara el chequeo contra el
-                // número YA tipeado (sin pisar el valor: mismo principio de
-                // nunca autocompletar en silencio que rige el resto de este
-                // campo). Si el campo está vacío no hay nada que
-                // re-verificar.
-                if (fichaNro.trim()) resolverYSetFichaEstado(nuevaSede, fichaNro);
+                // El N° de Ficha es único POR SEDE. Si el valor en el campo
+                // es todavía la sugerencia intacta (fichaTocada false, el
+                // admin nunca la tocó), no tiene sentido revalidarla contra
+                // la sede nueva -- se REFRESCA con el "último + 1" real de
+                // esa sede (ver precargarSugerenciaFicha). Si el admin ya
+                // tipeó algo a mano, se deja intacto y sólo se revalida
+                // (mismo principio de nunca autocompletar en silencio que
+                // rige el resto de este campo).
+                if (!fichaTocada) precargarSugerenciaFicha(nuevaSede);
+                else if (fichaNro.trim()) resolverYSetFichaEstado(nuevaSede, fichaNro);
               }}>
                 {sedesActivas(catalogo).map((s) => <option key={s.id} value={s.id}>{s.short}</option>)}
               </Sel>
@@ -876,7 +901,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <Input
               label="N° de Ficha" value={fichaNro}
-              onChange={(e) => { setFichaNro(e.target.value); setFichaEstado(null); }}
+              onChange={(e) => { setFichaNro(e.target.value); setFichaTocada(true); setFichaEstado(null); }}
               onBlur={chequearFicha}
               // Selecciona todo al enfocar: el valor ya viene precargado
               // (sugerencia, dato del QR, o reintento post-anulación, ver
