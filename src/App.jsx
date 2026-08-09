@@ -36,6 +36,7 @@ import { VistaConfiguracion } from "./views/configuracion/VistaConfiguracion.jsx
 import { Badge } from "./components/ui/Badge.jsx";
 import { Btn } from "./components/ui/Btn.jsx";
 import { Toast } from "./components/ui/Toast.jsx";
+import { AcercaDe } from "./components/AcercaDe.jsx";
 import { signOutUser, listenSolicitudes } from "./services/auth.js";
 import { totStock, farmsDeSede, sedesActivas, idsSedesActivas, puntoReorden } from "./helpers/stock.js";
 import { hayOperacionCriticaEnCurso } from "./helpers/erroresRed.js";
@@ -59,6 +60,7 @@ function AppAutenticada({ usuario }) {
   const catalogo = useCatalogo();
   const [vista, setVista] = useState("inventario");
   const [toast, setToast] = useState(null);
+  const [mostrarAcercaDe, setMostrarAcercaDe] = useState(false);
   const esAdmin = usuario.rol === "admin";
   const [solicitudes, setSolicitudes] = useState([]);
   const countSolicitudes = solicitudes.length;
@@ -201,7 +203,11 @@ function AppAutenticada({ usuario }) {
     <div className="min-h-screen bg-gray-50 font-sans">
       <header className="bg-white border-b border-gray-100 sticky top-0 z-30 shadow-sm">
         <div className="max-w-5xl mx-auto px-4 py-3 flex items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
+          {/* Logo+nombre clickeable -> "Acerca de" (versión/copyright).
+              Visible para cualquier usuario logueado (a diferencia de
+              Configuración, que es admin-only) -- mismo patrón común de
+              "click en el logo" que el resto de este tipo de apps. */}
+          <button onClick={() => setMostrarAcercaDe(true)} className="flex items-center gap-3 hover:opacity-80 transition text-left">
             <div className="w-9 h-9 rounded-xl bg-blue-600 flex items-center justify-center shadow-sm flex-shrink-0">
               <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z" />
@@ -211,7 +217,7 @@ function AppAutenticada({ usuario }) {
               <div className="text-sm font-bold text-gray-800 leading-tight">RadioFarm</div>
               <div className="text-xs text-gray-400 leading-tight">{catalogo.sedes[usuario.sede]?.nombre || "FUESMEN"}</div>
             </div>
-          </div>
+          </button>
           <div className="flex items-center gap-2">
             {esAdmin && countPedirTotal > 0 && (
               <button onClick={() => setVista("pedidos")} className="flex items-center gap-1.5 bg-red-50 border border-red-200 text-red-600 text-xs font-bold px-3 py-1.5 rounded-full hover:bg-red-100 transition">
@@ -303,6 +309,7 @@ function AppAutenticada({ usuario }) {
       </main>
 
       {toast && <Toast msg={toast.m} type={toast.t || "success"} duracion={toast.d} onDone={() => setToast(null)} />}
+      <AcercaDe open={mostrarAcercaDe} onClose={() => setMostrarAcercaDe(false)} />
     </div>
   );
 }
