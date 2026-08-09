@@ -336,7 +336,14 @@ service cloud.firestore {
         (d.conformidad == true || d.observacion.size() > 0);
     }
     match /mibg_lote/{loteId} {
-      allow read: if tieneAcceso() && (isAdmin() || resource.data.sedeId == miRol().sede);
+      // resource == null: mismo motivo que en actas más abajo -- si loteId
+      // no existe (ej. id inválido/lote borrado), administrarLoteDosisUnicaTransaction
+      // hace tx.get(loteRef) para poder tirar el mensaje amigable "Este
+      // lote no existe" -- sin este `||`, un técnico no-admin recibía
+      // permission-denied crudo en vez de ese mensaje (mismo patrón que el
+      // bug de actas, misma función, no confirmado en producción pero
+      // mismo riesgo).
+      allow read: if tieneAcceso() && (isAdmin() || resource == null || resource.data.sedeId == miRol().sede);
       allow create: if tieneAcceso() && mibgLoteValido();
       allow update, delete: if false;
     }
@@ -590,7 +597,20 @@ service cloud.firestore {
     // listener sin where(sedeId==) para un técnico rompería con
     // permission-denied en vez de traer sólo lo permitido.
     match /actas/{actaId} {
+      // resource == null: el doc todavía no existe -- caso real y
+      // frecuente, no un edge case (bug real en producción, encontrado
+      // simulando con identidad de técnico en vez de admin):
+      // administrarLoteDosisUnicaTransaction (mibgLotes.js) lee
+      // actas/anula_{loteId} para saber si el lote ya fue anulado ANTES
+      // de que ese marcador exista nunca (primera administración de un
+      // lote recién llegado). Sin este `||`, resource.data.sedeId sobre
+      // un resource inexistente tira permission-denied para cualquier
+      // técnico no-admin -- isAdmin() era el único camino que no
+      // evaluaba esa cláusula, así que el bug nunca se vio probando como
+      // admin. Mismo patrón ya resuelto en pedidosSemanales (ver más
+      // arriba).
       allow read: if isAdmin() ||
+        (tieneAcceso() && resource == null) ||
         (tieneAcceso() && miRol().sede == resource.data.sedeId &&
          (!esTipoStockI131(resource.data.tipo) || tieneAccesoI131()));
       allow create: if tieneAcceso() && actaValida(actaId);

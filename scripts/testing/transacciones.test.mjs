@@ -6,10 +6,11 @@ import assert from "node:assert/strict";
 import { doc, getDoc } from "firebase/firestore";
 import {
   PERSONAS, SEDE_A, SEDE_B, FARM_ID, db,
-  loguearComo, crearLoteDirecto, borrarLote, loteDePrueba,
+  loguearComo, crearLoteDirecto, borrarLote, loteDePrueba, fichaDePrueba,
   prepararFixturesGlobales, buscarLotePorNumero, buscarMovimientos, cerrarConexiones,
 } from "./fixtures.mjs";
 import { egresoTransaction, ingresoBatch, transferenciaTransaction } from "../../src/services/firestore/stock.js";
+import { addMibgLote, administrarMibgTransaction, administrarLutecioTransaction } from "../../src/services/firestore/mibgLotes.js";
 import { FARMS_DEFAULT } from "../../src/constants/farmsSeed.js";
 import { uid } from "../../src/helpers/id.js";
 
@@ -147,4 +148,80 @@ test("transferencia: conflicto -- dos transferencias simultáneas desde el mismo
 
   await borrarLote(SEDE_A, loteId);
   await borrarLote(SEDE_B, destinoLote.id);
+});
+
+// Regresión directa de un bug real en producción: administrarMibgTransaction/
+// administrarLutecioTransaction (mibgLotes.js) leen actas/anula_{loteId}
+// para saber si el lote ya fue anulado ANTES de que ese marcador exista
+// nunca (primera administración de un lote recién llegado) -- la regla de
+// actas explotaba sobre resource.data.sedeId con resource==null, y como
+// isAdmin() era el único camino que no evaluaba esa cláusula, el bug nunca
+// se vio probando como admin (todos los tests de este archivo, hasta acá,
+// corren como PERSONAS.admin). Estos dos SÍ corren como PERSONAS.tecnicoA
+// a propósito -- es la única forma de que este test hubiera fallado antes
+// del fix.
+test("MIBG: técnico (no admin) SÍ puede administrar un lote recién llegado", async () => {
+  await loguearComo(PERSONAS.tecnicoA); // sede central == SEDE_A
+  const numeroLote = `TEST-MIBG-${Date.now()}`;
+  const loteRef = await addMibgLote({
+    sedeId: SEDE_A, sedeNombre: "FUESMEN Central", isotopoId: "mibg",
+    numeroLote, proveedor: "Proveedor Test",
+    actividadCalibrada: 20, volumen: 2, fechaHoraCalibracion: new Date(),
+    fechaVencimiento: "2027-06-01", conformidad: true,
+    usuarioNombre: PERSONAS.tecnicoA.nombre, usuarioEmail: PERSONAS.tecnicoA.email, observacion: "",
+  });
+
+  const ficha = fichaDePrueba();
+  await administrarMibgTransaction(loteRef.id, {
+    sedeId: SEDE_A, sedeNombre: "FUESMEN Central",
+    pacienteFicha: ficha, pacienteNombre: "Paciente Test MIBG", pacienteDni: "1",
+    numeroLote, actividadCalibrada: 20, volumen: 2, actividadAdministrada: 18,
+    usuarioNombre: PERSONAS.tecnicoA.nombre, usuarioEmail: PERSONAS.tecnicoA.email, observacion: "",
+  });
+
+  const usoSnap = await getDoc(doc(db, "actas", `mibg_${loteRef.id}_1`));
+  assert.ok(usoSnap.exists());
+  assert.equal(usoSnap.data().pacienteFicha, ficha);
+});
+
+test("Lutecio-177: técnico (no admin) SÍ puede administrar un lote recién llegado", async () => {
+  await loguearComo(PERSONAS.tecnicoA); // sede central == SEDE_A
+  const numeroLote = `TEST-LU-${Date.now()}`;
+  const loteRef = await addMibgLote({
+    sedeId: SEDE_A, sedeNombre: "FUESMEN Central", isotopoId: "lutecio177",
+    numeroLote, proveedor: "Proveedor Test",
+    actividadCalibrada: 150, volumen: 10, fechaHoraCalibracion: new Date(),
+    fechaVencimiento: "2027-06-01", conformidad: true,
+    usuarioNombre: PERSONAS.tecnicoA.nombre, usuarioEmail: PERSONAS.tecnicoA.email, observacion: "",
+  });
+
+  const ficha = fichaDePrueba();
+  await administrarLutecioTransaction(loteRef.id, {
+    sedeId: SEDE_A, sedeNombre: "FUESMEN Central",
+    pacienteFicha: ficha, pacienteNombre: "Paciente Test Lutecio", pacienteDni: "2",
+    peso: 70, talla: 170, mciAdministrados: 140, actividadCalibrada: 150,
+    isotopoId: "lu177", lote: numeroLote, medicoResponsable: "Dr. Test",
+    usuarioNombre: PERSONAS.tecnicoA.nombre, usuarioEmail: PERSONAS.tecnicoA.email, observacion: "",
+  });
+
+  const usoSnap = await getDoc(doc(db, "actas", `lote_${loteRef.id}_1`));
+  assert.ok(usoSnap.exists());
+  assert.equal(usoSnap.data().pacienteFicha, ficha);
+});
+
+// mibg_lote también tenía el mismo hueco (resource==null sin guard) en su
+// propio primer tx.get -- este test cubre ese lado (loteId inexistente,
+// mensaje amigable en vez de permission-denied crudo), aunque no fue el
+// que disparó el bug original.
+test("MIBG: administrar un loteId inexistente da el mensaje amigable, no permission-denied crudo", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  await assert.rejects(
+    () => administrarMibgTransaction("id-inexistente-12345", {
+      sedeId: SEDE_A, sedeNombre: "FUESMEN Central",
+      pacienteFicha: fichaDePrueba(), pacienteNombre: "Paciente Test", pacienteDni: "9",
+      numeroLote: "X", actividadCalibrada: 20, volumen: 2, actividadAdministrada: 18,
+      usuarioNombre: PERSONAS.tecnicoA.nombre, usuarioEmail: PERSONAS.tecnicoA.email, observacion: "",
+    }),
+    /no existe/i
+  );
 });
