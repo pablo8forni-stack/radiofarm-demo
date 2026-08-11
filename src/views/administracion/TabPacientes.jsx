@@ -15,7 +15,7 @@ import {
   listenActas, addActaPaciente, actasPorRango, anularActaTransaction, listenAnulacionesActas,
   addActaI131Ablativa, addActaI131Dosis, addActaI131Barrido,
   addActaI131Captacion, addActaI131Centellograma, addActaI131CaptacionCentellograma,
-  resolverFichaIntento, listenUltimaFicha, obtenerUltimaFicha,
+  resolverFichaIntento, obtenerUltimaFicha,
 } from "../../services/firestore/actas.js";
 import { listenMibgLotes, administrarMibgTransaction, administrarLutecioTransaction } from "../../services/firestore/mibgLotes.js";
 import { estadoMibgLote } from "../../helpers/mibgLote.js";
@@ -96,11 +96,18 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
   const [fichaNro, setFichaNro] = useState("");
   // null | { tipo: "formato" } | { tipo: "usada", data } -- se limpia solo
   // apenas fichaNro cambia (ver onChange más abajo), así nunca queda un
-  // error viejo pegado a un valor ya distinto. ultimaFicha alimenta la
-  // sugerencia de precarga (ver precargarSugerenciaFicha), filtrada por la
-  // sede activa del formulario -- ver listenUltimaFicha en
-  // services/firestore/actas.js.
+  // error viejo pegado a un valor ya distinto.
   const [fichaEstado, setFichaEstado] = useState(null);
+  // Último "sugerida - 1" ya resuelto por precargarSugerenciaFicha (one-shot,
+  // ver obtenerUltimaFicha) -- alimenta SÓLO el placeholder de abajo, para
+  // el instante en que fichaNro está vacío. Ya no es un listener en tiempo
+  // real (listenUltimaFicha se sacó): el camino real de la sugerencia hace
+  // rato dejó de depender de él (precargarSugerenciaFicha ya resuelve
+  // fresco con un getDocs one-shot cada vez que hace falta), así que
+  // mantenerlo como onSnapshot sólo pagaba una lectura incremental por cada
+  // ficha nueva de la sede, en cada sesión con Libro 2 abierto, por un
+  // placeholder que casi nunca llega a verse (el campo siempre se precarga
+  // con un valor real al abrir el form).
   const [ultimaFicha, setUltimaFicha] = useState(null);
   // true apenas el campo de Ficha recibe un input REAL del usuario (ver
   // onChange del Input más abajo) -- false cada vez que la propia app lo
@@ -167,14 +174,6 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
   // en tiempo real: un lote usado por otra técnica desaparece para todos al
   // instante, sin importar el día (ver lotesMibgDisponibles).
   useEffect(() => listenMibgLotes(setMibgLotes, { esAdmin, sedeId: usuario.sede }), []);
-  // N° de Ficha: correlativo propio de CADA SEDE (VM RIS) -- listener chico
-  // (limit(1)) filtrado por la sede activa del formulario (sedeId, la del
-  // técnico si es fija, o la elegida por el admin), sólo para la sugerencia
-  // de precarga, ver nota en firestore.rules#fichaUsadaValida. Se
-  // re-suscribe cada vez que cambia sedeId (dep array), así que si un admin
-  // cambia de sede en el formulario, la sugerencia pasa a reflejar la otra
-  // sede.
-  useEffect(() => listenUltimaFicha(sedeId, setUltimaFicha), [sedeId]);
 
   // Pre-chequeo amigable (aviso inmediato antes de intentar guardar) -- la
   // garantía real es el choque server-side contra el marcador create-only
@@ -229,6 +228,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
   async function precargarSugerenciaFicha(sedeIdDestino) {
     setFichaNro(""); setFichaTocada(false); setFichaEstado(null);
     const ultima = await obtenerUltimaFicha(sedeIdDestino);
+    setUltimaFicha(ultima);
     const sugerida = ultima != null ? String(ultima + 1) : "";
     setFichaNro(sugerida);
     setFichaTocada(false);
