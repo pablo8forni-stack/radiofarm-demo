@@ -37,6 +37,9 @@ import { Badge } from "./components/ui/Badge.jsx";
 import { Btn } from "./components/ui/Btn.jsx";
 import { Toast } from "./components/ui/Toast.jsx";
 import { AcercaDe } from "./components/AcercaDe.jsx";
+import { PantallaBloqueo } from "./components/PantallaBloqueo.jsx";
+import { ModalSeguridad } from "./components/ModalSeguridad.jsx";
+import { useAppLock } from "./hooks/useAppLock.js";
 import { signOutUser, listenSolicitudes } from "./services/auth.js";
 import { totStock, farmsDeSede, sedesActivas, idsSedesActivas, puntoReorden } from "./helpers/stock.js";
 import { hayOperacionCriticaEnCurso } from "./helpers/erroresRed.js";
@@ -61,6 +64,8 @@ function AppAutenticada({ usuario }) {
   const [vista, setVista] = useState("inventario");
   const [toast, setToast] = useState(null);
   const [mostrarAcercaDe, setMostrarAcercaDe] = useState(false);
+  const [mostrarSeguridad, setMostrarSeguridad] = useState(false);
+  const { bloqueado, necesitaConfigurarPin, desbloquear, terminarSetup } = useAppLock(usuario.email);
   const esAdmin = usuario.rol === "admin";
   const [solicitudes, setSolicitudes] = useState([]);
   const countSolicitudes = solicitudes.length;
@@ -239,6 +244,12 @@ function AppAutenticada({ usuario }) {
                   </svg>
                 </button>
               )}
+              <button onClick={() => setMostrarSeguridad(true)} title="Seguridad -- PIN de acceso / Face ID"
+                className="text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-100 transition min-w-11 min-h-11 md:min-w-0 md:min-h-0 flex items-center justify-center">
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z" />
+                </svg>
+              </button>
               <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold text-white ${esAdmin ? "bg-purple-500" : "bg-blue-500"}`}>{usuario.initial}</div>
               <div className="hidden sm:block">
                 <div className="text-xs font-semibold text-gray-700 leading-tight">{usuario.nombre}</div>
@@ -310,6 +321,14 @@ function AppAutenticada({ usuario }) {
 
       {toast && <Toast msg={toast.m} type={toast.t || "success"} duracion={toast.d} onDone={() => setToast(null)} />}
       <AcercaDe open={mostrarAcercaDe} onClose={() => setMostrarAcercaDe(false)} />
+      <ModalSeguridad open={mostrarSeguridad} usuario={usuario} onClose={() => setMostrarSeguridad(false)} onToast={(m, t, d) => setToast({ m, t, d })} />
+      {/* Por encima de todo lo demás (z-[100], ver PantallaBloqueo) -- gate
+          obligatorio, no un modal más: primera vez en este dispositivo pide
+          configurar el PIN, después pide desbloquear tras 5 min en segundo
+          plano (ver hooks/useAppLock.js). */}
+      {(necesitaConfigurarPin || bloqueado) && (
+        <PantallaBloqueo usuario={usuario} necesitaConfigurarPin={necesitaConfigurarPin} onDesbloquear={desbloquear} onTerminarSetup={terminarSetup} />
+      )}
     </div>
   );
 }
