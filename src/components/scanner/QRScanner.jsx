@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Modal } from "../ui/Modal.jsx";
 import { Btn } from "../ui/Btn.jsx";
 import { Html5QrcodeFallback } from "./Html5QrcodeFallback.jsx";
+import { avisarEscaneoExitoso } from "../../helpers/feedbackEscaneo.js";
 
 // Nativo (BarcodeDetector, Chrome/Android) cuando está disponible; si no,
 // cae a html5-qrcode (Safari/iOS) -- requisito 5.
@@ -49,6 +50,7 @@ function QRScannerNativo({ onResult, onClose }) {
         try {
           const codes = await detector.detect(videoRef.current);
           if (codes.length > 0) {
+            avisarEscaneoExitoso();
             if (streamRef.current) streamRef.current.getTracks().forEach((t) => t.stop());
             onResult(codes[0].rawValue);
             return;

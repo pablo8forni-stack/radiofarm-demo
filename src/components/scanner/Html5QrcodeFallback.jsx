@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Modal } from "../ui/Modal.jsx";
 import { Btn } from "../ui/Btn.jsx";
 import { registrarLog, registrarImagen } from "../../helpers/debugLog.js";
+import { avisarEscaneoExitoso } from "../../helpers/feedbackEscaneo.js";
 
 const ELEMENT_ID = "radiofarm-html5-qrcode-region";
 
@@ -178,6 +179,7 @@ export function Html5QrcodeFallback({ onResult, onClose }) {
             if (yaResolvioRef.current) return;
             yaResolvioRef.current = true;
             registrarLog(`[QR] decode exitoso: "${decodedText.slice(0, 60)}"`);
+            avisarEscaneoExitoso();
             detenerYLuego(() => onResult(decodedText));
           },
           (mensaje) => {
