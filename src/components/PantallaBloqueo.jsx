@@ -52,7 +52,16 @@ export function PantallaBloqueo({ usuario, necesitaConfigurarPin, onDesbloquear,
     setError("");
     if (!/^\d{4,}$/.test(pin)) { setError("El PIN debe tener al menos 4 dígitos, sólo números."); return; }
     if (pin !== pinConfirmar) { setError("Los dos PIN no coinciden."); return; }
-    await guardarPin(usuario.email, pin);
+    // guardarPin ahora puede tirar (storage lleno, ver appLock.js) -- antes
+    // no había try/catch acá, así que un error hubiera quedado como
+    // promesa rechazada sin manejar: la pantalla no avanzaba y tampoco
+    // mostraba nada, indistinguible de una app trabada.
+    try {
+      await guardarPin(usuario.email, pin);
+    } catch (e) {
+      setError(e.message || "No se pudo guardar el PIN.");
+      return;
+    }
     // Bug real encontrado en prueba de dispositivo: la oferta de
     // biometría vivía sólo en ModalSeguridad (un ícono aparte del header)
     // -- nadie tenía motivo para descubrirlo apenas terminaba de crear el

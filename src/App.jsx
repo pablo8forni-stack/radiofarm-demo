@@ -22,7 +22,7 @@
  * (DNDA), República Argentina. Ley 11.723.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useAuth } from "./hooks/useAuth.js";
 import { useCatalogo } from "./hooks/useCatalogo.js";
 import { CatalogoProvider } from "./context/CatalogoContext.jsx";
@@ -39,6 +39,7 @@ import { Toast } from "./components/ui/Toast.jsx";
 import { AcercaDe } from "./components/AcercaDe.jsx";
 import { PantallaBloqueo } from "./components/PantallaBloqueo.jsx";
 import { ModalSeguridad } from "./components/ModalSeguridad.jsx";
+import { PantallaLogsDiagnostico } from "./components/PantallaLogsDiagnostico.jsx";
 import { useAppLock } from "./hooks/useAppLock.js";
 import { signOutUser, listenSolicitudes } from "./services/auth.js";
 import { totStock, farmsDeSede, sedesActivas, idsSedesActivas, puntoReorden } from "./helpers/stock.js";
@@ -65,6 +66,34 @@ function AppAutenticada({ usuario }) {
   const [toast, setToast] = useState(null);
   const [mostrarAcercaDe, setMostrarAcercaDe] = useState(false);
   const [mostrarSeguridad, setMostrarSeguridad] = useState(false);
+  const [mostrarLogsDebug, setMostrarLogsDebug] = useState(false);
+  // Gesto discreto en el logo (7 taps seguidos) para abrir el visor de
+  // logs de diagnóstico en vez de "Acerca de" -- pensado para poder ver
+  // logs en el propio celular sin cable ni inspector remoto (el caso de
+  // iPhone sin Mac a mano).
+  //
+  // Bug real encontrado probando: abrir "Acerca de" YA en el primer tap
+  // (como en el diseño original) no funciona -- el overlay del modal
+  // (fixed inset-0, Modal.jsx) tapa el propio logo, así que los taps 2-7
+  // nunca llegan a destino, el gesto queda imposible de completar. Por
+  // eso "Acerca de" espera 400ms de silencio antes de abrirse (demora
+  // chica, casi imperceptible en un click normal) -- así una racha de
+  // taps rápidos nunca llega a mostrar el modal a mitad de camino.
+  const tapsLogoRef = useRef({ cuenta: 0, timer: null });
+  function onLogoClick() {
+    const st = tapsLogoRef.current;
+    st.cuenta += 1;
+    if (st.timer) clearTimeout(st.timer);
+    if (st.cuenta >= 7) {
+      st.cuenta = 0;
+      setMostrarLogsDebug(true);
+      return;
+    }
+    st.timer = setTimeout(() => {
+      st.cuenta = 0;
+      setMostrarAcercaDe(true);
+    }, 400);
+  }
   const { bloqueado, necesitaConfigurarPin, desbloquear, terminarSetup } = useAppLock(usuario.email);
   const esAdmin = usuario.rol === "admin";
   const [solicitudes, setSolicitudes] = useState([]);
@@ -212,7 +241,7 @@ function AppAutenticada({ usuario }) {
               Visible para cualquier usuario logueado (a diferencia de
               Configuración, que es admin-only) -- mismo patrón común de
               "click en el logo" que el resto de este tipo de apps. */}
-          <button onClick={() => setMostrarAcercaDe(true)} className="flex items-center gap-3 hover:opacity-80 transition text-left">
+          <button onClick={onLogoClick} className="flex items-center gap-3 hover:opacity-80 transition text-left">
             <div className="w-9 h-9 rounded-xl bg-blue-600 flex items-center justify-center shadow-sm flex-shrink-0">
               <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z" />
@@ -322,6 +351,7 @@ function AppAutenticada({ usuario }) {
       {toast && <Toast msg={toast.m} type={toast.t || "success"} duracion={toast.d} onDone={() => setToast(null)} />}
       <AcercaDe open={mostrarAcercaDe} onClose={() => setMostrarAcercaDe(false)} />
       <ModalSeguridad open={mostrarSeguridad} usuario={usuario} onClose={() => setMostrarSeguridad(false)} onToast={(m, t, d) => setToast({ m, t, d })} />
+      <PantallaLogsDiagnostico open={mostrarLogsDebug} onClose={() => setMostrarLogsDebug(false)} />
       {/* Por encima de todo lo demás (z-[100], ver PantallaBloqueo) -- gate
           obligatorio, no un modal más: primera vez en este dispositivo pide
           configurar el PIN, después pide desbloquear tras 5 min en segundo

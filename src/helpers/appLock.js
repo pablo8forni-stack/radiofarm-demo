@@ -52,7 +52,17 @@ export async function guardarPin(uid, pin) {
   const saltBytes = crypto.getRandomValues(new Uint8Array(16));
   const salt = bytesToHex(saltBytes);
   const hash = await hashPin(pin, saltBytes);
-  localStorage.setItem(pinKey(uid), JSON.stringify({ salt, hash }));
+  try {
+    localStorage.setItem(pinKey(uid), JSON.stringify({ salt, hash }));
+  } catch (e) {
+    // Bug real encontrado (ver debugLog.js): ningún setItem de la app
+    // tenía manejo de excepción -- acá en particular, si el storage está
+    // lleno, el PIN nunca queda guardado de verdad aunque la pantalla de
+    // setup avance como si hubiera funcionado. Se relanza con un mensaje
+    // claro para que quien llama (PantallaBloqueo) pueda mostrarlo, en
+    // vez de fallar en silencio.
+    throw new Error(`No se pudo guardar el PIN (${e.name || "Error"}) -- el almacenamiento del dispositivo puede estar lleno.`);
+  }
 }
 
 export async function verificarPin(uid, pin) {
@@ -86,8 +96,17 @@ export async function verificarPin(uid, pin) {
 // eso es fiable aunque la notificación de cambio no lo sea.
 const ACTIVIDAD_KEY = "radiofarm_ultima_actividad";
 
+// A diferencia de guardarPin, ACÁ nunca se relanza -- esto corre cada 20s
+// en cada carga de la app (ver useAppLock.js), incluido dentro de un
+// setInterval sin ningún try/catch alrededor; una excepción sin atrapar
+// ahí no rompe nada visible por sí sola, pero es exactamente el tipo de
+// hueco que hizo que un storage lleno se sintiera como "la app se rompió
+// y ni refrescando se arregla" -- si falla, el timestamp queda
+// desactualizado (peor caso: pide el PIN de más), nunca debe tirar.
 export function marcarActividad() {
-  localStorage.setItem(ACTIVIDAD_KEY, String(Date.now()));
+  try {
+    localStorage.setItem(ACTIVIDAD_KEY, String(Date.now()));
+  } catch { /* ver comentario arriba -- degradar, nunca tirar */ }
 }
 
 // Sólo para diagnóstico (logs de useAppLock.js) -- null si nunca se
@@ -141,7 +160,11 @@ export async function registrarBiometria(uid, nombreUsuario) {
       timeout: 60000,
     },
   });
-  localStorage.setItem(biometriaKey(uid), JSON.stringify({ credentialId: bufferToBase64(cred.rawId) }));
+  try {
+    localStorage.setItem(biometriaKey(uid), JSON.stringify({ credentialId: bufferToBase64(cred.rawId) }));
+  } catch (e) {
+    throw new Error(`No se pudo guardar la credencial (${e.name || "Error"}) -- el almacenamiento del dispositivo puede estar lleno.`);
+  }
 }
 
 export function borrarBiometria(uid) {

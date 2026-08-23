@@ -65,12 +65,12 @@ export async function activarAvisos() {
   reproducirTono();
   const permiso = await Notification.requestPermission();
   const activado = permiso === "granted";
-  localStorage.setItem(CLAVE_ACTIVADO, activado ? "1" : "0");
+  try { localStorage.setItem(CLAVE_ACTIVADO, activado ? "1" : "0"); } catch { /* ver guardarSet -- no es motivo para romper la pantalla */ }
   return activado;
 }
 
 export function desactivarAvisos() {
-  localStorage.setItem(CLAVE_ACTIVADO, "0");
+  try { localStorage.setItem(CLAVE_ACTIVADO, "0"); } catch { /* ver guardarSet -- no es motivo para romper la pantalla */ }
 }
 
 function leerSet(clave) {
