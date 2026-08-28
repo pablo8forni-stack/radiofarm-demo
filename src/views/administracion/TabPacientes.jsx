@@ -10,7 +10,7 @@ import { descargarArchivo } from "../../helpers/descargarArchivo.js";
 import { parseQR } from "../../helpers/qr.js";
 import { prepararSonidoEscaneo } from "../../helpers/feedbackEscaneo.js";
 import { sedesActivas, farmsDeSede } from "../../helpers/stock.js";
-import { normalizarFicha } from "../../helpers/fichaPaciente.js";
+import { normalizarFicha, compararPorSedeYFicha } from "../../helpers/fichaPaciente.js";
 import { TIPO_LABEL_I131 } from "../../constants/tipoI131.js";
 import {
   listenActas, addActaPaciente, actasPorRango, anularActaTransaction, listenAnulacionesActas,
@@ -534,12 +534,25 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
     [actasTodas, filtroFecha, sedeEfectiva, busqNorm]
   );
 
+  // Orden de LISTADO (no de datos): por N° de Ficha dentro de cada sede, no
+  // por cuándo terminó de guardarse cada acta -- ver compararPorSedeYFicha.
+  // Deriva de "actas" (que sigue ordenado por fecha desc, tal cual viene de
+  // Firestore) SIN tocarla -- "actas" sigue alimentando el CSV tal cual
+  // (descargarCSV más abajo), que tiene que reflejar la fecha real de
+  // guardado, no este orden visual.
+  const actasOrdenadas = useMemo(() => [...actas].sort(compararPorSedeYFicha), [actas]);
+
   // Sólo se agrupa por fecha en "Ver todos" -- con un día ya filtrado, todos
   // los registros mostrados comparten fecha y un separador no aportaría nada.
-  const grupos = useMemo(
-    () => (filtroFecha ? null : agruparPorFecha(actas, (a) => fmtFechaISO(a.fecha))),
-    [actas, filtroFecha]
-  );
+  // agruparPorFecha necesita el array en orden de fecha (detecta grupos por
+  // adyacencia) -- por eso agrupa sobre "actas", NUNCA sobre
+  // actasOrdenadas -- y el orden por ficha se aplica DESPUÉS, sólo dentro de
+  // cada grupo ya armado, sin tocar qué fechas quedan agrupadas juntas.
+  const grupos = useMemo(() => {
+    if (filtroFecha) return null;
+    return agruparPorFecha(actas, (a) => fmtFechaISO(a.fecha))
+      .map((g) => ({ ...g, items: [...g.items].sort(compararPorSedeYFicha) }));
+  }, [actas, filtroFecha]);
 
   const lotesDisp = (catalogo.stock[sedeId]?.[farmId] || []).filter((l) => l.cantidad > 0);
 
@@ -1123,7 +1136,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
                     </tr>,
                     ...g.items.map(filaPaciente),
                   ])
-                : actas.map(filaPaciente)}
+                : actasOrdenadas.map(filaPaciente)}
             </tbody>
           </table>
         </div>
@@ -1136,7 +1149,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
                 </div>,
                 ...g.items.map(tarjetaPaciente),
               ])
-            : actas.map(tarjetaPaciente)}
+            : actasOrdenadas.map(tarjetaPaciente)}
         </div>
         {actas.length === 0 && (
           <div className="text-center py-12 text-gray-400 text-sm">
