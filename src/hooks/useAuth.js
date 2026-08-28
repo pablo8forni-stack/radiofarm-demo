@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { listenAuthState, fetchRol, fetchSolicitud, crearSolicitud } from "../services/auth.js";
+import { auth } from "../firebase.js";
 
 // usuario:
 //   null                                     -> nadie logueado
@@ -8,6 +9,20 @@ import { listenAuthState, fetchRol, fetchSolicitud, crearSolicitud } from "../se
 export function useAuth() {
   const [usuario, setUsuario] = useState(null);
   const [cargando, setCargando] = useState(true);
+
+  // fetchRol es un getDoc suelto (no listener) -- si algo cambia el propio
+  // doc de rol del usuario logueado (ej. sedeAuditando, desde Configuración)
+  // no se refleja solo. Esto lo re-lee a demanda, sin esperar a un
+  // logout/login. No usamos onSnapshot para todo el hook porque usuario.rol
+  // gatea rutas/permisos en toda la app -- preferimos una recarga explícita
+  // y controlada a que cualquier escritura ajena al doc dispare un
+  // re-render global inesperado.
+  async function refrescarUsuario() {
+    const firebaseUser = auth.currentUser;
+    if (!firebaseUser) return;
+    const rol = await fetchRol(firebaseUser.email);
+    if (rol) setUsuario({ ...rol, initial: (rol.nombre || rol.email)[0].toUpperCase() });
+  }
 
   useEffect(() => {
     const unsub = listenAuthState(async (firebaseUser) => {
@@ -39,5 +54,5 @@ export function useAuth() {
     return unsub;
   }, []);
 
-  return { usuario, cargando };
+  return { usuario, cargando, refrescarUsuario };
 }

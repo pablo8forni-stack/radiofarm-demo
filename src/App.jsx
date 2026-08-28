@@ -47,7 +47,7 @@ import { hayOperacionCriticaEnCurso } from "./helpers/erroresRed.js";
 import { avisosSoportados, avisosActivados, activarAvisos, desactivarAvisos, sincronizarYAvisar, CLAVES_ALMACEN } from "./helpers/avisos.js";
 
 export default function App() {
-  const { usuario, cargando } = useAuth();
+  const { usuario, cargando, refrescarUsuario } = useAuth();
 
   if (cargando) return <PantallaCargando />;
   if (!usuario) return <PantallaLogin />;
@@ -55,12 +55,12 @@ export default function App() {
 
   return (
     <CatalogoProvider>
-      <AppAutenticada usuario={usuario} />
+      <AppAutenticada usuario={usuario} refrescarUsuario={refrescarUsuario} />
     </CatalogoProvider>
   );
 }
 
-function AppAutenticada({ usuario }) {
+function AppAutenticada({ usuario, refrescarUsuario }) {
   const catalogo = useCatalogo();
   const [vista, setVista] = useState("inventario");
   const [toast, setToast] = useState(null);
@@ -341,7 +341,7 @@ function AppAutenticada({ usuario }) {
         {vista === "historial" && <VistaHistorial catalogo={catalogo} usuario={usuario} esAdmin={esAdmin} onToast={(m, t, d) => setToast({ m, t, d })} />}
         {vista === "administracion" && <VistaAdministracion catalogo={catalogo} usuario={usuario} esAdmin={esAdmin} onToast={(m, t, d) => setToast({ m, t, d })} navAdministracion={navAdministracion} onIrAAdministracion={irAAdministracion} />}
         {vista === "terapia-i131" && <VistaTerapiaI131 catalogo={catalogo} usuario={usuario} esAdmin={esAdmin} onToast={(m, t, d) => setToast({ m, t, d })} onIrAAdministracion={irAAdministracion} />}
-        {vista === "configuracion" && esAdmin && <VistaConfiguracion catalogo={catalogo} usuario={usuario} onToast={(m, t, d) => setToast({ m, t, d })} onIrAInventario={irAInventario} navConfiguracion={navConfiguracion} />}
+        {vista === "configuracion" && esAdmin && <VistaConfiguracion catalogo={catalogo} usuario={usuario} refrescarUsuario={refrescarUsuario} onToast={(m, t, d) => setToast({ m, t, d })} onIrAInventario={irAInventario} navConfiguracion={navConfiguracion} />}
       </main>
 
       {toast && <Toast msg={toast.m} type={toast.t || "success"} duracion={toast.d} onDone={() => setToast(null)} />}

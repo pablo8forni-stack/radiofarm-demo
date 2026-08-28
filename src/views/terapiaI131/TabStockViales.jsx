@@ -5,7 +5,6 @@ import { Input } from "../../components/ui/Input.jsx";
 import { Sel } from "../../components/ui/Sel.jsx";
 import { ModalAnularActa } from "../../components/actas/ModalAnularActa.jsx";
 import { fmtF, fmtTs, diasV } from "../../helpers/formato.js";
-import { sedesActivas } from "../../helpers/stock.js";
 import { listenActas, addActaI131Vial, anularActaTransaction, listenAnulacionesActas } from "../../services/firestore/actas.js";
 import { diasTranscurridos, actividadRestante, volumenExtraidoDe } from "../../helpers/decaimientoI131.js";
 import { AvisoGuiaNoOficial } from "./DesgloseCalculo.jsx";
@@ -25,23 +24,24 @@ export function TabStockViales({ catalogo, usuario, esAdmin, onToast }) {
   const [extracciones, setExtracciones] = useState([]);
   const [anulacionesRaw, setAnulacionesRaw] = useState([]);
   const [mAnular, setMAnular] = useState(null);
-  const [filtroSede, setFiltroSede] = useState(usuario.sede);
+  // Ver comentario largo equivalente en TabPacientes.jsx.
+  const sedeEfectiva = esAdmin ? usuario.sedeAuditando : usuario.sede;
   const [filtroCategoria, setFiltroCategoria] = useState("");
   const [vialSeleccionadoId, setVialSeleccionadoId] = useState(null);
   const [mostrarFormVial, setMostrarFormVial] = useState(false);
   const [formVial, setFormVial] = useState(VACIO_VIAL);
   const [guardandoVial, setGuardandoVial] = useState(false);
 
-  useEffect(() => listenActas("i131_vial", setViales, { esAdmin, sedeId: usuario.sede }), []);
-  useEffect(() => listenActas("i131_extraccion", setExtracciones, { esAdmin, sedeId: usuario.sede }), []);
-  useEffect(() => listenAnulacionesActas(setAnulacionesRaw, { esAdmin, sedeId: usuario.sede }), []);
+  useEffect(() => { if (sedeEfectiva) return listenActas("i131_vial", setViales, { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
+  useEffect(() => { if (sedeEfectiva) return listenActas("i131_extraccion", setExtracciones, { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
+  useEffect(() => { if (sedeEfectiva) return listenAnulacionesActas(setAnulacionesRaw, { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
 
   const anulaciones = useMemo(() => new Map(anulacionesRaw.map((a) => [a.anulaId, a])), [anulacionesRaw]);
 
   const vialesFiltrados = useMemo(
-    () => viales.filter((v) => (!filtroSede || v.sedeId === filtroSede) && (!filtroCategoria || categoriaVial(v) === filtroCategoria))
+    () => viales.filter((v) => (!sedeEfectiva || v.sedeId === sedeEfectiva) && (!filtroCategoria || categoriaVial(v) === filtroCategoria))
       .sort((a, b) => diasTranscurridos(a.fechaCalibracion) - diasTranscurridos(b.fechaCalibracion)),
-    [viales, filtroSede, filtroCategoria]
+    [viales, sedeEfectiva, filtroCategoria]
   );
 
   async function confirmarAnulacion(acta, motivo) {
@@ -119,6 +119,14 @@ export function TabStockViales({ catalogo, usuario, esAdmin, onToast }) {
     );
   }
 
+  if (esAdmin && !sedeEfectiva) {
+    return (
+      <div className="bg-amber-50 border border-amber-100 rounded-xl px-4 py-3 text-sm text-amber-700">
+        Elegí qué sede vas a auditar en Configuración antes de ver esta sección.
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-col gap-4">
       <AvisoGuiaNoOficial />
@@ -133,11 +141,8 @@ export function TabStockViales({ catalogo, usuario, esAdmin, onToast }) {
             </Sel>
           </div>
           {esAdmin && (
-            <div className="w-full md:w-auto">
-              <Sel value={filtroSede} onChange={(e) => setFiltroSede(e.target.value)}>
-                <option value="">Todas las sedes</option>
-                {sedesActivas(catalogo).map((s) => <option key={s.id} value={s.id}>{s.short}</option>)}
-              </Sel>
+            <div className="w-full md:w-auto text-xs text-gray-400">
+              Auditando <span className="font-semibold text-gray-600">{catalogo.sedes[sedeEfectiva]?.short || "—"}</span> · cambiar en Configuración
             </div>
           )}
         </div>

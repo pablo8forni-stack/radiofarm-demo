@@ -21,7 +21,16 @@ export function TabUsuarios({ catalogo, roles, solicitudes, usuarioActual, onToa
   const [form, setForm] = useState(vacio);
 
   function abrirNuevo() { setForm(vacio); setMForm("nuevo"); }
-  function abrirEditar(r) { setForm({ email: r.email, nombre: r.nombre, rol: r.rol, sede: r.sede, accesoTerapiaI131: !!r.accesoTerapiaI131, accesoAgendaI131: !!r.accesoAgendaI131 }); setMForm("editar"); }
+  // Un admin no puede editar su PROPIO rol/sede/permisos acá -- la regla de
+  // Firestore ahora lo impide del lado servidor (para que un admin nunca
+  // pueda auto-otorgarse ni cambiarse nada "de paso"); su único
+  // self-servicio es sedeAuditando, desde el selector dedicado. Mismo
+  // criterio que ya existía para "no podés quitarte tu propio acceso" (ver
+  // eliminar más abajo), aplicado también acá.
+  function abrirEditar(r) {
+    if (r.email === usuarioActual.email) { onToast("No podés editar tu propio usuario acá -- pedile a otro admin.", "error"); return; }
+    setForm({ email: r.email, nombre: r.nombre, rol: r.rol, sede: r.sede, accesoTerapiaI131: !!r.accesoTerapiaI131, accesoAgendaI131: !!r.accesoAgendaI131 }); setMForm("editar");
+  }
   function abrirAprobar(s) { setForm({ email: s.email, nombre: s.nombre, rol: "tecnico", sede: sedeDefault, accesoTerapiaI131: false, accesoAgendaI131: false }); setMForm("aprobar"); }
 
   async function guardar() {

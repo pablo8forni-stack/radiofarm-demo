@@ -26,7 +26,10 @@ export function TabMarcacion({ catalogo, usuario, esAdmin, onToast }) {
   const [mAnular, setMAnular] = useState(null);
   const [mostrarForm, setMostrarForm] = useState(false);
   const [filtroFecha, setFiltroFecha] = useState(hoy());
-  const [filtroSede, setFiltroSede] = useState(usuario.sede);
+  // Ver comentario largo equivalente en TabPacientes.jsx: fija para
+  // técnico, sede auditada (Configuración) para admin -- ya no hay
+  // selector propio acá ni "todas las sedes".
+  const sedeEfectiva = esAdmin ? usuario.sedeAuditando : usuario.sede;
   const [rangoDesde, setRangoDesde] = useState("");
   const [rangoHasta, setRangoHasta] = useState("");
   const [buscandoRango, setBuscandoRango] = useState(false);
@@ -43,8 +46,8 @@ export function TabMarcacion({ catalogo, usuario, esAdmin, onToast }) {
   const [mciMarcacion, setMciMarcacion] = useState(""); const [obs, setObs] = useState("");
   const [sedeId, setSedeId] = useState(usuario.sede);
 
-  useEffect(() => listenActas("marcacion", setActasTodas, { esAdmin, sedeId: usuario.sede }), []);
-  useEffect(() => listenAnulacionesActas(setAnulacionesRaw, { esAdmin, sedeId: usuario.sede }), []);
+  useEffect(() => { if (sedeEfectiva) return listenActas("marcacion", setActasTodas, { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
+  useEffect(() => { if (sedeEfectiva) return listenAnulacionesActas(setAnulacionesRaw, { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
 
   // anulaId -> acta de anulación (motivo, fecha, quién) -- Map en vez de Set
   // porque el listado necesita mostrar el motivo, no sólo saber que existe.
@@ -81,8 +84,8 @@ export function TabMarcacion({ catalogo, usuario, esAdmin, onToast }) {
   }
 
   const actas = useMemo(
-    () => actasTodas.filter((a) => (!filtroFecha || fmtFechaISO(a.fecha) === filtroFecha) && (!filtroSede || a.sedeId === filtroSede)),
-    [actasTodas, filtroFecha, filtroSede]
+    () => actasTodas.filter((a) => (!filtroFecha || fmtFechaISO(a.fecha) === filtroFecha) && (!sedeEfectiva || a.sedeId === sedeEfectiva)),
+    [actasTodas, filtroFecha, sedeEfectiva]
   );
 
   // Sólo se agrupa por fecha en "Ver todos" -- con un día ya filtrado, todos
@@ -174,7 +177,7 @@ export function TabMarcacion({ catalogo, usuario, esAdmin, onToast }) {
     setResultadoRango(null);
     try {
       const registros = await conTimeout(
-        actasPorRango("marcacion", { desde: rangoDesde, hasta: rangoHasta, esAdmin, sedeId: esAdmin ? (filtroSede || null) : usuario.sede }),
+        actasPorRango("marcacion", { desde: rangoDesde, hasta: rangoHasta, sedeId: sedeEfectiva }),
         TIMEOUT_BUSQUEDA_MS, MSJ_TIMEOUT_BUSQUEDA
       );
       setResultadoRango(registros);
@@ -191,6 +194,14 @@ export function TabMarcacion({ catalogo, usuario, esAdmin, onToast }) {
     onToast(`Libro 1 exportado: ${resultadoRango.length} registro${resultadoRango.length !== 1 ? "s" : ""}`);
   }
 
+  if (esAdmin && !sedeEfectiva) {
+    return (
+      <div className="bg-amber-50 border border-amber-100 rounded-xl px-4 py-3 text-sm text-amber-700">
+        Elegí qué sede vas a auditar en Configuración antes de ver este libro.
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-col md:flex-row gap-3 md:items-center md:justify-between">
@@ -204,11 +215,8 @@ export function TabMarcacion({ catalogo, usuario, esAdmin, onToast }) {
             </Btn>
           </div>
           {esAdmin && (
-            <div className="w-full md:w-auto">
-              <Sel value={filtroSede} onChange={(e) => setFiltroSede(e.target.value)}>
-                <option value="">Todas las sedes</option>
-                {sedesActivas(catalogo).map((s) => <option key={s.id} value={s.id}>{s.short}</option>)}
-              </Sel>
+            <div className="w-full md:w-auto text-xs text-gray-400">
+              Auditando <span className="font-semibold text-gray-600">{catalogo.sedes[sedeEfectiva]?.short || "—"}</span> · cambiar en Configuración
             </div>
           )}
         </div>

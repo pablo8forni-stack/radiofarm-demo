@@ -6,7 +6,6 @@ import { Sel } from "../../components/ui/Sel.jsx";
 import { Modal } from "../../components/ui/Modal.jsx";
 import { ModalAnularActa } from "../../components/actas/ModalAnularActa.jsx";
 import { fmtTs } from "../../helpers/formato.js";
-import { sedesActivas } from "../../helpers/stock.js";
 import { listenActas, addActaI131CaptacionResultado, addActaI131SeguimientoFin, anularActaTransaction, listenAnulacionesActas } from "../../services/firestore/actas.js";
 import { calcularPorcentajeCaptacion } from "../../helpers/porcentajeCaptacion.js";
 import { TIPO_LABEL_I131, categoriaVial, MOMENTOS_CAPTACION as MOMENTOS, MOMENTO_LABEL } from "../../constants/tipoI131.js";
@@ -59,19 +58,20 @@ export function TabResultadosCaptacion({ catalogo, usuario, esAdmin, onToast }) 
   const [mAnular, setMAnular] = useState(null);
   const [mConfirmarFin, setMConfirmarFin] = useState(null);
   const [finalizando, setFinalizando] = useState(false);
-  const [filtroSede, setFiltroSede] = useState(usuario.sede);
+  // Ver comentario largo equivalente en TabPacientes.jsx.
+  const sedeEfectiva = esAdmin ? usuario.sedeAuditando : usuario.sede;
   const [mostrarForm, setMostrarForm] = useState(false);
   const [form, setForm] = useState(VACIO);
   const [guardando, setGuardando] = useState(false);
 
-  useEffect(() => listenActas("i131_captacion", setCaptacion, { esAdmin, sedeId: usuario.sede }), []);
-  useEffect(() => listenActas("i131_centellograma", setCentellograma, { esAdmin, sedeId: usuario.sede }), []);
-  useEffect(() => listenActas("i131_captacion_centellograma", setCaptCentellograma, { esAdmin, sedeId: usuario.sede }), []);
-  useEffect(() => listenActas("i131_vial", setViales, { esAdmin, sedeId: usuario.sede }), []);
-  useEffect(() => listenActas("i131_extraccion", setExtracciones, { esAdmin, sedeId: usuario.sede }), []);
-  useEffect(() => listenActas("i131_captacion_resultado", setResultados, { esAdmin, sedeId: usuario.sede }), []);
-  useEffect(() => listenActas("i131_seguimiento_fin", setSeguimientosFin, { esAdmin, sedeId: usuario.sede }), []);
-  useEffect(() => listenAnulacionesActas(setAnulacionesRaw, { esAdmin, sedeId: usuario.sede }), []);
+  useEffect(() => { if (sedeEfectiva) return listenActas("i131_captacion", setCaptacion, { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
+  useEffect(() => { if (sedeEfectiva) return listenActas("i131_centellograma", setCentellograma, { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
+  useEffect(() => { if (sedeEfectiva) return listenActas("i131_captacion_centellograma", setCaptCentellograma, { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
+  useEffect(() => { if (sedeEfectiva) return listenActas("i131_vial", setViales, { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
+  useEffect(() => { if (sedeEfectiva) return listenActas("i131_extraccion", setExtracciones, { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
+  useEffect(() => { if (sedeEfectiva) return listenActas("i131_captacion_resultado", setResultados, { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
+  useEffect(() => { if (sedeEfectiva) return listenActas("i131_seguimiento_fin", setSeguimientosFin, { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
+  useEffect(() => { if (sedeEfectiva) return listenAnulacionesActas(setAnulacionesRaw, { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
 
   const anulaciones = useMemo(() => new Map(anulacionesRaw.map((a) => [a.anulaId, a])), [anulacionesRaw]);
   const finalizadoPorDosis = useMemo(() => new Map(seguimientosFin.map((s) => [s.dosisActaId, s])), [seguimientosFin]);
@@ -93,9 +93,9 @@ export function TabResultadosCaptacion({ catalogo, usuario, esAdmin, onToast }) 
   // mezclados, más recientes primero, filtrados por sede igual que el resto.
   const registrosDiagnosticos = useMemo(
     () => [...captacion, ...centellograma, ...captCentellograma]
-      .filter((a) => !filtroSede || a.sedeId === filtroSede)
+      .filter((a) => !sedeEfectiva || a.sedeId === sedeEfectiva)
       .sort((a, b) => tsMillis(b.fecha) - tsMillis(a.fecha)),
-    [captacion, centellograma, captCentellograma, filtroSede]
+    [captacion, centellograma, captCentellograma, sedeEfectiva]
   );
   const registroPorId = useMemo(() => new Map(registrosDiagnosticos.map((r) => [r.id, r])), [registrosDiagnosticos]);
 
@@ -114,14 +114,14 @@ export function TabResultadosCaptacion({ catalogo, usuario, esAdmin, onToast }) 
   const extraccionesDiagnosticas = useMemo(
     () => extracciones
       .filter((e) => (e.viales || []).every((p) => categoriaVial(vialPorId.get(p.vialId) || {}) === "diagnostico"))
-      .filter((e) => !filtroSede || e.sedeId === filtroSede)
+      .filter((e) => !sedeEfectiva || e.sedeId === sedeEfectiva)
       .sort((a, b) => tsMillis(b.fecha) - tsMillis(a.fecha)),
-    [extracciones, vialPorId, filtroSede]
+    [extracciones, vialPorId, sedeEfectiva]
   );
 
   const resultadosFiltrados = useMemo(
-    () => resultados.filter((r) => !filtroSede || r.sedeId === filtroSede).sort((a, b) => tsMillis(b.fecha) - tsMillis(a.fecha)),
-    [resultados, filtroSede]
+    () => resultados.filter((r) => !sedeEfectiva || r.sedeId === sedeEfectiva).sort((a, b) => tsMillis(b.fecha) - tsMillis(a.fecha)),
+    [resultados, sedeEfectiva]
   );
 
   // Vista agrupada por caso (dosisActaId) -- cada grupo muestra el estado de
@@ -240,17 +240,22 @@ export function TabResultadosCaptacion({ catalogo, usuario, esAdmin, onToast }) 
     }
   }
 
+  if (esAdmin && !sedeEfectiva) {
+    return (
+      <div className="bg-amber-50 border border-amber-100 rounded-xl px-4 py-3 text-sm text-amber-700">
+        Elegí qué sede vas a auditar en Configuración antes de ver esta sección.
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-col gap-4">
       <AvisoGuiaNoOficial />
 
       <div className="flex flex-col md:flex-row gap-3 md:items-center md:justify-between">
         {esAdmin ? (
-          <div className="w-full md:w-auto">
-            <Sel value={filtroSede} onChange={(e) => setFiltroSede(e.target.value)}>
-              <option value="">Todas las sedes</option>
-              {sedesActivas(catalogo).map((s) => <option key={s.id} value={s.id}>{s.short}</option>)}
-            </Sel>
+          <div className="w-full md:w-auto text-xs text-gray-400">
+            Auditando <span className="font-semibold text-gray-600">{catalogo.sedes[sedeEfectiva]?.short || "—"}</span> · cambiar en Configuración
           </div>
         ) : <div />}
         <Btn size="sm" onClick={abrirNuevo} className="w-full md:w-auto">+ Registrar %Captación</Btn>

@@ -80,7 +80,14 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
   const [mostrarForm, setMostrarForm] = useState(false);
   const [mostrarQR, setMostrarQR] = useState(false);
   const [filtroFecha, setFiltroFecha] = useState(hoy());
-  const [filtroSede, setFiltroSede] = useState(usuario.sede);
+  // Sede efectiva de ESTA pantalla: fija (usuario.sede) para un técnico;
+  // para admin, la que esté auditando ahora (sedeAuditando, elegida en
+  // Configuración) -- ya no hay selector propio acá ni opción "todas las
+  // sedes" (ver firestore.rules, roles/{email}: un libro es de una sede a
+  // la vez, siempre). Puede venir undefined si el admin nunca eligió
+  // ninguna -- ver el early return más abajo, antes de armar cualquier
+  // query (where(sedeId,"==",undefined) tira excepción del lado cliente).
+  const sedeEfectiva = esAdmin ? usuario.sedeAuditando : usuario.sede;
   const [rangoDesde, setRangoDesde] = useState("");
   const [rangoHasta, setRangoHasta] = useState("");
   const [buscandoRango, setBuscandoRango] = useState(false);
@@ -151,8 +158,8 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
   const [mibgLoteSeleccionado, setMibgLoteSeleccionado] = useState("");
   const [lutecioLoteSeleccionado, setLutecioLoteSeleccionado] = useState("");
 
-  useEffect(() => listenActas("paciente", setPacientesTodas, { esAdmin, sedeId: usuario.sede }), []);
-  useEffect(() => listenAnulacionesActas(setAnulacionesRaw, { esAdmin, sedeId: usuario.sede }), []);
+  useEffect(() => { if (sedeEfectiva) return listenActas("paciente", setPacientesTodas, { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
+  useEffect(() => { if (sedeEfectiva) return listenAnulacionesActas(setAnulacionesRaw, { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
   // Un listener por tipo de I-131 (mismo criterio que dosis/barrido ya
   // tenían) -- dosisI131/ablativaI131 alimentan además el picker "Dosis
   // relacionada" de los 3 diagnósticos (ver dosisParaVincular). Todos se
@@ -163,18 +170,18 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
   // ficha sin explicación visible dentro de la misma sede. La pestaña
   // "Gestión I-131" (consulta) sigue siendo el filtro específico de estos
   // mismos 7 tipos, sin cambios.
-  useEffect(() => listenActas("i131_ablativa", setAblativaI131, { esAdmin, sedeId: usuario.sede }), []);
-  useEffect(() => listenActas("i131_dosis", setDosisI131, { esAdmin, sedeId: usuario.sede }), []);
-  useEffect(() => listenActas("i131_barrido", setBarridosI131, { esAdmin, sedeId: usuario.sede }), []);
-  useEffect(() => listenActas("i131_mibg", setMibgI131, { esAdmin, sedeId: usuario.sede }), []);
-  useEffect(() => listenActas("i131_captacion", setCaptacionI131, { esAdmin, sedeId: usuario.sede }), []);
-  useEffect(() => listenActas("i131_centellograma", setCentellogramaI131, { esAdmin, sedeId: usuario.sede }), []);
-  useEffect(() => listenActas("i131_captacion_centellograma", setCaptCentellogramaI131, { esAdmin, sedeId: usuario.sede }), []);
+  useEffect(() => { if (sedeEfectiva) return listenActas("i131_ablativa", setAblativaI131, { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
+  useEffect(() => { if (sedeEfectiva) return listenActas("i131_dosis", setDosisI131, { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
+  useEffect(() => { if (sedeEfectiva) return listenActas("i131_barrido", setBarridosI131, { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
+  useEffect(() => { if (sedeEfectiva) return listenActas("i131_mibg", setMibgI131, { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
+  useEffect(() => { if (sedeEfectiva) return listenActas("i131_captacion", setCaptacionI131, { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
+  useEffect(() => { if (sedeEfectiva) return listenActas("i131_centellograma", setCentellogramaI131, { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
+  useEffect(() => { if (sedeEfectiva) return listenActas("i131_captacion_centellograma", setCaptCentellogramaI131, { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
   // mibgLotes/mibgUsos no se mezclan en actasTodas (mibg_lote no es una
   // acta) -- alimentan sólo el picker "Lote disponible" de abajo, filtrado
   // en tiempo real: un lote usado por otra técnica desaparece para todos al
   // instante, sin importar el día (ver lotesMibgDisponibles).
-  useEffect(() => listenMibgLotes(setMibgLotes, { esAdmin, sedeId: usuario.sede }), []);
+  useEffect(() => { if (sedeEfectiva) return listenMibgLotes(setMibgLotes, { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
 
   // Pre-chequeo amigable (aviso inmediato antes de intentar guardar) -- la
   // garantía real es el choque server-side contra el marcador create-only
@@ -238,13 +245,14 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
 
   // nav ({busqueda, token}) llega desde "Ir a Libro 2" (bloqueo de anulación
   // de un lote de MIBG/Lutecio-177 con administración activa,
-  // TabLoteDosisUnica.jsx) -- limpia los filtros de fecha/sede (la
-  // administración puede ser de cualquier día/sede) y precarga el buscador
-  // con el DNI del paciente, para no obligar a buscarlo a mano.
+  // TabLoteDosisUnica.jsx) -- limpia el filtro de fecha (la administración
+  // puede ser de cualquier día) y precarga el buscador con el DNI del
+  // paciente, para no obligar a buscarlo a mano. Ya NO limpia el filtro de
+  // sede -- ahora sólo existe sedeEfectiva (fija, o la sede auditada por
+  // admin), así que esto sólo encuentra la acta si está en esa misma sede.
   useEffect(() => {
     if (!nav?.token) return;
     setFiltroFecha("");
-    setFiltroSede("");
     setBusq(nav.busqueda || "");
   }, [nav?.token]);
 
@@ -514,15 +522,16 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
   // Filtro client-side sobre lo que ya está en memoria (dentro de la fecha o
   // rango elegido) -- no dispara ninguna consulta nueva a Firestore. Como
   // "actas" también alimenta el CSV, buscar acá filtra lo que se exporta,
-  // igual que ya pasa con el filtro de fecha/sede.
+  // igual que ya pasa con el filtro de fecha. El filtro de sede acá es sólo
+  // defensivo (la query ya viene acotada a sedeEfectiva server-side).
   const busqNorm = busq.trim().toLowerCase();
   const actas = useMemo(
     () => actasTodas.filter((a) =>
       (!filtroFecha || fmtFechaISO(a.fecha) === filtroFecha) &&
-      (!filtroSede || a.sedeId === filtroSede) &&
+      (!sedeEfectiva || a.sedeId === sedeEfectiva) &&
       (!busqNorm || a.pacienteNombre?.toLowerCase().includes(busqNorm) || a.pacienteDni?.toLowerCase().includes(busqNorm))
     ),
-    [actasTodas, filtroFecha, filtroSede, busqNorm]
+    [actasTodas, filtroFecha, sedeEfectiva, busqNorm]
   );
 
   // Sólo se agrupa por fecha en "Ver todos" -- con un día ya filtrado, todos
@@ -755,7 +764,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
     setErrorRango(null);
     setResultadoRango(null);
     try {
-      const opts = { desde: rangoDesde, hasta: rangoHasta, esAdmin, sedeId: esAdmin ? (filtroSede || null) : usuario.sede };
+      const opts = { desde: rangoDesde, hasta: rangoHasta, sedeId: sedeEfectiva };
       const tipos = ["paciente", "i131_ablativa", "i131_dosis", "i131_barrido", "i131_mibg", "i131_captacion", "i131_centellograma", "i131_captacion_centellograma"];
       const resultados = await conTimeout(
         Promise.all(tipos.map((t) => actasPorRango(t, opts))),
@@ -776,6 +785,18 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
     onToast(`Libro 2 exportado: ${resultadoRango.length} registro${resultadoRango.length !== 1 ? "s" : ""}`);
   }
 
+  // Admin sin sede auditada elegida todavía (nunca entró a Configuración a
+  // elegir una) -- sin esto, los useEffect de arriba se saltean armar
+  // cualquier query (sedeEfectiva falsy), así que sin este aviso la
+  // pantalla quedaría con las listas vacías sin ninguna explicación.
+  if (esAdmin && !sedeEfectiva) {
+    return (
+      <div className="bg-amber-50 border border-amber-100 rounded-xl px-4 py-3 text-sm text-amber-700">
+        Elegí qué sede vas a auditar en Configuración antes de ver este libro.
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-col md:flex-row gap-3 md:items-center md:justify-between">
@@ -789,17 +810,8 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
             </Btn>
           </div>
           {esAdmin && (
-            <div className="w-full md:w-auto">
-              {/* Sólo filtra qué actas YA GUARDADAS se muestran abajo --
-                  NO tiene ninguna relación con dónde se guarda un registro
-                  nuevo (eso es "Guardar en sede", el banner del formulario
-                  más abajo). Nombre explícito a propósito: un admin
-                  confundió este control con ese otro, real bug encontrado
-                  en producción -- ver el banner de "Guardar en sede". */}
-              <Sel label="Ver registros de" value={filtroSede} onChange={(e) => setFiltroSede(e.target.value)}>
-                <option value="">Todas las sedes</option>
-                {sedesActivas(catalogo).map((s) => <option key={s.id} value={s.id}>{s.short}</option>)}
-              </Sel>
+            <div className="w-full md:w-auto text-xs text-gray-400">
+              Auditando <span className="font-semibold text-gray-600">{catalogo.sedes[sedeEfectiva]?.short || "—"}</span> · cambiar en Configuración
             </div>
           )}
         </div>

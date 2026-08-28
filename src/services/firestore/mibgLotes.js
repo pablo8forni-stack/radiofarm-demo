@@ -21,14 +21,14 @@ export function addMibgLote(data) {
   return addDoc(mibgLoteCol, { ...data, fecha: serverTimestamp() });
 }
 
-// sedeId scoping en el cliente igual que siempre; el filtro por isotopoId es
-// SIEMPRE client-side (nunca where("isotopoId","==",...)) -- un where de
-// igualdad no matchea los docs viejos de MIBG que no tienen el campo, así
-// que filtrar server-side los haría desaparecer del listado.
-export function listenMibgLotes(callback, { esAdmin, sedeId } = {}) {
-  const clausulas = [];
-  if (!esAdmin) clausulas.push(where("sedeId", "==", sedeId));
-  return onSnapshot(query(mibgLoteCol, ...clausulas), (snap) => {
+// sedeId siempre obligatorio server-side, admin incluido (ver
+// listenActas/actas.js para el mismo criterio) -- para admin, sedeId tiene
+// que ser sedeAuditando, no usuario.sede. El filtro por isotopoId es SIEMPRE
+// client-side (nunca where("isotopoId","==",...)) -- un where de igualdad
+// no matchea los docs viejos de MIBG que no tienen el campo, así que
+// filtrar server-side los haría desaparecer del listado.
+export function listenMibgLotes(callback, { sedeId } = {}) {
+  return onSnapshot(query(mibgLoteCol, where("sedeId", "==", sedeId)), (snap) => {
     callback(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
   });
 }

@@ -7,7 +7,6 @@ import { ModalAnularActa } from "../../components/actas/ModalAnularActa.jsx";
 import { HistorialPacienteI131 } from "./HistorialPacienteI131.jsx";
 import { fmtF, fmtTs, fmtFechaISO, hoy, agruparPorFecha } from "../../helpers/formato.js";
 import { descargarArchivo } from "../../helpers/descargarArchivo.js";
-import { sedesActivas } from "../../helpers/stock.js";
 import { listenActas, actasPorRango, anularActaTransaction, listenAnulacionesActas } from "../../services/firestore/actas.js";
 import { TIPO_LABEL_I131 } from "../../constants/tipoI131.js";
 
@@ -49,7 +48,8 @@ export function TabRegistrosI131({ catalogo, usuario, esAdmin, onToast }) {
   const [mAnular, setMAnular] = useState(null);
   const [historialDni, setHistorialDni] = useState(null);
   const [filtroFecha, setFiltroFecha] = useState(hoy());
-  const [filtroSede, setFiltroSede] = useState(usuario.sede);
+  // Ver comentario largo equivalente en TabPacientes.jsx.
+  const sedeEfectiva = esAdmin ? usuario.sedeAuditando : usuario.sede;
   const [filtroTipo, setFiltroTipo] = useState("");
   const [rangoDesde, setRangoDesde] = useState("");
   const [rangoHasta, setRangoHasta] = useState("");
@@ -61,14 +61,14 @@ export function TabRegistrosI131({ catalogo, usuario, esAdmin, onToast }) {
     return (e) => { setter(e.target.value); setResultadoRango(null); setErrorRango(null); };
   }
 
-  useEffect(() => listenActas("i131_ablativa", setAblativaTodas, { esAdmin, sedeId: usuario.sede }), []);
-  useEffect(() => listenActas("i131_dosis", setDosisTodas, { esAdmin, sedeId: usuario.sede }), []);
-  useEffect(() => listenActas("i131_barrido", setBarridosTodas, { esAdmin, sedeId: usuario.sede }), []);
-  useEffect(() => listenActas("i131_mibg", setMibgTodas, { esAdmin, sedeId: usuario.sede }), []);
-  useEffect(() => listenActas("i131_captacion", setCaptacionTodas, { esAdmin, sedeId: usuario.sede }), []);
-  useEffect(() => listenActas("i131_centellograma", setCentellogramaTodas, { esAdmin, sedeId: usuario.sede }), []);
-  useEffect(() => listenActas("i131_captacion_centellograma", setCaptCentellogramaTodas, { esAdmin, sedeId: usuario.sede }), []);
-  useEffect(() => listenAnulacionesActas(setAnulacionesRaw, { esAdmin, sedeId: usuario.sede }), []);
+  useEffect(() => { if (sedeEfectiva) return listenActas("i131_ablativa", setAblativaTodas, { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
+  useEffect(() => { if (sedeEfectiva) return listenActas("i131_dosis", setDosisTodas, { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
+  useEffect(() => { if (sedeEfectiva) return listenActas("i131_barrido", setBarridosTodas, { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
+  useEffect(() => { if (sedeEfectiva) return listenActas("i131_mibg", setMibgTodas, { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
+  useEffect(() => { if (sedeEfectiva) return listenActas("i131_captacion", setCaptacionTodas, { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
+  useEffect(() => { if (sedeEfectiva) return listenActas("i131_centellograma", setCentellogramaTodas, { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
+  useEffect(() => { if (sedeEfectiva) return listenActas("i131_captacion_centellograma", setCaptCentellogramaTodas, { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
+  useEffect(() => { if (sedeEfectiva) return listenAnulacionesActas(setAnulacionesRaw, { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
 
   const anulaciones = useMemo(() => new Map(anulacionesRaw.map((a) => [a.anulaId, a])), [anulacionesRaw]);
 
@@ -109,10 +109,10 @@ export function TabRegistrosI131({ catalogo, usuario, esAdmin, onToast }) {
   const actas = useMemo(
     () => actasTodas.filter((a) =>
       (!filtroFecha || fmtFechaISO(a.fecha) === filtroFecha) &&
-      (!filtroSede || a.sedeId === filtroSede) &&
+      (!sedeEfectiva || a.sedeId === sedeEfectiva) &&
       (!filtroTipo || a.tipo === filtroTipo)
     ),
-    [actasTodas, filtroFecha, filtroSede, filtroTipo]
+    [actasTodas, filtroFecha, sedeEfectiva, filtroTipo]
   );
 
   const grupos = useMemo(
@@ -227,7 +227,7 @@ export function TabRegistrosI131({ catalogo, usuario, esAdmin, onToast }) {
     setErrorRango(null);
     setResultadoRango(null);
     try {
-      const opts = { desde: rangoDesde, hasta: rangoHasta, esAdmin, sedeId: esAdmin ? (filtroSede || null) : usuario.sede };
+      const opts = { desde: rangoDesde, hasta: rangoHasta, sedeId: sedeEfectiva };
       const resultados = await conTimeout(
         Promise.all(TIPOS_I131.map((t) => actasPorRango(t, opts))),
         TIMEOUT_BUSQUEDA_MS, MSJ_TIMEOUT_BUSQUEDA
@@ -246,6 +246,14 @@ export function TabRegistrosI131({ catalogo, usuario, esAdmin, onToast }) {
     if (!resultadoRango?.length) return;
     descargarCSV(resultadoRango, `terapia_i131_${rangoDesde}_a_${rangoHasta}.csv`);
     onToast(`Gestión I-131 exportada: ${resultadoRango.length} registro${resultadoRango.length !== 1 ? "s" : ""}`);
+  }
+
+  if (esAdmin && !sedeEfectiva) {
+    return (
+      <div className="bg-amber-50 border border-amber-100 rounded-xl px-4 py-3 text-sm text-amber-700">
+        Elegí qué sede vas a auditar en Configuración antes de ver esta sección.
+      </div>
+    );
   }
 
   return (
@@ -269,11 +277,8 @@ export function TabRegistrosI131({ catalogo, usuario, esAdmin, onToast }) {
             </Sel>
           </div>
           {esAdmin && (
-            <div className="w-full md:w-auto">
-              <Sel value={filtroSede} onChange={(e) => setFiltroSede(e.target.value)}>
-                <option value="">Todas las sedes</option>
-                {sedesActivas(catalogo).map((s) => <option key={s.id} value={s.id}>{s.short}</option>)}
-              </Sel>
+            <div className="w-full md:w-auto text-xs text-gray-400">
+              Auditando <span className="font-semibold text-gray-600">{catalogo.sedes[sedeEfectiva]?.short || "—"}</span> · cambiar en Configuración
             </div>
           )}
         </div>
@@ -371,11 +376,15 @@ export function TabRegistrosI131({ catalogo, usuario, esAdmin, onToast }) {
         />
       )}
 
+      {/* Excepción deliberada: HistorialPacienteI131 sigue viendo TODAS las
+          sedes de este DNI para admin (null), sin importar qué sede esté
+          auditando -- es la única vista pensada para seguir a un paciente
+          puntual a través de las sedes por las que pasó. */}
       {puedeVerHistorial && (
         <HistorialPacienteI131
           open={!!historialDni}
           dni={historialDni}
-          sedeId={esAdmin ? (filtroSede || null) : usuario.sede}
+          sedeId={esAdmin ? null : usuario.sede}
           esAdmin={esAdmin}
           onClose={() => setHistorialDni(null)}
           onToast={onToast}

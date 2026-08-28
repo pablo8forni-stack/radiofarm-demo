@@ -6,7 +6,6 @@ import { Sel } from "../../components/ui/Sel.jsx";
 import { Modal } from "../../components/ui/Modal.jsx";
 import { ModalAnularActa } from "../../components/actas/ModalAnularActa.jsx";
 import { fmtF, fmtTs } from "../../helpers/formato.js";
-import { sedesActivas } from "../../helpers/stock.js";
 import { listenActas, anularActaTransaction, listenAnulacionesActas } from "../../services/firestore/actas.js";
 import { addMibgLote, listenMibgLotes } from "../../services/firestore/mibgLotes.js";
 import { estadoMibgLote } from "../../helpers/mibgLote.js";
@@ -47,14 +46,15 @@ export function TabLoteDosisUnica({ catalogo, usuario, esAdmin, onToast, isotopo
   const [anulacionesRaw, setAnulacionesRaw] = useState([]);
   const [mAnular, setMAnular] = useState(null);
   const [loteBloqueado, setLoteBloqueado] = useState(null);
-  const [filtroSede, setFiltroSede] = useState(usuario.sede);
+  // Ver comentario largo equivalente en TabPacientes.jsx.
+  const sedeEfectiva = esAdmin ? usuario.sedeAuditando : usuario.sede;
   const [mostrarForm, setMostrarForm] = useState(false);
   const [form, setForm] = useState(VACIO);
   const [guardando, setGuardando] = useState(false);
 
-  useEffect(() => listenMibgLotes(setLotesTodos, { esAdmin, sedeId: usuario.sede }), []);
-  useEffect(() => listenActas(TIPO_USO[isotopoId], setUsosRaw, { esAdmin, sedeId: usuario.sede }), [isotopoId]);
-  useEffect(() => listenAnulacionesActas(setAnulacionesRaw, { esAdmin, sedeId: usuario.sede }), []);
+  useEffect(() => { if (sedeEfectiva) return listenMibgLotes(setLotesTodos, { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
+  useEffect(() => { if (sedeEfectiva) return listenActas(TIPO_USO[isotopoId], setUsosRaw, { sedeId: sedeEfectiva }); }, [isotopoId, sedeEfectiva]);
+  useEffect(() => { if (sedeEfectiva) return listenAnulacionesActas(setAnulacionesRaw, { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
 
   const anulaciones = useMemo(() => new Map(anulacionesRaw.map((a) => [a.anulaId, a])), [anulacionesRaw]);
 
@@ -81,9 +81,9 @@ export function TabLoteDosisUnica({ catalogo, usuario, esAdmin, onToast, isotopo
   }
 
   const lotesFiltrados = useMemo(
-    () => lotes.filter((l) => !filtroSede || l.sedeId === filtroSede)
+    () => lotes.filter((l) => !sedeEfectiva || l.sedeId === sedeEfectiva)
       .sort((a, b) => (b.fecha?.toDate?.() ?? new Date(b.fecha)) - (a.fecha?.toDate?.() ?? new Date(a.fecha))),
-    [lotes, filtroSede]
+    [lotes, sedeEfectiva]
   );
 
   // Doble chequeo con usoPorLoteId (además del gate en el botón "Anular" más
@@ -139,6 +139,14 @@ export function TabLoteDosisUnica({ catalogo, usuario, esAdmin, onToast, isotopo
     }
   }
 
+  if (esAdmin && !sedeEfectiva) {
+    return (
+      <div className="bg-amber-50 border border-amber-100 rounded-xl px-4 py-3 text-sm text-amber-700">
+        Elegí qué sede vas a auditar en Configuración antes de ver este libro.
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-col gap-4">
       <div className="bg-blue-50 border border-blue-100 rounded-xl px-4 py-3 text-xs text-blue-700">
@@ -147,11 +155,8 @@ export function TabLoteDosisUnica({ catalogo, usuario, esAdmin, onToast, isotopo
 
       <div className="flex flex-col md:flex-row gap-3 md:items-center md:justify-between">
         {esAdmin ? (
-          <div className="w-full md:w-auto">
-            <Sel value={filtroSede} onChange={(e) => setFiltroSede(e.target.value)}>
-              <option value="">Todas las sedes</option>
-              {sedesActivas(catalogo).map((s) => <option key={s.id} value={s.id}>{s.short}</option>)}
-            </Sel>
+          <div className="w-full md:w-auto text-xs text-gray-400">
+            Auditando <span className="font-semibold text-gray-600">{catalogo.sedes[sedeEfectiva]?.short || "—"}</span> · cambiar en Configuración
           </div>
         ) : <div />}
         <Btn size="sm" onClick={() => setMostrarForm(true)} className="w-full md:w-auto">+ Registrar lote nuevo</Btn>

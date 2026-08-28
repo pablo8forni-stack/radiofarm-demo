@@ -17,16 +17,15 @@ const generadorRef = (sedeId, loteGenerador) => doc(generadoresCol, `${sedeId}_$
 const PAGINA = 150;
 
 // tipo: "paciente" | "marcacion". El filtro de fecha se aplica client-side
-// sobre la página traída (como en VistaHistorial), pero el de sede NO --
-// las reglas de Firestore sólo dejan leer a un técnico las actas de su
-// propia sede (tienen nombre/DNI de pacientes, Ley 25.326), y rechazan la
-// consulta entera si no viene ya acotada por sedeId. `sedeId` acá es
-// obligatorio para un técnico (esAdmin=false); un admin pasa sedeId=null
-// para seguir viendo todas.
-export function listenActas(tipo, callback, { esAdmin, sedeId } = {}) {
-  const clausulas = [where("tipo", "==", tipo)];
-  if (!esAdmin) clausulas.push(where("sedeId", "==", sedeId));
-  const q = query(actasCol, ...clausulas, orderBy("fecha", "desc"), limit(PAGINA));
+// sobre la página traída (como en VistaHistorial). El de sede SIEMPRE se
+// aplica server-side, admin incluido -- un libro de actas es de UNA sede a
+// la vez, nunca varias mezcladas (ni siquiera para admin). Para admin,
+// sedeId tiene que ser sedeAuditando (roles/{email}), NO usuario.sede --
+// la regla de Firestore ahora exige exactamente esa comparación para el
+// caso admin (ver firestore.rules); pasar cualquier otra cosa rompe la
+// consulta entera con permission-denied.
+export function listenActas(tipo, callback, { sedeId } = {}) {
+  const q = query(actasCol, where("tipo", "==", tipo), where("sedeId", "==", sedeId), orderBy("fecha", "desc"), limit(PAGINA));
   return onSnapshot(q, (snap) => {
     callback(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
   });
@@ -34,16 +33,17 @@ export function listenActas(tipo, callback, { esAdmin, sedeId } = {}) {
 
 // Para exportar CSV de un rango completo en modo "Ver todos" (sin el límite
 // de PAGINA que tiene el listener de pantalla) -- getDocs suelto, no listener.
-// Mismo motivo que arriba para el filtro de sede: si esAdmin es false, sedeId
-// es obligatorio, si no la consulta completa se rechaza por las reglas.
-export async function actasPorRango(tipo, { desde, hasta, sedeId, esAdmin }) {
-  const clausulas = [
+// sedeId siempre obligatorio, admin incluido -- mismo criterio que
+// listenActas (ver comentario ahí): un libro es de UNA sede a la vez.
+export async function actasPorRango(tipo, { desde, hasta, sedeId }) {
+  const snap = await getDocs(query(
+    actasCol,
     where("tipo", "==", tipo),
+    where("sedeId", "==", sedeId),
     where("fecha", ">=", new Date(`${desde}T00:00:00`)),
     where("fecha", "<=", new Date(`${hasta}T23:59:59.999`)),
-  ];
-  if (!esAdmin || sedeId) clausulas.push(where("sedeId", "==", sedeId));
-  const snap = await getDocs(query(actasCol, ...clausulas, orderBy("fecha", "desc")));
+    orderBy("fecha", "desc"),
+  ));
   return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
 }
 
@@ -51,8 +51,12 @@ export async function actasPorRango(tipo, { desde, hasta, sedeId, esAdmin }) {
 // consulta acotada directamente por pacienteDni + tipo (nunca trae el
 // histórico de otros pacientes). Requiere el índice compuesto
 // (tipo, pacienteDni, fecha desc) -- o (tipo, sedeId, pacienteDni, fecha
-// desc) para técnico -- ver firestore.indexes.json. Mismo criterio de
-// scoping por sede que actasPorRango.
+// desc) para técnico -- ver firestore.indexes.json.
+// EXCEPCIÓN deliberada al criterio de "una sede a la vez" del resto de este
+// archivo: es la única vista pensada para seguir a UN paciente puntual (por
+// DNI) a través de las sedes donde haya pasado -- admin puede pasar
+// sedeId=null a propósito para verlas todas. Confirmado con el usuario que
+// esto se mantiene como excepción, no se scopea a sedeAuditando.
 export async function actasPorPacienteDni(tipo, { dni, sedeId, esAdmin }) {
   const clausulas = [where("tipo", "==", tipo), where("pacienteDni", "==", dni)];
   if (!esAdmin || sedeId) clausulas.push(where("sedeId", "==", sedeId));
@@ -339,10 +343,8 @@ export function anularActaTransaction(acta, motivo, usuario) {
 // límite ni orderBy: son poco frecuentes (correcciones, no carga normal), y
 // a diferencia del listener paginado de movimientos, una anulación vieja
 // nunca deja de reflejarse por haber quedado fuera de una página.
-export function listenAnulacionesActas(callback, { esAdmin, sedeId } = {}) {
-  const clausulas = [where("tipo", "==", "anulacion")];
-  if (!esAdmin) clausulas.push(where("sedeId", "==", sedeId));
-  return onSnapshot(query(actasCol, ...clausulas), (snap) => {
+export function listenAnulacionesActas(callback, { sedeId } = {}) {
+  return onSnapshot(query(actasCol, where("tipo", "==", "anulacion"), where("sedeId", "==", sedeId)), (snap) => {
     callback(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
   });
 }

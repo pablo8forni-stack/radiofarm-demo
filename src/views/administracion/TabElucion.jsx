@@ -26,7 +26,8 @@ export function TabElucion({ catalogo, usuario, esAdmin, onToast }) {
   const [mAnular, setMAnular] = useState(null);
   const [mostrarForm, setMostrarForm] = useState(false);
   const [filtroFecha, setFiltroFecha] = useState(hoy());
-  const [filtroSede, setFiltroSede] = useState(usuario.sede);
+  // Ver comentario largo equivalente en TabPacientes.jsx.
+  const sedeEfectiva = esAdmin ? usuario.sedeAuditando : usuario.sede;
   const [rangoDesde, setRangoDesde] = useState("");
   const [rangoHasta, setRangoHasta] = useState("");
   const [buscandoRango, setBuscandoRango] = useState(false);
@@ -50,8 +51,8 @@ export function TabElucion({ catalogo, usuario, esAdmin, onToast }) {
   const [obs, setObs] = useState("");
   const [guardando, setGuardando] = useState(false);
 
-  useEffect(() => listenActas("elucion", setActasTodas, { esAdmin, sedeId: usuario.sede }), []);
-  useEffect(() => listenAnulacionesActas(setAnulacionesRaw, { esAdmin, sedeId: usuario.sede }), []);
+  useEffect(() => { if (sedeEfectiva) return listenActas("elucion", setActasTodas, { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
+  useEffect(() => { if (sedeEfectiva) return listenAnulacionesActas(setAnulacionesRaw, { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
 
   // Se dispara al perder foco del campo lote (no en cada tecla) y también si
   // cambia la sede con un lote ya tipeado. Dos pasos:
@@ -145,8 +146,8 @@ export function TabElucion({ catalogo, usuario, esAdmin, onToast }) {
   }
 
   const actas = useMemo(
-    () => actasTodas.filter((a) => (!filtroFecha || fmtFechaISO(a.fecha) === filtroFecha) && (!filtroSede || a.sedeId === filtroSede)),
-    [actasTodas, filtroFecha, filtroSede]
+    () => actasTodas.filter((a) => (!filtroFecha || fmtFechaISO(a.fecha) === filtroFecha) && (!sedeEfectiva || a.sedeId === sedeEfectiva)),
+    [actasTodas, filtroFecha, sedeEfectiva]
   );
 
   const grupos = useMemo(
@@ -235,7 +236,7 @@ export function TabElucion({ catalogo, usuario, esAdmin, onToast }) {
     setResultadoRango(null);
     try {
       const registros = await conTimeout(
-        actasPorRango("elucion", { desde: rangoDesde, hasta: rangoHasta, esAdmin, sedeId: esAdmin ? (filtroSede || null) : usuario.sede }),
+        actasPorRango("elucion", { desde: rangoDesde, hasta: rangoHasta, sedeId: sedeEfectiva }),
         TIMEOUT_BUSQUEDA_MS, MSJ_TIMEOUT_BUSQUEDA
       );
       setResultadoRango(registros);
@@ -250,6 +251,14 @@ export function TabElucion({ catalogo, usuario, esAdmin, onToast }) {
     if (!resultadoRango?.length) return;
     descargarCSV(resultadoRango, `libro3_elucion_${rangoDesde}_a_${rangoHasta}.csv`);
     onToast(`Libro 3 exportado: ${resultadoRango.length} registro${resultadoRango.length !== 1 ? "s" : ""}`);
+  }
+
+  if (esAdmin && !sedeEfectiva) {
+    return (
+      <div className="bg-amber-50 border border-amber-100 rounded-xl px-4 py-3 text-sm text-amber-700">
+        Elegí qué sede vas a auditar en Configuración antes de ver este libro.
+      </div>
+    );
   }
 
   const sedeEluye = !!catalogo.sedes[sedeId]?.eluye;
@@ -270,11 +279,8 @@ export function TabElucion({ catalogo, usuario, esAdmin, onToast }) {
             </Btn>
           </div>
           {esAdmin && (
-            <div className="w-full md:w-auto">
-              <Sel value={filtroSede} onChange={(e) => setFiltroSede(e.target.value)}>
-                <option value="">Todas las sedes</option>
-                {sedesActivas(catalogo).map((s) => <option key={s.id} value={s.id}>{s.short}</option>)}
-              </Sel>
+            <div className="w-full md:w-auto text-xs text-gray-400">
+              Auditando <span className="font-semibold text-gray-600">{catalogo.sedes[sedeEfectiva]?.short || "—"}</span> · cambiar en Configuración
             </div>
           )}
         </div>

@@ -66,6 +66,15 @@ export function setRol(email, { nombre, rol, sede, accesoTerapiaI131, accesoAgen
   return setDoc(rolRef(email), { nombre, rol, sede, accesoTerapiaI131: !!accesoTerapiaI131, accesoAgendaI131: !!accesoAgendaI131 }, { merge: true });
 }
 
+// Self-servicio para admin: cuál sede está auditando ahora mismo (Libros de
+// actas 1-4 + Gestión I-131 sólo muestran esa sede, nunca varias mezcladas
+// -- ver firestore.rules, roles/{email}). La regla exige que esta escritura
+// toque ÚNICAMENTE este campo del propio doc -- setDoc con merge alcanza,
+// no hace falta nada especial acá del lado cliente.
+export function setSedeAuditando(email, sedeId) {
+  return setDoc(rolRef(email), { sedeAuditando: sedeId }, { merge: true });
+}
+
 export function eliminarRol(email) {
   return deleteDoc(rolRef(email));
 }

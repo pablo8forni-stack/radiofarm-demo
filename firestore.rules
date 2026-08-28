@@ -38,7 +38,22 @@ service cloud.firestore {
     // roles: cada quien lee su propio doc; sólo admins leen/escriben todo.
     match /roles/{email} {
       allow read: if request.auth != null && (request.auth.token.email == email || isAdmin());
-      allow write: if isAdmin();
+
+      // Admin dando de alta/editando a OTRO usuario (rol, sede, permisos,
+      // desde Configuración > Usuarios) -- sin restricción de campo, como
+      // siempre.
+      allow write: if isAdmin() && request.auth.token.email != email;
+
+      // sedeAuditando: la sede que un admin está auditando ahora mismo --
+      // usada por las reglas de actas/mibg_lote para admin (ver más abajo),
+      // en vez de dejarlo ver todas las sedes mezcladas. Es una escritura
+      // normal a su propio doc (sin Cloud Function), pero angostada acá:
+      // ni siquiera un admin puede cambiarse su propio rol/sede/permisos
+      // "de paso" en la misma escritura -- sólo este único campo.
+      allow update: if isAdmin() &&
+                       request.auth.token.email == email &&
+                       request.resource.data.diff(resource.data).affectedKeys().hasOnly(['sedeAuditando']) &&
+                       request.resource.data.sedeAuditando is string;
     }
 
     // solicitudes: cualquier autenticado puede crear/leer la propia (para pedir
@@ -343,7 +358,11 @@ service cloud.firestore {
       // permission-denied crudo en vez de ese mensaje (mismo patrón que el
       // bug de actas, misma función, no confirmado en producción pero
       // mismo riesgo).
-      allow read: if tieneAcceso() && (isAdmin() || resource == null || resource.data.sedeId == miRol().sede);
+      allow read: if tieneAcceso() && (
+        resource == null ||
+        (isAdmin() && resource.data.sedeId == miRol().sedeAuditando) ||
+        resource.data.sedeId == miRol().sede
+      );
       allow create: if tieneAcceso() && mibgLoteValido();
       allow update, delete: if false;
     }
@@ -586,16 +605,22 @@ service cloud.firestore {
     }
 
     // Las actas tienen nombre y DNI de pacientes (Libro 2) -- Ley 25.326.
-    // Un técnico sólo puede leer las de su propia sede; admin lee todas. Para
-    // los 2 tipos de stock I-131 (vial/extracción) hay una condición extra:
-    // ni siquiera la lectura queda abierta a cualquier técnico de la sede,
-    // hace falta tieneAccesoI131() también -- es inventario de material
-    // controlado, no un registro de atención puntual (ver esTipoStockI131).
+    // Un libro de actas es de UNA sede a la vez, SIEMPRE -- nunca varias
+    // mezcladas, ni siquiera para admin (igual que el libro de papel nunca
+    // mezclaba sedes distintas). Un técnico sólo puede leer las de su propia
+    // sede (miRol().sede, fija); un admin sólo las de la sede que esté
+    // auditando en este momento (miRol().sedeAuditando, elegible desde
+    // Configuración -- ver roles/{email} más arriba), nunca todas a la vez.
+    // Para los 2 tipos de stock I-131 (vial/extracción) hay una condición
+    // extra: ni siquiera la lectura queda abierta a cualquier técnico de la
+    // sede, hace falta tieneAccesoI131() también (isAdmin() ya lo implica) --
+    // es inventario de material controlado, no un registro de atención
+    // puntual (ver esTipoStockI131).
     // El cliente tiene que reflejar esto en la query (ver listenActas /
     // actasPorRango): las reglas no filtran resultados, rechazan la consulta
-    // entera si pide más de lo que el técnico puede leer -- por eso un
-    // listener sin where(sedeId==) para un técnico rompería con
-    // permission-denied en vez de traer sólo lo permitido.
+    // entera si pide más de lo que el rol puede leer -- por eso un listener
+    // sin where(sedeId==) (admin incluido) rompería con permission-denied en
+    // vez de traer sólo lo permitido.
     match /actas/{actaId} {
       // resource == null: el doc todavía no existe -- caso real y
       // frecuente, no un edge case (bug real en producción, encontrado
@@ -605,12 +630,9 @@ service cloud.firestore {
       // de que ese marcador exista nunca (primera administración de un
       // lote recién llegado). Sin este `||`, resource.data.sedeId sobre
       // un resource inexistente tira permission-denied para cualquier
-      // técnico no-admin -- isAdmin() era el único camino que no
-      // evaluaba esa cláusula, así que el bug nunca se vio probando como
-      // admin. Mismo patrón ya resuelto en pedidosSemanales (ver más
-      // arriba).
-      allow read: if isAdmin() ||
-        (tieneAcceso() && resource == null) ||
+      // rol no-admin.
+      allow read: if (tieneAcceso() && resource == null) ||
+        (isAdmin() && resource.data.sedeId == miRol().sedeAuditando) ||
         (tieneAcceso() && miRol().sede == resource.data.sedeId &&
          (!esTipoStockI131(resource.data.tipo) || tieneAccesoI131()));
       allow create: if tieneAcceso() && actaValida(actaId);
