@@ -10,6 +10,7 @@ import { TabUsuarios } from "./TabUsuarios.jsx";
 import { TabBackup } from "./TabBackup.jsx";
 import { listenRoles, listenSolicitudes, setSedeAuditando } from "../../services/auth.js";
 import { sedesActivas } from "../../helpers/stock.js";
+import { GenerarActasImpresion } from "../../components/impresion/GenerarActasImpresion.jsx";
 
 const TABS = [
   { id: "catalogo", label: "Catálogo" },
@@ -45,6 +46,7 @@ export function VistaConfiguracion({ catalogo, usuario, refrescarUsuario, onToas
         <p className="text-xs text-gray-400 mt-0.5">Catálogo de radiofármacos, sedes, usuarios y backup</p>
       </div>
       <SelectorSedeAuditando catalogo={catalogo} usuario={usuario} refrescarUsuario={refrescarUsuario} onToast={onToast} />
+      <GenerarActasImpresion catalogo={catalogo} usuario={usuario} onToast={onToast} />
       {/* Mobile: dropdown en vez de la fila de pestañas -- con 6 secciones,
           el scroll horizontal silencioso cortaba Usuarios/Backup sin ningún
           indicio visual de que había más a la derecha. */}

@@ -1,4 +1,4 @@
-import { addDoc, collection, doc, onSnapshot, query, runTransaction, serverTimestamp, where } from "firebase/firestore";
+import { addDoc, collection, doc, getDocs, onSnapshot, query, runTransaction, serverTimestamp, where } from "firebase/firestore";
 import { db } from "../../firebase.js";
 import { conMensajeDeContingencia } from "../../helpers/erroresRed.js";
 import { fmtTs } from "../../helpers/formato.js";
@@ -31,6 +31,16 @@ export function listenMibgLotes(callback, { sedeId } = {}) {
   return onSnapshot(query(mibgLoteCol, where("sedeId", "==", sedeId)), (snap) => {
     callback(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
   });
+}
+
+// Mismo dato que listenMibgLotes pero puntual (getDocs, no listener) -- para
+// la impresión mensual (ver components/impresion/), que arma el documento
+// una vez. Sin acotar por fecha -- el llamador filtra por mes/isótopo según
+// necesite (ver ImprimibleLibro2Pacientes, que busca por id sin importar
+// cuándo llegó el lote, e ImprimibleLibro4Lutecio, que sí filtra por mes).
+export async function lotesPorSede(sedeId) {
+  const snap = await getDocs(query(mibgLoteCol, where("sedeId", "==", sedeId)));
+  return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
 }
 
 // "Administrar" un lote de dosis única a un paciente -- transacción que lee

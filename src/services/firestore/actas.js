@@ -348,3 +348,15 @@ export function listenAnulacionesActas(callback, { sedeId } = {}) {
     callback(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
   });
 }
+
+// Mismo dato que listenAnulacionesActas pero puntual (getDocs, no listener)
+// -- para la impresión mensual (ver components/impresion/), que arma el
+// documento una vez, no necesita quedar escuchando. A propósito SIN acotar
+// por fecha: una anulación puede ocurrir en un mes distinto al del acta
+// original (se anula semanas después), y el archivo impreso de un mes tiene
+// que reflejar el estado ACTUAL de cada acta de ese mes, igual que la
+// pantalla -- no el estado que tenía al momento de imprimir un mes anterior.
+export async function anulacionesPorSede(sedeId) {
+  const snap = await getDocs(query(actasCol, where("tipo", "==", "anulacion"), where("sedeId", "==", sedeId)));
+  return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+}

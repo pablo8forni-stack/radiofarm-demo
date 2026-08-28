@@ -1,0 +1,26 @@
+/* Impresión mensual de actas (ver src/components/impresion/) -- portal
+   montado como hermano de #root en document.body. En pantalla queda
+   invisible; al imprimir, se oculta el resto de la app y sólo se muestra
+   el documento activo en ese momento. Un solo mecanismo para los 4 libros
+   -- cuál libro se ve depende de qué se montó dentro del portal, no de
+   estas reglas. */
+.portal-impresion {
+  display: none;
+}
+@media print {
+  #root {
+    display: none !important;
+  }
+  .portal-impresion {
+    display: block !important;
+  }
+  @page {
+    margin: 15mm;
+  }
+  /* Ni una fila de tabla ni el bloque de firma deben partirse entre dos
+     páginas -- confirmado explícitamente como requisito. */
+  tr,
+  .impresion-firma {
+    break-inside: avoid;
+  }
+}
