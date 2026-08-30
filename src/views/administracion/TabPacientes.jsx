@@ -16,7 +16,7 @@ import {
   listenActas, addActaPaciente, actasPorRango, anularActaTransaction, listenAnulacionesActas,
   addActaI131Ablativa, addActaI131Dosis, addActaI131Barrido,
   addActaI131Captacion, addActaI131Centellograma, addActaI131CaptacionCentellograma,
-  resolverFichaIntento, obtenerUltimaFicha,
+  resolverFichaIntento, obtenerUltimaFicha, listenActasMarcacionHoy,
 } from "../../services/firestore/actas.js";
 import { listenMibgLotes, administrarMibgTransaction, administrarLutecioTransaction } from "../../services/firestore/mibgLotes.js";
 import { estadoMibgLote } from "../../helpers/mibgLote.js";
@@ -144,6 +144,15 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
   const [farmId, setFarmId] = useState(""); const [lote, setLote] = useState("");
   const [obs, setObs] = useState("");
   const [sedeId, setSedeId] = useState(usuario.sede);
+  // Lista de lotes seleccionables (Tc-99m) -- por defecto SÓLO los
+  // marcados hoy en Libro 1 (regla de negocio confirmada: el evento que
+  // manda es la Marcación, no el Egreso/stock). "Ver todos los lotes en
+  // stock" es la vía de escape para un caso excepcional (corrección de un
+  // error, lote marcado ayer, etc.) -- apagada por defecto a propósito,
+  // para no competir con el flujo normal.
+  const [verTodoElStock, setVerTodoElStock] = useState(false);
+  const [marcadosHoyRaw, setMarcadosHoyRaw] = useState([]);
+  useEffect(() => { if (sedeId) return listenActasMarcacionHoy(sedeId, setMarcadosHoyRaw); }, [sedeId]);
   // Sólo para isotopoId === "i131" -- ver esI131/guardar() más abajo. El N°
   // de Ficha, nombre, DNI, médico responsable y lote ya están arriba
   // (compartidos con Tc-99m/Lutecio, mismo campo/misma numeración diaria
@@ -391,7 +400,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
     setFichaNro(""); setFichaTocada(false); setFichaEstado(null); setNombre(""); setDni(""); setPeso(""); setTalla(""); setEstudio(""); setEstudioOtro(""); setMci(""); setFarmId(""); setLote(""); setObs("");
     setMostrarIsotopo(false); setIsotopoId("tc99m"); setMedicoResponsable("");
     setTipoI131("barrido"); setActividadAdministrada(""); setIndicacion(""); setDosisVinculada(""); setMibgLoteSeleccionado(""); setLutecioLoteSeleccionado("");
-    setSedeId(usuario.sede);
+    setSedeId(usuario.sede); setVerTodoElStock(false);
   }
 
   const esLutecio = isotopoId === "lu177";
@@ -554,7 +563,20 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
       .map((g) => ({ ...g, items: [...g.items].sort(compararPorSedeYFicha) }));
   }, [actas, filtroFecha]);
 
-  const lotesDisp = (catalogo.stock[sedeId]?.[farmId] || []).filter((l) => l.cantidad > 0);
+  const lotesEnStock = (catalogo.stock[sedeId]?.[farmId] || []).filter((l) => l.cantidad > 0);
+  // Marcados HOY para el radiofármaco elegido -- deduplicados por lote (si
+  // el mismo lote se marcó varias veces hoy, aparece una sola vez; si se
+  // marcaron lotes DISTINTOS, todos aparecen -- se acumulan, no se
+  // reemplazan). El vencimiento es sólo un dato de Inventario, no de
+  // Marcación -- se cruza acá contra el stock SOLO para mostrarlo si
+  // todavía existe ahí; si ya no está (se consumió desde que se marcó), el
+  // lote igual queda en la lista, sin ese dato extra.
+  const lotesMarcadosHoy = useMemo(() => {
+    const stockPorLote = new Map(lotesEnStock.map((l) => [l.lote, l]));
+    const lotesUnicos = [...new Set(marcadosHoyRaw.filter((a) => a.farmId === farmId).map((a) => a.lote))];
+    return lotesUnicos.map((loteTxt) => ({ id: loteTxt, lote: loteTxt, vencimiento: stockPorLote.get(loteTxt)?.vencimiento }));
+  }, [marcadosHoyRaw, farmId, lotesEnStock]);
+  const lotesDisp = verTodoElStock ? lotesEnStock : lotesMarcadosHoy;
 
   // "tc99m" (o ausente, actas viejas anteriores a este cambio) no se marca
   // con nada -- es el caso de siempre. Sólo Lutecio-177 se distingue en el
@@ -1083,10 +1105,24 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
                   <option value="">Seleccionar...</option>
                   {farmsDeSede(catalogo, sedeId).map((f) => <option key={f.id} value={f.id}>{f.nombre}</option>)}
                 </Sel>
-                <Sel label="Lote" value={lote} onChange={(e) => setLote(e.target.value)} disabled={!farmId}>
-                  <option value="">Seleccionar lote...</option>
-                  {lotesDisp.map((l) => <option key={l.id} value={l.lote}>{l.lote} · Venc: {fmtF(l.vencimiento)}</option>)}
-                </Sel>
+                <div className="flex flex-col gap-1">
+                  <Sel label="Lote" value={lote} onChange={(e) => setLote(e.target.value)} disabled={!farmId}>
+                    <option value="">Seleccionar lote...</option>
+                    {lotesDisp.map((l) => <option key={l.id} value={l.lote}>{l.lote} · Venc: {fmtF(l.vencimiento)}</option>)}
+                  </Sel>
+                  {/* Por defecto sólo lo marcado hoy en Libro 1 (regla de
+                      negocio confirmada) -- este checkbox es la vía de
+                      escape para un caso excepcional (corrección, lote
+                      marcado otro día), apagada por defecto a propósito. */}
+                  <label className="flex items-center gap-1.5 text-xs text-gray-500">
+                    <input type="checkbox" className="w-3.5 h-3.5 accent-blue-600" checked={verTodoElStock}
+                      onChange={(e) => { setVerTodoElStock(e.target.checked); setLote(""); }} />
+                    Ver todos los lotes en stock (excepcional)
+                  </label>
+                  {!verTodoElStock && farmId && lotesMarcadosHoy.length === 0 && (
+                    <p className="text-xs text-amber-600">Ningún lote de este radiofármaco fue marcado hoy en esta sede.</p>
+                  )}
+                </div>
                 <Input label="Dosis administrada (mCi)" type="number" min={0} step={0.1} value={mci} onChange={(e) => setMci(e.target.value)} placeholder="10.5" />
               </>
             )}

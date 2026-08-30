@@ -1,6 +1,7 @@
 import { collection, doc, getDoc, getDocs, onSnapshot, orderBy, limit, query, runTransaction, setDoc, where, serverTimestamp, writeBatch } from "firebase/firestore";
 import { db } from "../../firebase.js";
 import { conMensajeDeContingencia } from "../../helpers/erroresRed.js";
+import { hoy } from "../../helpers/formato.js";
 
 const actasCol = collection(db, "actas");
 const generadoresCol = collection(db, "generadoresVistos");
@@ -29,6 +30,41 @@ export function listenActas(tipo, callback, { sedeId } = {}) {
   return onSnapshot(q, (snap) => {
     callback(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
   });
+}
+
+// Sólo las marcaciones (Libro 1) de HOY, de una sede -- fuente del selector
+// de lote en Libro 2 (TabPacientes.jsx): el lote que un técnico puede
+// elegir para un paciente es el que efectivamente se marcó hoy, no lo que
+// haya en stock (confirmado como regla del negocio -- el evento que manda
+// es la Marcación, no el Egreso). Filtro por farmId SIEMPRE client-side
+// (no en la query) -- el volumen de marcaciones de un solo día es chico, no
+// hace falta acotar server-side por eso. El rango de fecha (>=/<=) sí exige
+// su propio índice compuesto (tipo,sedeId,fecha ASC) -- distinto del
+// (tipo,sedeId,fecha DESC) que ya usa listenActas, confirmado con el error
+// real de Firestore al probar sin él (ver firestore.indexes.json).
+// Listener (no getDocs suelto): si se
+// marca un lote nuevo mientras el form de Libro 2 está abierto, tiene que
+// aparecer solo, sin recargar. "Hoy" se recalcula en cada llamada (no hay
+// caché de la fecha) -- no hace falta ningún botón de "reiniciar", cambia
+// de día solo.
+//
+// Caso real a tener en cuenta: el sedeId acá es el de "Guardar en sede"
+// (TabPacientes.jsx), NO sedeAuditando -- un admin puede elegir guardar en
+// una sede distinta de la que está auditando (soportado a propósito, ver
+// comentario en ese banner). Si diverge, la regla de Firestore para admin
+// (sedeId == sedeAuditando) rechaza esta consulta puntual -- comportamiento
+// correcto, no un bug: si se está guardando en OTRA sede, no hay ninguna
+// marcación de HOY de esa sede que este admin pueda ver para sugerir, así
+// que una lista vacía (en vez de un error sin manejar) es la respuesta
+// correcta -- el checkbox "ver todos los lotes en stock" sigue disponible
+// para ese caso.
+export function listenActasMarcacionHoy(sedeId, callback) {
+  const desde = new Date(`${hoy()}T00:00:00`);
+  const hasta = new Date(`${hoy()}T23:59:59.999`);
+  const q = query(actasCol, where("tipo", "==", "marcacion"), where("sedeId", "==", sedeId), where("fecha", ">=", desde), where("fecha", "<=", hasta));
+  return onSnapshot(q, (snap) => {
+    callback(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+  }, () => callback([]));
 }
 
 // Para exportar CSV de un rango completo en modo "Ver todos" (sin el límite
