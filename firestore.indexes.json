@@ -9,6 +9,15 @@
       ]
     },
     {
+      "collectionGroup": "movimientos",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "tipo", "order": "ASCENDING" },
+        { "fieldPath": "sedeId", "order": "ASCENDING" },
+        { "fieldPath": "fecha", "order": "ASCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "actas",
       "queryScope": "COLLECTION",
       "fields": [

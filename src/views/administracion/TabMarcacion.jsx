@@ -8,6 +8,14 @@ import { fmtF, fmtTs, fmtFechaISO, hoy, agruparPorFecha } from "../../helpers/fo
 import { descargarArchivo } from "../../helpers/descargarArchivo.js";
 import { sedesActivas, farmsDeSede } from "../../helpers/stock.js";
 import { listenActas, addActaMarcacion, actasPorRango, anularActaTransaction, listenAnulacionesActas } from "../../services/firestore/actas.js";
+import { listenMovimientosEgresoHoy } from "../../services/firestore/movimientos.js";
+
+// Motivos de Egreso que representan DESCARTE del vial (vencido / roto), no
+// un vial que se va a marcar -- confirmado con el usuario real, el flujo es
+// Egreso primero (saca el vial de la heladera), Marcación después sobre ESE
+// vial. Excluirlos evita que un egreso de descarte aparezca como candidato
+// de marcación. Strings exactos, mismos que ModalEgreso.jsx.
+const MOTIVOS_DESCARTE = ["Vencimiento", "Derrame / accidente"];
 
 const TIMEOUT_BUSQUEDA_MS = 20000;
 const MSJ_TIMEOUT_BUSQUEDA = "La consulta tardó demasiado, puede haber un problema de conexión -- intentá cerrar las otras pestañas de RadioFarm que tengas abiertas y reintentá.";
@@ -45,6 +53,13 @@ export function TabMarcacion({ catalogo, usuario, esAdmin, onToast }) {
   const [farmId, setFarmId] = useState(""); const [lote, setLote] = useState("");
   const [mciMarcacion, setMciMarcacion] = useState(""); const [obs, setObs] = useState("");
   const [sedeId, setSedeId] = useState(usuario.sede);
+  // Lista de lotes seleccionables -- por defecto SÓLO los egresados hoy
+  // (regla de negocio confirmada: el técnico egresa el vial primero, marca
+  // después sobre ese mismo vial). "Ver todo el stock" es la vía de escape
+  // excepcional -- mismo criterio y mismo nombre que ya usamos en Libro 2.
+  const [verTodoElStock, setVerTodoElStock] = useState(false);
+  const [egresadosHoyRaw, setEgresadosHoyRaw] = useState([]);
+  useEffect(() => { if (sedeId) return listenMovimientosEgresoHoy(sedeId, setEgresadosHoyRaw); }, [sedeId]);
 
   useEffect(() => { if (sedeEfectiva) return listenActas("marcacion", setActasTodas, { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
   useEffect(() => { if (sedeEfectiva) return listenAnulacionesActas(setAnulacionesRaw, { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
@@ -68,7 +83,20 @@ export function TabMarcacion({ catalogo, usuario, esAdmin, onToast }) {
     }
   }
 
-  const lotesDisp = (catalogo.stock[sedeId]?.[farmId] || []).filter((l) => l.cantidad > 0);
+  const lotesEnStock = (catalogo.stock[sedeId]?.[farmId] || []).filter((l) => l.cantidad > 0);
+  // Egresados HOY para el radiofármaco elegido -- deduplicados por lote,
+  // excluyendo motivos de descarte (MOTIVOS_DESCARTE). El vencimiento es
+  // sólo un dato de Inventario -- se cruza acá contra el stock SOLO para
+  // mostrarlo si todavía existe ahí; si ya no está (se consumió desde el
+  // egreso), el lote igual queda en la lista, sin ese dato extra.
+  const lotesEgresadosHoy = useMemo(() => {
+    const stockPorLote = new Map(lotesEnStock.map((l) => [l.lote, l]));
+    const lotesUnicos = [...new Set(
+      egresadosHoyRaw.filter((m) => m.farmId === farmId && !MOTIVOS_DESCARTE.includes(m.motivo)).map((m) => m.lote)
+    )];
+    return lotesUnicos.map((loteTxt) => ({ id: loteTxt, lote: loteTxt, vencimiento: stockPorLote.get(loteTxt)?.vencimiento }));
+  }, [egresadosHoyRaw, farmId, lotesEnStock]);
+  const lotesDisp = verTodoElStock ? lotesEnStock : lotesEgresadosHoy;
 
   function guardar() {
     if (!farmId || !lote || !mciMarcacion) return;
@@ -80,7 +108,7 @@ export function TabMarcacion({ catalogo, usuario, esAdmin, onToast }) {
       usuarioNombre: usuario.nombre, usuarioEmail: usuario.email, observacion: obs.trim(),
     }).catch((e) => onToast(e.message || "No se pudo guardar la marcación", "error"));
     onToast("Marcación registrada");
-    setFarmId(""); setLote(""); setMciMarcacion(""); setObs(""); setMostrarForm(false);
+    setFarmId(""); setLote(""); setMciMarcacion(""); setObs(""); setMostrarForm(false); setVerTodoElStock(false);
   }
 
   const actas = useMemo(
@@ -279,10 +307,23 @@ export function TabMarcacion({ catalogo, usuario, esAdmin, onToast }) {
               <option value="">Seleccionar...</option>
               {farmsDeSede(catalogo, sedeId).map((f) => <option key={f.id} value={f.id}>{f.nombre}</option>)}
             </Sel>
-            <Sel label="Lote" value={lote} onChange={(e) => setLote(e.target.value)} disabled={!farmId}>
-              <option value="">Seleccionar lote...</option>
-              {lotesDisp.map((l) => <option key={l.id} value={l.lote}>{l.lote} · Venc: {fmtF(l.vencimiento)}</option>)}
-            </Sel>
+            <div className="flex flex-col gap-1">
+              <Sel label="Lote" value={lote} onChange={(e) => setLote(e.target.value)} disabled={!farmId}>
+                <option value="">Seleccionar lote...</option>
+                {lotesDisp.map((l) => <option key={l.id} value={l.lote}>{l.lote} · Venc: {fmtF(l.vencimiento)}</option>)}
+              </Sel>
+              {/* Por defecto sólo lo egresado hoy (regla de negocio
+                  confirmada) -- este checkbox es la vía de escape para un
+                  caso excepcional, apagada por defecto a propósito. */}
+              <label className="flex items-center gap-1.5 text-xs text-gray-500">
+                <input type="checkbox" className="w-3.5 h-3.5 accent-blue-600" checked={verTodoElStock}
+                  onChange={(e) => { setVerTodoElStock(e.target.checked); setLote(""); }} />
+                Ver todo el stock (excepcional)
+              </label>
+              {!verTodoElStock && farmId && lotesEgresadosHoy.length === 0 && (
+                <p className="text-xs text-amber-600">Ningún lote de este radiofármaco fue egresado hoy en esta sede.</p>
+              )}
+            </div>
             <Input label="mCi utilizados en marcación" type="number" min={0} step={0.1} value={mciMarcacion} onChange={(e) => setMciMarcacion(e.target.value)} placeholder="20" />
             <Input label="Observación (opcional)" value={obs} onChange={(e) => setObs(e.target.value)} placeholder="Ej: rendimiento del kit, incidencias..." />
           </div>

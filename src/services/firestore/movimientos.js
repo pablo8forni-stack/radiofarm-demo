@@ -13,6 +13,7 @@ import {
 } from "firebase/firestore";
 import { db } from "../../firebase.js";
 import { conMensajeDeContingencia } from "../../helpers/erroresRed.js";
+import { hoy } from "../../helpers/formato.js";
 
 const movimientosCol = collection(db, "movimientos");
 const PAGINA = 150;
@@ -28,6 +29,27 @@ export function listenMovimientos(sedeId, callback) {
   return onSnapshot(q, (snap) => {
     callback(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
   });
+}
+
+// Sólo los egresos de HOY, de una sede -- fuente del selector de lote en
+// Libro 1 (TabMarcacion.jsx): el flujo real es Egreso primero (el técnico
+// saca el vial de la heladera), Marcación después sobre ese mismo vial --
+// mismo criterio que ya se aplicó en Libro 2 con listenActasMarcacionHoy
+// (services/firestore/actas.js), mismo motivo para el índice nuevo: el
+// rango de fecha exige su propio compuesto (tipo,sedeId,fecha ASC), no
+// alcanza con el (sedeId,fecha DESC) que ya usa listenMovimientos (ver
+// firestore.indexes.json). El filtro por motivo (excluir "Vencimiento"/
+// "Derrame / accidente" -- son descarte, no preceden una marcación) y por
+// farmId quedan client-side, en el llamador -- mismo motivo que ahí: no es
+// server-side confiable (motivo no está validado por firestore.rules) y el
+// volumen de egresos de un solo día es chico.
+export function listenMovimientosEgresoHoy(sedeId, callback) {
+  const desde = new Date(`${hoy()}T00:00:00`);
+  const hasta = new Date(`${hoy()}T23:59:59.999`);
+  const q = query(movimientosCol, where("tipo", "==", "egreso"), where("sedeId", "==", sedeId), where("fecha", ">=", desde), where("fecha", "<=", hasta));
+  return onSnapshot(q, (snap) => {
+    callback(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+  }, () => callback([]));
 }
 
 // Anula un movimiento revirtiendo su efecto sobre el stock.
