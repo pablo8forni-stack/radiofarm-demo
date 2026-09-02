@@ -61,14 +61,14 @@ export function TablaInventario({ sedeId, catalogo, usuario, esAdmin, onToast })
   // Ingreso: en vez de escribir directo, se agrega (o reemplaza, si se está
   // editando) a una lista local -- nada se guarda en Firestore hasta que se
   // confirme el carrito entero desde CarritoIngresos.
-  function confirmarModalIngreso({ lote, vencimiento, cantidad, kits, proveedorNombre, observacion }) {
+  function confirmarModalIngreso({ lote, vencimiento, cantidad, kits, unidadesSueltas, proveedorNombre, observacion }) {
     const farm = mIngreso;
     if (itemEditando) {
-      setCarrito((c) => c.map((it) => (it.id === itemEditando.id ? { ...it, lote, vencimiento, cantidad, kits, proveedorNombre, observacion, farm, estado: "pendiente", errorMsg: null } : it)));
+      setCarrito((c) => c.map((it) => (it.id === itemEditando.id ? { ...it, lote, vencimiento, cantidad, kits, unidadesSueltas, proveedorNombre, observacion, farm, estado: "pendiente", errorMsg: null } : it)));
       onToast(`Ítem actualizado: ${cantidad} viales de ${farm.nombre}`);
       setMostrarCarrito(true);
     } else {
-      setCarrito((c) => [...c, { id: uid(), sedeId, sedeNombre, farm, lote, vencimiento, cantidad, kits, proveedorNombre, observacion, estado: "pendiente", errorMsg: null }]);
+      setCarrito((c) => [...c, { id: uid(), sedeId, sedeNombre, farm, lote, vencimiento, cantidad, kits, unidadesSueltas, proveedorNombre, observacion, estado: "pendiente", errorMsg: null }]);
       onToast(`Agregado al carrito: ${cantidad} viales de ${farm.nombre}`);
     }
     cerrarModalIngreso();
@@ -90,7 +90,7 @@ export function TablaInventario({ sedeId, catalogo, usuario, esAdmin, onToast })
     setCarrito((c) => c.map((it) => (it.id === item.id ? { ...it, estado: "enviando", errorMsg: null } : it)));
     ingresoBatch({
       sedeId: item.sedeId, sedeNombre: item.sedeNombre, farm: item.farm,
-      lote: item.lote, vencimiento: item.vencimiento, cantidad: item.cantidad, kits: item.kits,
+      lote: item.lote, vencimiento: item.vencimiento, cantidad: item.cantidad, kits: item.kits, unidadesSueltas: item.unidadesSueltas,
       proveedorNombre: item.proveedorNombre, observacion: item.observacion, usuario,
     })
       .then(() => {

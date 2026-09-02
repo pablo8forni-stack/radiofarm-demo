@@ -3,6 +3,7 @@ import { Modal } from "../ui/Modal.jsx";
 import { Btn } from "../ui/Btn.jsx";
 import { Html5QrcodeFallback } from "./Html5QrcodeFallback.jsx";
 import { avisarEscaneoExitoso } from "../../helpers/feedbackEscaneo.js";
+import { registrarLog } from "../../helpers/debugLog.js";
 
 // Nativo (BarcodeDetector, Chrome/Android) cuando está disponible; si no,
 // cae a html5-qrcode (Safari/iOS) -- requisito 5.
@@ -25,6 +26,35 @@ function QRScannerNativo({ onResult, onClose }) {
           video: { facingMode: "environment", width: { ideal: 1280 }, height: { ideal: 720 } },
         });
         streamRef.current = stream;
+
+        // Bug real bajo investigación (autoenfoque lento/no confiable en
+        // Android, confirmado con evidencia real: otra app nativa en el
+        // MISMO celular enfoca bien, así que no es el hardware -- es cómo
+        // esta app pide la cámara). focusMode NO es una constraint básica
+        // de getUserMedia -- sólo se puede pedir vía el track ya obtenido,
+        // con applyConstraints({advanced:[...]}) (ver
+        // MediaStreamTrack.applyConstraints, MDN) -- exclusivo de Chrome/
+        // Android, iOS Safari no lo expone de ningún modo. La documentación
+        // oficial es ambigua/contradictoria sobre si un focusMode no
+        // soportado dentro de "advanced" se ignora en silencio o rechaza
+        // la promesa -- por eso NO confiamos en eso solo: primero se
+        // chequea getCapabilities() explícitamente, y applyConstraints
+        // igual queda en try/catch como red de seguridad. Logueado (no
+        // asumido) para confirmar con evidencia real de dispositivo (7
+        // taps en el logo) si esto mejora algo, antes de darlo por
+        // resuelto.
+        const track = stream.getVideoTracks()[0];
+        const capacidades = track.getCapabilities?.() || {};
+        registrarLog(`[QR nativo] focusMode soportado: ${JSON.stringify(capacidades.focusMode || "no expone capabilities")}`);
+        if (capacidades.focusMode?.includes("continuous")) {
+          try {
+            await track.applyConstraints({ advanced: [{ focusMode: "continuous" }] });
+            registrarLog("[QR nativo] applyConstraints(focusMode: continuous) OK");
+          } catch (e) {
+            registrarLog(`[QR nativo] applyConstraints(focusMode) falló: ${e.name} -- ${e.message}`);
+          }
+        }
+
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
           videoRef.current.play();

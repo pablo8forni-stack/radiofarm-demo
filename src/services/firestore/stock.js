@@ -36,11 +36,17 @@ export function listenLotes(callback) {
 
 // Ingreso: siempre crea un lote nuevo (no mergea), no depende de leer nada
 // antes -> writeBatch, offline-safe (se encola y sincroniza solo).
-export function ingresoBatch({ sedeId, sedeNombre, farm, lote, vencimiento, cantidad, kits, proveedorNombre, observacion, usuario }) {
+export function ingresoBatch({ sedeId, sedeNombre, farm, lote, vencimiento, cantidad, kits, unidadesSueltas, proveedorNombre, observacion, usuario }) {
   const batch = writeBatch(db);
   const nuevoLoteRef = doc(collection(db, "sedes", sedeId, "lotes"));
   batch.set(nuevoLoteRef, { farmId: farm.id, lote, vencimiento, cantidad, proveedorNombre, creadoEn: serverTimestamp() });
-  const motivo = kits ? `Recepción (${kits} kit${kits > 1 ? "s" : ""} × ${farm.viales_x_kit} = ${cantidad} viales)` : "Recepción de pedido";
+  // unidadesSueltas: kits ya empezados al inventariar (frascos usados antes
+  // de existir este registro) -- se refleja en el motivo para que el
+  // Historial muestre el desglose real, no sólo el total (cantidad ya lo
+  // trae sumado, ver ModalIngreso.jsx).
+  const motivo = kits
+    ? `Recepción (${kits} kit${kits > 1 ? "s" : ""} × ${farm.viales_x_kit}${unidadesSueltas ? ` + ${unidadesSueltas} suelta${unidadesSueltas > 1 ? "s" : ""}` : ""} = ${cantidad} viales)`
+    : "Recepción de pedido";
   batch.set(doc(movimientosCol), {
     fecha: serverTimestamp(), tipo: "ingreso", sedeId, sedeNombre,
     farmId: farm.id, farmNombre: farm.nombre, cantidad, lote, loteId: nuevoLoteRef.id,
