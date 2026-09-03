@@ -55,6 +55,39 @@ function QRScannerNativo({ onResult, onClose }) {
           }
         }
 
+        // Paso 1 de la investigación de foco (sólo medir, no aplicar nada
+        // todavía): si el dispositivo sólo expone focusMode "manual" (caso
+        // real confirmado, Galaxy S23), un valor fijo de focusDistance
+        // podría servir de arranque mejor calibrado que el default -- pero
+        // el spec oficial (W3C Media Capture and Image) NO garantiza la
+        // unidad ("usualmente metros", sin exigirlo) ni da ninguna guía de
+        // qué valor elegir para algo cercano tipo QR -- hay que verlo con
+        // el número real de ESTE dispositivo antes de calibrar cualquier
+        // cosa, no adivinar.
+        if (capacidades.focusDistance) {
+          registrarLog(`[QR nativo] focusDistance disponible -- min:${capacidades.focusDistance.min}, max:${capacidades.focusDistance.max}, step:${capacidades.focusDistance.step}`);
+        } else {
+          registrarLog("[QR nativo] focusDistance no expuesto en capabilities");
+        }
+
+        // Segunda línea de investigación en paralelo (misma filosofía --
+        // sólo medir): los celulares modernos suelen tener varias cámaras
+        // traseras (principal, ultra wide, macro dedicada). Hoy sólo se
+        // pide facingMode:"environment", sin elegir cuál -- el navegador
+        // decide sola, probablemente la principal, no una macro pensada
+        // para distancias cortas como esta. enumerateDevices() sólo
+        // devuelve labels reales DESPUÉS de tener permiso de cámara
+        // concedido (por privacidad) -- por eso se llama acá, recién
+        // después de que getUserMedia ya resolvió arriba, nunca antes.
+        try {
+          const dispositivos = await navigator.mediaDevices.enumerateDevices();
+          const camaras = dispositivos.filter((d) => d.kind === "videoinput")
+            .map((d) => ({ deviceId: d.deviceId.slice(0, 12) + "...", label: d.label || "(sin label)" }));
+          registrarLog(`[QR nativo] cámaras de video disponibles: ${JSON.stringify(camaras)}`);
+        } catch (e) {
+          registrarLog(`[QR nativo] enumerateDevices() falló: ${e.name} -- ${e.message}`);
+        }
+
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
           videoRef.current.play();

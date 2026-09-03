@@ -26,7 +26,9 @@ export function ModalIngreso({ open, farm, proveedores, itemEditando, onConfirm,
     if (itemEditando) {
       setLote(itemEditando.lote);
       setVenc(itemEditando.vencimiento);
-      setCant(itemEditando.kits || itemEditando.cantidad);
+      // itemEditando.kits puede ser 0 (carga de sólo sueltas) -- "|| cantidad"
+      // fallaba ahí porque 0 es falsy en JS, precargaba el TOTAL en vez de 0.
+      setCant(itemEditando.kits != null ? itemEditando.kits : itemEditando.cantidad);
       setUnidadesSueltas(itemEditando.unidadesSueltas || 0);
       setProvId(proveedores.find((p) => p.nombre === itemEditando.proveedorNombre)?.id || proveedores[0]?.id || "");
       setObs(itemEditando.observacion);
@@ -47,8 +49,14 @@ export function ModalIngreso({ open, farm, proveedores, itemEditando, onConfirm,
         <Input label="N° de lote" value={lote} onChange={(e) => setLote(e.target.value)} placeholder="Ej: ARN-2025-050" />
         <Input label="Fecha de vencimiento" type="date" value={venc} onChange={(e) => setVenc(e.target.value)} min={hoy()} />
         <div className="flex flex-col gap-1">
-          <Input label={enKit ? `Cantidad (kits de ${vxk} viales)` : "Cantidad (viales)"} type="number" min={1} value={cant}
-            onChange={(e) => setCant(Math.max(1, parseInt(e.target.value) || 1))} />
+          {/* Mínimo 1 SÓLO cuando no hay kits (ahí cant es la única cantidad
+              posible, no puede quedar en 0) -- con kits, 0 es válido a
+              propósito: el caso real es cargar SÓLO unidades sueltas de un
+              kit ya empezado, sin ningún kit entero (kits=0, sueltas=N). La
+              validación real de "no guardar un ítem vacío" está en el botón
+              de abajo, sobre el total, no acá. */}
+          <Input label={enKit ? `Cantidad (kits de ${vxk} viales)` : "Cantidad (viales)"} type="number" min={enKit ? 0 : 1} value={cant}
+            onChange={(e) => setCant(Math.max(enKit ? 0 : 1, parseInt(e.target.value) || 0))} />
           {enKit && (
             <>
               <Input label="Unidades sueltas adicionales (opcional)" type="number" min={0} value={unidadesSueltas}
@@ -68,7 +76,7 @@ export function ModalIngreso({ open, farm, proveedores, itemEditando, onConfirm,
           <Btn variant="outline" onClick={onClose}>Cancelar</Btn>
           <Btn
             onClick={() => onConfirm({ lote, vencimiento: venc, cantidad: totalViales, kits: enKit ? cant : null, unidadesSueltas: sueltas || null, proveedorNombre: prov?.nombre, observacion: obs.trim() })}
-            disabled={!lote || !venc}
+            disabled={!lote || !venc || totalViales <= 0}
           >
             {itemEditando ? "Guardar cambios" : "Agregar a la lista"}
           </Btn>

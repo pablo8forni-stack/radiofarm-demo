@@ -10,7 +10,7 @@ import { descargarArchivo } from "../../helpers/descargarArchivo.js";
 import { parseQR } from "../../helpers/qr.js";
 import { prepararSonidoEscaneo } from "../../helpers/feedbackEscaneo.js";
 import { sedesActivas, farmsDeSede } from "../../helpers/stock.js";
-import { normalizarFicha, compararPorSedeYFicha } from "../../helpers/fichaPaciente.js";
+import { normalizarFicha, compararPorSedeYFichaDescendente } from "../../helpers/fichaPaciente.js";
 import { TIPO_LABEL_I131 } from "../../constants/tipoI131.js";
 import {
   listenActas, addActaPaciente, actasPorRango, anularActaTransaction, listenAnulacionesActas,
@@ -543,13 +543,16 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
     [actasTodas, filtroFecha, sedeEfectiva, busqNorm]
   );
 
-  // Orden de LISTADO (no de datos): por N° de Ficha dentro de cada sede, no
-  // por cuándo terminó de guardarse cada acta -- ver compararPorSedeYFicha.
+  // Orden de LISTADO (no de datos): por N° de Ficha DESCENDENTE (la más
+  // alta arriba, para ver el último paciente cargado sin scrollear) dentro
+  // de cada sede -- ver compararPorSedeYFichaDescendente. El PDF de
+  // impresión mensual sigue por fecha real, sin tocar (nunca usó este
+  // comparador, ver GenerarActasImpresion.jsx).
   // Deriva de "actas" (que sigue ordenado por fecha desc, tal cual viene de
   // Firestore) SIN tocarla -- "actas" sigue alimentando el CSV tal cual
   // (descargarCSV más abajo), que tiene que reflejar la fecha real de
   // guardado, no este orden visual.
-  const actasOrdenadas = useMemo(() => [...actas].sort(compararPorSedeYFicha), [actas]);
+  const actasOrdenadas = useMemo(() => [...actas].sort(compararPorSedeYFichaDescendente), [actas]);
 
   // Sólo se agrupa por fecha en "Ver todos" -- con un día ya filtrado, todos
   // los registros mostrados comparten fecha y un separador no aportaría nada.
@@ -560,7 +563,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
   const grupos = useMemo(() => {
     if (filtroFecha) return null;
     return agruparPorFecha(actas, (a) => fmtFechaISO(a.fecha))
-      .map((g) => ({ ...g, items: [...g.items].sort(compararPorSedeYFicha) }));
+      .map((g) => ({ ...g, items: [...g.items].sort(compararPorSedeYFichaDescendente) }));
   }, [actas, filtroFecha]);
 
   const lotesEnStock = (catalogo.stock[sedeId]?.[farmId] || []).filter((l) => l.cantidad > 0);

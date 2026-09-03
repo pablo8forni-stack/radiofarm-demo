@@ -7,7 +7,7 @@ import { ModalAnularActa } from "../../components/actas/ModalAnularActa.jsx";
 import { HistorialPacienteI131 } from "./HistorialPacienteI131.jsx";
 import { fmtF, fmtTs, fmtFechaISO, hoy, agruparPorFecha } from "../../helpers/formato.js";
 import { descargarArchivo } from "../../helpers/descargarArchivo.js";
-import { compararPorSedeYFicha } from "../../helpers/fichaPaciente.js";
+import { compararPorSedeYFichaDescendente } from "../../helpers/fichaPaciente.js";
 import { listenActas, actasPorRango, anularActaTransaction, listenAnulacionesActas } from "../../services/firestore/actas.js";
 import { TIPO_LABEL_I131 } from "../../constants/tipoI131.js";
 
@@ -116,12 +116,14 @@ export function TabRegistrosI131({ catalogo, usuario, esAdmin, onToast }) {
     [actasTodas, filtroFecha, sedeEfectiva, filtroTipo]
   );
 
-  // Orden de LISTADO (no de datos): por N° de Ficha dentro de cada sede, no
-  // por cuándo terminó de guardarse cada acta -- ver compararPorSedeYFicha
-  // (helpers/fichaPaciente.js). Deriva de "actas" sin tocarla -- "actas"
-  // sigue alimentando el CSV tal cual (descargarCSV más abajo), que tiene
-  // que reflejar la fecha real de guardado, no este orden visual.
-  const actasOrdenadas = useMemo(() => [...actas].sort(compararPorSedeYFicha), [actas]);
+  // Orden de LISTADO (no de datos): por N° de Ficha DESCENDENTE (la más
+  // alta arriba, para ver el último cargado sin scrollear) dentro de cada
+  // sede -- ver compararPorSedeYFichaDescendente (helpers/fichaPaciente.js).
+  // El PDF de impresión mensual sigue por fecha real, sin tocar (nunca usó
+  // este comparador). Deriva de "actas" sin tocarla -- "actas" sigue
+  // alimentando el CSV tal cual (descargarCSV más abajo), que tiene que
+  // reflejar la fecha real de guardado, no este orden visual.
+  const actasOrdenadas = useMemo(() => [...actas].sort(compararPorSedeYFichaDescendente), [actas]);
 
   // agruparPorFecha necesita "actas" en orden de fecha (detecta grupos por
   // adyacencia) -- el orden por ficha se aplica DESPUÉS, sólo dentro de cada
@@ -129,7 +131,7 @@ export function TabRegistrosI131({ catalogo, usuario, esAdmin, onToast }) {
   const grupos = useMemo(() => {
     if (filtroFecha) return null;
     return agruparPorFecha(actas, (a) => fmtFechaISO(a.fecha))
-      .map((g) => ({ ...g, items: [...g.items].sort(compararPorSedeYFicha) }));
+      .map((g) => ({ ...g, items: [...g.items].sort(compararPorSedeYFichaDescendente) }));
   }, [actas, filtroFecha]);
 
   // Ablativa/Dosis (mCi, con lote/cápsula) y los 3 diagnósticos (µCi, con

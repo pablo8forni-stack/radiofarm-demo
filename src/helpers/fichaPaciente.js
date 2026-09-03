@@ -37,3 +37,21 @@ export function compararPorSedeYFicha(a, b) {
   if (bValida) return 1;
   return 0;
 }
+
+// Misma agrupación por sede y mismo criterio de "ficha inválida al final"
+// que compararPorSedeYFicha, pero con la ficha en orden DESCENDENTE
+// (la más alta arriba) -- pantalla de Libro 2/Gestión I-131 (no el PDF de
+// impresión mensual, que sigue por fecha real, ver GenerarActasImpresion.jsx
+// -- nunca usó este comparador). Motivo: al cargar un paciente nuevo, se
+// quiere ver el último arriba de todo sin scrollear.
+// A propósito NO se hace invirtiendo los argumentos ni negando el
+// resultado completo de compararPorSedeYFicha -- un comparador correcto es
+// antisimétrico (compararPorSedeYFicha(b,a) === -compararPorSedeYFicha(a,b)
+// SIEMPRE), así que eso invertiría también el orden de sede y haría que
+// las fichas inválidas queden PRIMERO en vez de al final. Sólo se niega la
+// parte de ficha (delegada 100% a la función original, sedeId ya es
+// igual acá adentro), el desempate de sede se escribe aparte, sin invertir.
+export function compararPorSedeYFichaDescendente(a, b) {
+  if (a.sedeId !== b.sedeId) return a.sedeId < b.sedeId ? -1 : 1;
+  return -compararPorSedeYFicha(a, b);
+}

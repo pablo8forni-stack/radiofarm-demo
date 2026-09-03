@@ -43,9 +43,12 @@ export function ingresoBatch({ sedeId, sedeNombre, farm, lote, vencimiento, cant
   // unidadesSueltas: kits ya empezados al inventariar (frascos usados antes
   // de existir este registro) -- se refleja en el motivo para que el
   // Historial muestre el desglose real, no sólo el total (cantidad ya lo
-  // trae sumado, ver ModalIngreso.jsx).
-  const motivo = kits
-    ? `Recepción (${kits} kit${kits > 1 ? "s" : ""} × ${farm.viales_x_kit}${unidadesSueltas ? ` + ${unidadesSueltas} suelta${unidadesSueltas > 1 ? "s" : ""}` : ""} = ${cantidad} viales)`
+  // trae sumado, ver ModalIngreso.jsx). kits puede ser 0 (carga de SÓLO
+  // sueltas, sin ningún kit entero) -- por eso el chequeo es "kits != null"
+  // (¿es un radiofármaco de kit?), no la verdad del número en sí (0 es
+  // falsy en JS, kits ? ... anduvo mal para este caso real).
+  const motivo = kits != null
+    ? `Recepción (${kits} kit${kits === 1 ? "" : "s"} × ${farm.viales_x_kit}${unidadesSueltas ? ` + ${unidadesSueltas} suelta${unidadesSueltas > 1 ? "s" : ""}` : ""} = ${cantidad} viales)`
     : "Recepción de pedido";
   batch.set(doc(movimientosCol), {
     fecha: serverTimestamp(), tipo: "ingreso", sedeId, sedeNombre,
