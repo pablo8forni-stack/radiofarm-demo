@@ -13,7 +13,29 @@ const fichasUsadasCol = collection(db, "fichasUsadas");
 // se encuentre. El campo loteGenerador de la propia acta (lo que se ve en
 // listado/CSV) conserva el texto tal cual se tipeó -- esto normaliza sólo
 // para el id interno, no para el dato mostrado.
-export const normalizarLoteGenerador = (lote) => lote.trim().toUpperCase();
+// Formato real del proveedor (hace años, sin garantía de que dure para
+// siempre -- no sobre-diseñamos para un cambio futuro hipotético): 1
+// dígito - 5 dígitos (ej. "1-11111"). Distintos técnicos anotaban el MISMO
+// lote real con guion en lugares distintos (o sin guion) -- como el id de
+// generadoresVistos/loteGeneradorVisto compara texto exacto, eso hacía que
+// el sistema tratara el mismo lote real como "generador nuevo" dos veces
+// (pedía de nuevo la calibración). Normalizar acá, en el único lugar que
+// arma tanto ese id como la comparación local (TabElucion.jsx), cierra el
+// problema de fondo en los dos lugares a la vez.
+// Sólo reformatea si el texto ORIGINAL es puramente numérico (dígitos,
+// espacios y/o guiones, nada más) Y da exactamente 6 dígitos al sacar los
+// separadores -- si tiene CUALQUIER letra u otro carácter, se deja intacto
+// tal cual, aunque por casualidad tenga 6 dígitos "escondidos" adentro (ej.
+// "TN111111" nunca debe perder las letras). Chequear sólo la cantidad de
+// dígitos extraídos, sin primero confirmar que el original no tenía nada
+// más, fue exactamente el bug real que esto reemplaza.
+export function normalizarLoteGenerador(lote) {
+  const limpio = (lote || "").trim().toUpperCase();
+  if (!/^[\d\s-]+$/.test(limpio)) return limpio;
+  const soloDigitos = limpio.replace(/[^0-9]/g, "");
+  if (/^\d{6}$/.test(soloDigitos)) return `${soloDigitos[0]}-${soloDigitos.slice(1)}`;
+  return limpio;
+}
 const generadorRef = (sedeId, loteGenerador) => doc(generadoresCol, `${sedeId}_${normalizarLoteGenerador(loteGenerador)}`);
 const PAGINA = 150;
 

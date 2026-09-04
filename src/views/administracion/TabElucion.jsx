@@ -126,7 +126,11 @@ export function TabElucion({ catalogo, usuario, esAdmin, onToast }) {
     if (!catalogo.sedes[sedeId]?.eluye) return;
     const datos = {
       sedeId, sedeNombre: catalogo.sedes[sedeId]?.nombre,
-      loteGenerador: loteGenerador.trim(),
+      // normalizarLoteGenerador (no sólo .trim()) -- defensivo, por si se
+      // guarda sin haber pasado por el onBlur del campo (poco probable,
+      // pero así el valor GUARDADO queda siempre en el formato correcto,
+      // no sólo lo que se ve en pantalla).
+      loteGenerador: normalizarLoteGenerador(loteGenerador),
       actividadEluida: parseFloat(actividadEluida) || 0,
       volumen: parseFloat(volumen) || 0,
       usuarioNombre: usuario.nombre, usuarioEmail: usuario.email, observacion: obs.trim(),
@@ -347,11 +351,23 @@ export function TabElucion({ catalogo, usuario, esAdmin, onToast }) {
                 Esta sede no tiene elución habilitada — activala en Configuración → Sedes activas.
               </div>
             )}
-            <Input
-              label="Lote/serie del generador" value={loteGenerador}
-              onChange={(e) => setLoteGenerador(e.target.value)} onBlur={() => setLoteVerificado(loteGenerador)}
-              placeholder="Ej: GEN-2026-014"
-            />
+            <div className="flex flex-col gap-1">
+              <Input
+                label="Lote/serie del generador" value={loteGenerador}
+                onChange={(e) => setLoteGenerador(e.target.value)}
+                onBlur={() => {
+                  // Reescribe el campo visible con el resultado normalizado
+                  // (no sólo lo usa para comparar internamente) -- así el
+                  // técnico ve al toque que "111111"/"1 11111" quedó en
+                  // "1-11111", el mismo formato que efectivamente se guarda.
+                  const normalizado = normalizarLoteGenerador(loteGenerador);
+                  setLoteGenerador(normalizado);
+                  setLoteVerificado(normalizado);
+                }}
+                placeholder="Ej: 1-11111"
+              />
+              <p className="text-xs text-gray-400">No hace falta poner el guion, se completa solo al salir del campo.</p>
+            </div>
             {verificandoLote && <div className="sm:col-span-2 text-xs text-gray-400">Verificando lote...</div>}
             {!verificandoLote && esPrimeraVez && (
               <>
