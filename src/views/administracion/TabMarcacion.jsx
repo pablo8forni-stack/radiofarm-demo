@@ -53,6 +53,13 @@ export function TabMarcacion({ catalogo, usuario, esAdmin, onToast }) {
   const [farmId, setFarmId] = useState(""); const [lote, setLote] = useState("");
   const [mciMarcacion, setMciMarcacion] = useState(""); const [obs, setObs] = useState("");
   const [sedeId, setSedeId] = useState(usuario.sede);
+  // Freno real (no sólo texto) para el caso confirmado en producción: un
+  // técnico usó "Ver todo el stock" y marcó un lote SIN Egreso registrado
+  // hoy, generando un desfasaje con el stock físico. Sólo se pide cuando
+  // hace falta de verdad (verTodoElStock activo Y el lote elegido no tiene
+  // Egreso de hoy, ver loteSinEgresoHoy más abajo) -- no cada vez que el
+  // checkbox está tildado.
+  const [confirmoSinEgreso, setConfirmoSinEgreso] = useState(false);
   // Lista de lotes seleccionables -- por defecto SÓLO los egresados hoy
   // (regla de negocio confirmada: el técnico egresa el vial primero, marca
   // después sobre ese mismo vial). "Ver todo el stock" es la vía de escape
@@ -97,9 +104,19 @@ export function TabMarcacion({ catalogo, usuario, esAdmin, onToast }) {
     return lotesUnicos.map((loteTxt) => ({ id: loteTxt, lote: loteTxt, vencimiento: stockPorLote.get(loteTxt)?.vencimiento }));
   }, [egresadosHoyRaw, farmId, lotesEnStock]);
   const lotesDisp = verTodoElStock ? lotesEnStock : lotesEgresadosHoy;
+  // Riesgo real (caso confirmado en producción): con "Ver todo el stock"
+  // activo, el lote elegido puede no tener Egreso de hoy -- si el único
+  // Egreso de hoy de ese lote fue por un motivo de descarte
+  // (Vencimiento/Derrame), lotesEgresadosHoy ya lo excluyó, así que
+  // TAMBIÉN cuenta como "sin Egreso" acá (correcto: marcar un lote
+  // descartado hoy es al menos igual de riesgoso).
+  const loteSinEgresoHoy = verTodoElStock && !!lote && !lotesEgresadosHoy.some((l) => l.lote === lote);
 
   function guardar() {
     if (!farmId || !lote || !mciMarcacion) return;
+    // Mismo freno que el botón (disabled más abajo) -- acá también, por si
+    // guardar() se llegara a invocar de otra forma en el futuro.
+    if (loteSinEgresoHoy && !confirmoSinEgreso) return;
     const farm = catalogo.farms.find((f) => f.id === farmId);
     addActaMarcacion({
       sedeId, sedeNombre: catalogo.sedes[sedeId]?.nombre,
@@ -108,7 +125,7 @@ export function TabMarcacion({ catalogo, usuario, esAdmin, onToast }) {
       usuarioNombre: usuario.nombre, usuarioEmail: usuario.email, observacion: obs.trim(),
     }).catch((e) => onToast(e.message || "No se pudo guardar la marcación", "error"));
     onToast("Marcación registrada");
-    setFarmId(""); setLote(""); setMciMarcacion(""); setObs(""); setMostrarForm(false); setVerTodoElStock(false);
+    setFarmId(""); setLote(""); setMciMarcacion(""); setObs(""); setMostrarForm(false); setVerTodoElStock(false); setConfirmoSinEgreso(false);
   }
 
   const actas = useMemo(
@@ -308,7 +325,7 @@ export function TabMarcacion({ catalogo, usuario, esAdmin, onToast }) {
               {farmsDeSede(catalogo, sedeId).map((f) => <option key={f.id} value={f.id}>{f.nombre}</option>)}
             </Sel>
             <div className="flex flex-col gap-1">
-              <Sel label="Lote" value={lote} onChange={(e) => setLote(e.target.value)} disabled={!farmId}>
+              <Sel label="Lote" value={lote} onChange={(e) => { setLote(e.target.value); setConfirmoSinEgreso(false); }} disabled={!farmId}>
                 <option value="">Seleccionar lote...</option>
                 {lotesDisp.map((l) => <option key={l.id} value={l.lote}>{l.lote} · Venc: {fmtF(l.vencimiento)}</option>)}
               </Sel>
@@ -317,11 +334,23 @@ export function TabMarcacion({ catalogo, usuario, esAdmin, onToast }) {
                   caso excepcional, apagada por defecto a propósito. */}
               <label className="flex items-center gap-1.5 text-xs text-gray-500">
                 <input type="checkbox" className="w-3.5 h-3.5 accent-blue-600" checked={verTodoElStock}
-                  onChange={(e) => { setVerTodoElStock(e.target.checked); setLote(""); }} />
+                  onChange={(e) => { setVerTodoElStock(e.target.checked); setLote(""); setConfirmoSinEgreso(false); }} />
                 Ver todo el stock (excepcional)
               </label>
               {!verTodoElStock && farmId && lotesEgresadosHoy.length === 0 && (
                 <p className="text-xs text-amber-600">Ningún lote de este radiofármaco fue egresado hoy en esta sede.</p>
+              )}
+              {/* Freno real (caso confirmado en producción, no sólo texto):
+                  con "Ver todo el stock" activo y un lote SIN Egreso de hoy
+                  elegido, esta confirmación es obligatoria para poder
+                  guardar -- ver loteSinEgresoHoy y el disabled del botón
+                  más abajo. */}
+              {loteSinEgresoHoy && (
+                <label className="flex items-start gap-2 text-xs text-red-700 bg-red-50 border border-red-200 rounded-xl px-3 py-2 mt-1">
+                  <input type="checkbox" className="w-3.5 h-3.5 accent-red-600 mt-0.5" checked={confirmoSinEgreso}
+                    onChange={(e) => setConfirmoSinEgreso(e.target.checked)} />
+                  <span>Confirmo que este lote NO tiene un Egreso registrado hoy -- voy a registrarlo por separado en Inventario.</span>
+                </label>
               )}
             </div>
             <Input label="mCi utilizados en marcación" type="number" min={0} step={0.1} value={mciMarcacion} onChange={(e) => setMciMarcacion(e.target.value)} placeholder="20" />
@@ -329,7 +358,7 @@ export function TabMarcacion({ catalogo, usuario, esAdmin, onToast }) {
           </div>
           <div className="flex gap-2 justify-end mt-4">
             <Btn variant="outline" onClick={() => setMostrarForm(false)}>Cancelar</Btn>
-            <Btn onClick={guardar} disabled={!farmId || !lote || !mciMarcacion}>Guardar marcación</Btn>
+            <Btn onClick={guardar} disabled={!farmId || !lote || !mciMarcacion || (loteSinEgresoHoy && !confirmoSinEgreso)}>Guardar marcación</Btn>
           </div>
         </div>
       )}

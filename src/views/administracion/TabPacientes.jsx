@@ -153,6 +153,11 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
   const [verTodoElStock, setVerTodoElStock] = useState(false);
   const [marcadosHoyRaw, setMarcadosHoyRaw] = useState([]);
   useEffect(() => { if (sedeId) return listenActasMarcacionHoy(sedeId, setMarcadosHoyRaw); }, [sedeId]);
+  // Freno real (mismo patrón que TabMarcacion.jsx, mismo motivo): si se usa
+  // "Ver todos los lotes en stock" y el lote elegido NO fue marcado hoy en
+  // Libro 1, confirmación obligatoria antes de poder guardar -- no sólo
+  // texto de advertencia.
+  const [confirmoSinMarcacion, setConfirmoSinMarcacion] = useState(false);
   // Sólo para isotopoId === "i131" -- ver esI131/guardar() más abajo. El N°
   // de Ficha, nombre, DNI, médico responsable y lote ya están arriba
   // (compartidos con Tc-99m/Lutecio, mismo campo/misma numeración diaria
@@ -400,7 +405,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
     setFichaNro(""); setFichaTocada(false); setFichaEstado(null); setNombre(""); setDni(""); setPeso(""); setTalla(""); setEstudio(""); setEstudioOtro(""); setMci(""); setFarmId(""); setLote(""); setObs("");
     setMostrarIsotopo(false); setIsotopoId("tc99m"); setMedicoResponsable("");
     setTipoI131("barrido"); setActividadAdministrada(""); setIndicacion(""); setDosisVinculada(""); setMibgLoteSeleccionado(""); setLutecioLoteSeleccionado("");
-    setSedeId(usuario.sede); setVerTodoElStock(false);
+    setSedeId(usuario.sede); setVerTodoElStock(false); setConfirmoSinMarcacion(false);
   }
 
   const esLutecio = isotopoId === "lu177";
@@ -515,6 +520,9 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
     if (!mci || !estudio || !lote.trim()) return;
     if (estudio === "Otro" && !estudioOtro.trim()) return;
     if (!farmId) return;
+    // Mismo freno que el botón (disabled más abajo) -- acá también, por si
+    // guardar() se llegara a invocar de otra forma en el futuro.
+    if (loteSinMarcacionHoy && !confirmoSinMarcacion) return;
     const farm = catalogo.farms.find((f) => f.id === farmId);
     addActaPaciente({
       sedeId, sedeNombre: catalogo.sedes[sedeId]?.nombre,
@@ -580,6 +588,11 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
     return lotesUnicos.map((loteTxt) => ({ id: loteTxt, lote: loteTxt, vencimiento: stockPorLote.get(loteTxt)?.vencimiento }));
   }, [marcadosHoyRaw, farmId, lotesEnStock]);
   const lotesDisp = verTodoElStock ? lotesEnStock : lotesMarcadosHoy;
+  // Riesgo real (mismo patrón que TabMarcacion.jsx): con "Ver todos los
+  // lotes en stock" activo, el lote elegido puede no estar entre los
+  // marcados hoy en Libro 1 -- hueco de trazabilidad un paso más adelante
+  // en la cadena (Egreso → Marcación → Administración).
+  const loteSinMarcacionHoy = verTodoElStock && !!lote && !lotesMarcadosHoy.some((l) => l.lote === lote);
 
   // "tc99m" (o ausente, actas viejas anteriores a este cambio) no se marca
   // con nada -- es el caso de siempre. Sólo Lutecio-177 se distingue en el
@@ -1109,7 +1122,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
                   {farmsDeSede(catalogo, sedeId).map((f) => <option key={f.id} value={f.id}>{f.nombre}</option>)}
                 </Sel>
                 <div className="flex flex-col gap-1">
-                  <Sel label="Lote" value={lote} onChange={(e) => setLote(e.target.value)} disabled={!farmId}>
+                  <Sel label="Lote" value={lote} onChange={(e) => { setLote(e.target.value); setConfirmoSinMarcacion(false); }} disabled={!farmId}>
                     <option value="">Seleccionar lote...</option>
                     {lotesDisp.map((l) => <option key={l.id} value={l.lote}>{l.lote} · Venc: {fmtF(l.vencimiento)}</option>)}
                   </Sel>
@@ -1119,11 +1132,22 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
                       marcado otro día), apagada por defecto a propósito. */}
                   <label className="flex items-center gap-1.5 text-xs text-gray-500">
                     <input type="checkbox" className="w-3.5 h-3.5 accent-blue-600" checked={verTodoElStock}
-                      onChange={(e) => { setVerTodoElStock(e.target.checked); setLote(""); }} />
+                      onChange={(e) => { setVerTodoElStock(e.target.checked); setLote(""); setConfirmoSinMarcacion(false); }} />
                     Ver todos los lotes en stock (excepcional)
                   </label>
                   {!verTodoElStock && farmId && lotesMarcadosHoy.length === 0 && (
                     <p className="text-xs text-amber-600">Ningún lote de este radiofármaco fue marcado hoy en esta sede.</p>
+                  )}
+                  {/* Freno real (mismo patrón que TabMarcacion.jsx, no sólo
+                      texto): con "Ver todos los lotes en stock" activo y un
+                      lote que NO fue marcado hoy, esta confirmación es
+                      obligatoria para poder guardar. */}
+                  {loteSinMarcacionHoy && (
+                    <label className="flex items-start gap-2 text-xs text-red-700 bg-red-50 border border-red-200 rounded-xl px-3 py-2 mt-1">
+                      <input type="checkbox" className="w-3.5 h-3.5 accent-red-600 mt-0.5" checked={confirmoSinMarcacion}
+                        onChange={(e) => setConfirmoSinMarcacion(e.target.checked)} />
+                      <span>Confirmo que este lote NO fue marcado hoy en Libro 1 -- voy a corregir el registro de Marcación por separado.</span>
+                    </label>
                   )}
                 </div>
                 <Input label="Dosis administrada (mCi)" type="number" min={0} step={0.1} value={mci} onChange={(e) => setMci(e.target.value)} placeholder="10.5" />
@@ -1142,7 +1166,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
                    (tipoI131Actual.categoria === "mibg" && !mibgLoteSeleccionado))
                 : esLutecio
                   ? (!medicoResponsable.trim() || !lutecioLoteSeleccionado || !actividadAdministrada)
-                  : (!mci || !estudio || (estudio === "Otro" && !estudioOtro.trim()) || !lote.trim() || !farmId))
+                  : (!mci || !estudio || (estudio === "Otro" && !estudioOtro.trim()) || !lote.trim() || !farmId || (loteSinMarcacionHoy && !confirmoSinMarcacion)))
             }>Guardar registro</Btn>
           </div>
         </div>
