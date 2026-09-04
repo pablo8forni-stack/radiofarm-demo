@@ -1,3 +1,5 @@
+import { fmtHora } from "../../helpers/formato.js";
+
 // Encabezado compartido por los 4 libros impresos -- mismo logo oficial que
 // header/login (ver App.jsx/PantallaLogin.jsx, /icon-192.png), título del
 // libro, sede y mes/año del archivo, y la fecha real en que se generó el
@@ -16,7 +18,7 @@ export function EncabezadoImpresion({ titulo, sedeNombre, mesTexto }) {
       <div className="text-right text-sm">
         <p><span className="font-semibold">Sede:</span> {sedeNombre}</p>
         <p><span className="font-semibold">Período:</span> {mesTexto}</p>
-        <p className="text-xs text-gray-500">Generado el {new Date().toLocaleDateString("es-AR")} a las {new Date().toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" })}</p>
+        <p className="text-xs text-gray-500">Generado el {new Date().toLocaleDateString("es-AR")} a las {fmtHora(new Date())}</p>
       </div>
     </div>
   );

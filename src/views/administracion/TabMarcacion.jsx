@@ -4,7 +4,7 @@ import { Btn } from "../../components/ui/Btn.jsx";
 import { Input } from "../../components/ui/Input.jsx";
 import { Sel } from "../../components/ui/Sel.jsx";
 import { ModalAnularActa } from "../../components/actas/ModalAnularActa.jsx";
-import { fmtF, fmtTs, fmtFechaISO, hoy, agruparPorFecha } from "../../helpers/formato.js";
+import { fmtF, fmtTs, fmtHora, fmtFechaISO, hoy, agruparPorFecha } from "../../helpers/formato.js";
 import { descargarArchivo } from "../../helpers/descargarArchivo.js";
 import { sedesActivas, farmsDeSede } from "../../helpers/stock.js";
 import { listenActas, addActaMarcacion, actasPorRango, anularActaTransaction, listenAnulacionesActas } from "../../services/firestore/actas.js";
@@ -175,7 +175,7 @@ export function TabMarcacion({ catalogo, usuario, esAdmin, onToast }) {
 
   function filaCSV(a) {
     const d = a.fecha?.toDate ? a.fecha.toDate() : new Date(a.fecha);
-    return [d.toLocaleDateString("es-AR"), d.toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" }),
+    return [d.toLocaleDateString("es-AR"), fmtHora(a.fecha),
       a.sedeNombre, a.farmNombre, a.lote || "—", a.mciMarcacion, a.usuarioNombre, a.observacion || "—"];
   }
 

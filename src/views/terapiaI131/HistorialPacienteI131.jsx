@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Badge } from "../../components/ui/Badge.jsx";
 import { Btn } from "../../components/ui/Btn.jsx";
 import { Modal } from "../../components/ui/Modal.jsx";
-import { fmtTs } from "../../helpers/formato.js";
+import { fmtTs, fmtHora } from "../../helpers/formato.js";
 import { descargarArchivo } from "../../helpers/descargarArchivo.js";
 import { actasPorPacienteDni } from "../../services/firestore/actas.js";
 import { TIPO_LABEL_I131, MOMENTO_LABEL } from "../../constants/tipoI131.js";
@@ -51,7 +51,7 @@ function detalleFila(a) {
 function filaCSV(a) {
   const d = a.fecha?.toDate ? a.fecha.toDate() : new Date(a.fecha);
   return [
-    d.toLocaleDateString("es-AR"), d.toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" }),
+    d.toLocaleDateString("es-AR"), fmtHora(a.fecha),
     a.sedeNombre, TIPO_LABEL_I131[a.tipo]?.label || a.tipo,
     a.pacienteFicha || "—", a.pacienteNombre, a.pacienteDni, a.medicoResponsable || "—",
     a.actividadAdministrada ?? a.actividadCalibrada ?? "—", a.unidadActividad || (a.tipo === "i131_mibg" ? "mCi" : "—"), a.lote || a.numeroLote || "—", a.indicacion || "—",

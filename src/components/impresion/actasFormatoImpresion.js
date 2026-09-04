@@ -1,4 +1,5 @@
 import { TIPO_LABEL_I131 } from "../../constants/tipoI131.js";
+import { fmtHora } from "../../helpers/formato.js";
 
 // Formato compartido por los documentos impresos -- deliberadamente
 // SEPARADO de las funciones equivalentes en TabPacientes.jsx (mismo
@@ -29,5 +30,5 @@ export function textoConformidad(lote) {
 
 export function fmtFechaHora(fecha) {
   const d = fecha?.toDate ? fecha.toDate() : new Date(fecha);
-  return { fecha: d.toLocaleDateString("es-AR"), hora: d.toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" }) };
+  return { fecha: d.toLocaleDateString("es-AR"), hora: fmtHora(fecha) };
 }

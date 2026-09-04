@@ -27,12 +27,24 @@ export const fmtFLarga = (iso) => {
   return d.toLocaleDateString("es-AR", { day: "numeric", month: "long", year: "numeric" });
 };
 
+// hour12:false EXPLÍCITO -- confirmado con evidencia real (reporte de
+// hora ambigua en Libro 1) que "es-AR" solo NO alcanza para garantizar
+// 24hs: el default de hour12 no es confiable entre navegadores/
+// dispositivos reales, aunque el locale debería resolverlo solo. Mismo
+// criterio que ya usaba debugLog.js (nunca tuvo este problema).
+export const fmtHora = (fecha) => {
+  if (!fecha) return "—";
+  const d = typeof fecha?.toDate === "function" ? fecha.toDate() : new Date(fecha);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit", hour12: false });
+};
+
 // Acepta tanto ISO string como Firestore Timestamp (tiene .toDate()).
 export const fmtTs = (fecha) => {
   if (!fecha) return "—";
   const d = typeof fecha?.toDate === "function" ? fecha.toDate() : new Date(fecha);
   if (Number.isNaN(d.getTime())) return "—";
-  return `${d.toLocaleDateString("es-AR")} ${d.toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" })}`;
+  return `${d.toLocaleDateString("es-AR")} ${fmtHora(fecha)}`;
 };
 
 export const diasV = (f) => {

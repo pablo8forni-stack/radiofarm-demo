@@ -5,7 +5,7 @@ import { Input } from "../../components/ui/Input.jsx";
 import { Sel } from "../../components/ui/Sel.jsx";
 import { ModalAnularActa } from "../../components/actas/ModalAnularActa.jsx";
 import { HistorialPacienteI131 } from "./HistorialPacienteI131.jsx";
-import { fmtF, fmtTs, fmtFechaISO, hoy, agruparPorFecha } from "../../helpers/formato.js";
+import { fmtF, fmtTs, fmtHora, fmtFechaISO, hoy, agruparPorFecha } from "../../helpers/formato.js";
 import { descargarArchivo } from "../../helpers/descargarArchivo.js";
 import { compararPorSedeYFichaDescendente } from "../../helpers/fichaPaciente.js";
 import { listenActas, actasPorRango, anularActaTransaction, listenAnulacionesActas } from "../../services/firestore/actas.js";
@@ -212,7 +212,7 @@ export function TabRegistrosI131({ catalogo, usuario, esAdmin, onToast }) {
 
   function filaCSV(a) {
     const d = a.fecha?.toDate ? a.fecha.toDate() : new Date(a.fecha);
-    return [d.toLocaleDateString("es-AR"), d.toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" }),
+    return [d.toLocaleDateString("es-AR"), fmtHora(a.fecha),
       a.sedeNombre, TIPO_LABEL_I131[a.tipo]?.label || a.tipo, a.pacienteFicha || "—", a.pacienteNombre, a.pacienteDni, a.medicoResponsable || "—",
       a.actividadAdministrada ?? a.actividadCalibrada ?? "—", a.unidadActividad || (a.tipo === "i131_mibg" ? "mCi" : "—"), a.lote || a.numeroLote || "—", a.indicacion || "—", a.dosisActaId || "—",
       a.usuarioNombre, a.observacion || "—"];

@@ -4,7 +4,7 @@ import { Btn } from "../../components/ui/Btn.jsx";
 import { Input } from "../../components/ui/Input.jsx";
 import { Sel } from "../../components/ui/Sel.jsx";
 import { ModalAnularActa } from "../../components/actas/ModalAnularActa.jsx";
-import { fmtF, fmtTs, fmtFechaISO, hoy, agruparPorFecha } from "../../helpers/formato.js";
+import { fmtF, fmtTs, fmtHora, fmtFechaISO, hoy, agruparPorFecha } from "../../helpers/formato.js";
 import { descargarArchivo } from "../../helpers/descargarArchivo.js";
 import { sedesActivas } from "../../helpers/stock.js";
 import { listenActas, addActaElucion, actasPorRango, anularActaTransaction, listenAnulacionesActas, loteGeneradorYaRegistrado, normalizarLoteGenerador } from "../../services/firestore/actas.js";
@@ -209,7 +209,7 @@ export function TabElucion({ catalogo, usuario, esAdmin, onToast }) {
 
   function filaCSV(a) {
     const d = a.fecha?.toDate ? a.fecha.toDate() : new Date(a.fecha);
-    return [d.toLocaleDateString("es-AR"), d.toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" }),
+    return [d.toLocaleDateString("es-AR"), fmtHora(a.fecha),
       a.sedeNombre, a.loteGenerador, a.actividadCalibrada ?? "—", a.actividadEluida, a.volumen, a.usuarioNombre, a.observacion || "—"];
   }
 

@@ -5,7 +5,7 @@ import { Input } from "../../components/ui/Input.jsx";
 import { Sel } from "../../components/ui/Sel.jsx";
 import { QRScanner } from "../../components/scanner/QRScanner.jsx";
 import { ModalAnularActa } from "../../components/actas/ModalAnularActa.jsx";
-import { fmtF, fmtTs, fmtFechaISO, hoy, capitalizarPalabras, agruparPorFecha } from "../../helpers/formato.js";
+import { fmtF, fmtTs, fmtHora, fmtFechaISO, hoy, capitalizarPalabras, agruparPorFecha } from "../../helpers/formato.js";
 import { descargarArchivo } from "../../helpers/descargarArchivo.js";
 import { parseQR } from "../../helpers/qr.js";
 import { prepararSonidoEscaneo } from "../../helpers/feedbackEscaneo.js";
@@ -762,7 +762,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
     const d = a.fecha?.toDate ? a.fecha.toDate() : new Date(a.fecha);
     const dosis = dosisRegistro(a);
     const lote = loteVinculadoDe(a);
-    return [d.toLocaleDateString("es-AR"), d.toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" }),
+    return [d.toLocaleDateString("es-AR"), fmtHora(a.fecha),
       a.sedeNombre, tipoTextoCSV(a), a.pacienteFicha || "—", a.pacienteNombre, a.pacienteDni, a.medicoResponsable || "—",
       a.peso ?? "—", a.talla ?? "—", a.estudio || "—", a.farmNombre || "—", a.lote || a.numeroLote || "—",
       dosis?.valor ?? "—", dosis?.unidad ?? "—", a.indicacion || "—", a.dosisActaId || "—", a.usuarioNombre, a.observacion || "—",
