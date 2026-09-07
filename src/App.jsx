@@ -337,7 +337,7 @@ function AppAutenticada({ usuario, refrescarUsuario }) {
 
       <main className="max-w-5xl mx-auto px-4 pt-6 pb-24 md:py-6">
         {vista === "inventario" && <VistaInventario catalogo={catalogo} usuario={usuario} esAdmin={esAdmin} onToast={(m, t, d) => setToast({ m, t, d })} navInventario={navInventario} />}
-        {vista === "pedidos" && esAdmin && <VistaPedidos catalogo={catalogo} esAdmin={esAdmin} onToast={(m, t, d) => setToast({ m, t, d })} />}
+        {vista === "pedidos" && esAdmin && <VistaPedidos catalogo={catalogo} usuario={usuario} esAdmin={esAdmin} onToast={(m, t, d) => setToast({ m, t, d })} />}
         {vista === "historial" && <VistaHistorial catalogo={catalogo} usuario={usuario} esAdmin={esAdmin} onToast={(m, t, d) => setToast({ m, t, d })} />}
         {vista === "administracion" && <VistaAdministracion catalogo={catalogo} usuario={usuario} esAdmin={esAdmin} onToast={(m, t, d) => setToast({ m, t, d })} navAdministracion={navAdministracion} onIrAAdministracion={irAAdministracion} />}
         {vista === "terapia-i131" && <VistaTerapiaI131 catalogo={catalogo} usuario={usuario} esAdmin={esAdmin} onToast={(m, t, d) => setToast({ m, t, d })} onIrAAdministracion={irAAdministracion} />}

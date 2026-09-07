@@ -8,6 +8,14 @@
 // y el tabulador no depende de la configuración regional de separador de
 // listas como sí depende ";"/",", así que tampoco hace falta "sep=".
 const BOM_UTF16LE = new Uint8Array([0xff, 0xfe]);
+// Bug real (Pedidos/Reposición, único llamador con "text/plain" en todo el
+// proyecto): el Blob del string SÍ queda bien codificado en UTF-8 -- lo que
+// faltaba es el BOM, así que cualquier visor de texto plano que no
+// autodetecte (Notepad clásico, etc.) caía al códigos ANSI/Windows-1252 por
+// default, mostrando "Ã³n" en vez de "ón". No toca la rama CSV (ya resuelta
+// con su propio fix de UTF-16LE) ni la de JSON (el backup) -- ningún parser
+// JSON depende de BOM, agregarlo ahí no aporta nada y no está pedido.
+const BOM_UTF8 = new Uint8Array([0xef, 0xbb, 0xbf]);
 
 function aBytesUtf16LE(texto) {
   const bytes = new Uint8Array(texto.length * 2);
@@ -21,7 +29,8 @@ function aBytesUtf16LE(texto) {
 
 export function descargarArchivo(contenido, nombreArchivo, mime = "text/plain;charset=utf-8") {
   const esCsv = mime.startsWith("text/csv");
-  const partes = esCsv ? [BOM_UTF16LE, aBytesUtf16LE(contenido)] : [contenido];
+  const esTextoPlano = mime.startsWith("text/plain");
+  const partes = esCsv ? [BOM_UTF16LE, aBytesUtf16LE(contenido)] : esTextoPlano ? [BOM_UTF8, contenido] : [contenido];
   const blob = new Blob(partes, { type: mime });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");

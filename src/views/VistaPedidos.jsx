@@ -3,17 +3,22 @@ import { Badge } from "../components/ui/Badge.jsx";
 import { Btn } from "../components/ui/Btn.jsx";
 import { Input } from "../components/ui/Input.jsx";
 import { Sel } from "../components/ui/Sel.jsx";
-import { fmtF, hoy } from "../helpers/formato.js";
+import { fmtF, hoy, diasV } from "../helpers/formato.js";
 import { descargarArchivo } from "../helpers/descargarArchivo.js";
 import { totStock, farmsDeSede, sedesActivas, puntoReorden } from "../helpers/stock.js";
+import { PortalImpresion } from "../components/impresion/PortalImpresion.jsx";
+import { ImprimiblePedido } from "../components/impresion/ImprimiblePedido.jsx";
 
-export function VistaPedidos({ catalogo, esAdmin, onToast }) {
+export function VistaPedidos({ catalogo, usuario, esAdmin, onToast }) {
   const [sedeF, setSedeF] = useState("");
   const [agruparPor, setAgruparPor] = useState("sede"); // "sede" | "proveedor"
   // Ajuste puntual de sesión, no se guarda en Firestore -- "sugerido" (el
   // cálculo automático) queda intacto como referencia, "cantidad" es lo que
   // realmente se exporta. Se pierde al salir de la pantalla, a propósito.
   const [cantidadesEditadas, setCantidadesEditadas] = useState({});
+  // Sede que se está imprimiendo ahora mismo (o null) -- portal de
+  // impresión, mismo mecanismo que la impresión mensual de Actas.
+  const [sedeImprimiendo, setSedeImprimiendo] = useState(null);
 
   const items = useMemo(() => {
     const res = [];
@@ -69,6 +74,39 @@ export function VistaPedidos({ catalogo, esAdmin, onToast }) {
   // Lista chica (decenas de ítems como mucho) -- no hace falta useMemo acá.
   const grupos = agruparItems(items);
 
+  // "En stock" (para el PDF, NUEVO -- no existía antes de este cambio):
+  // radiofármacos por ENCIMA del mínimo (opuesto de "items" de arriba,
+  // que sólo trae lo que está por debajo). Una fila por LOTE individual,
+  // no un total agregado -- catalogo.stock[sedeId][farmId] es un array,
+  // un mismo radiofármaco puede tener varios lotes con vencimientos
+  // distintos (confirmado en helpers/stock.js). Mismo criterio de "próximo
+  // a vencer" (≤30 días) que ya usa TablaInventario.jsx, reusado acá para
+  // no inventar un umbral nuevo.
+  function enStockDeSede(sedeId) {
+    const res = [];
+    farmsDeSede(catalogo, sedeId).forEach((f) => {
+      const lotes = catalogo.stock[sedeId]?.[f.id] || [];
+      const tot = totStock(lotes);
+      const mn = puntoReorden(catalogo, sedeId, f.id);
+      if (tot > mn) {
+        const lotesConStock = lotes.filter((l) => l.cantidad > 0).map((l) => {
+          const dias = diasV(l.vencimiento);
+          return { lote: l.lote, cantidad: l.cantidad, vencimiento: l.vencimiento, dias, vencido: dias !== null && dias < 0, pronto: dias !== null && dias >= 0 && dias <= 30 };
+        });
+        if (lotesConStock.length) res.push({ farm: f, lotes: lotesConStock });
+      }
+    });
+    return res;
+  }
+
+  // Mismo patrón que la impresión mensual de Actas -- se monta el
+  // documento en el portal y recién en el próximo frame se dispara
+  // window.print(), para que React ya haya pintado el DOM.
+  function imprimirPedido(sede) {
+    setSedeImprimiendo(sede);
+    requestAnimationFrame(() => requestAnimationFrame(() => window.print()));
+  }
+
   function exportarTxt() {
     const l = [`PEDIDO / REPOSICIÓN — FUESMEN`, `Fecha: ${fmtF(hoy())}`, `Agrupado por: ${agruparPor === "proveedor" ? "Proveedor" : "Sede"}`, ``];
     grupos.forEach(({ titulo, contacto, items: its }) => {
@@ -108,6 +146,22 @@ export function VistaPedidos({ catalogo, esAdmin, onToast }) {
           {esAdmin && items.length > 0 && <Btn size="sm" variant="outline" onClick={exportarTxt} className="w-full md:w-auto">↓ .txt</Btn>}
         </div>
       </div>
+      {/* PDF por sede -- mismo mecanismo de impresión nativa que la
+          impresión mensual de Actas. "A reponer" y "En stock" se calculan
+          por sede (no por lo que esté agrupado/filtrado en pantalla),
+          porque el documento en sí siempre es de UNA sede. Si "Todas las
+          sedes" está elegido arriba, se ofrece un botón por cada sede
+          activa; si hay una sede puntual elegida, sólo esa. */}
+      {esAdmin && (
+        <div className="bg-blue-50 border border-blue-100 rounded-xl px-4 py-3 flex flex-col gap-2">
+          <p className="text-xs font-bold text-blue-800">Imprimir / guardar como PDF (por sede)</p>
+          <div className="flex flex-wrap gap-2">
+            {(sedeF ? sedesActivas(catalogo).filter((s) => s.id === sedeF) : sedesActivas(catalogo)).map((s) => (
+              <Btn key={s.id} size="sm" variant="outline" onClick={() => imprimirPedido(s)}>{s.short} — PDF</Btn>
+            ))}
+          </div>
+        </div>
+      )}
       {items.length === 0 ? (
         <div className="bg-emerald-50 border border-emerald-100 rounded-2xl p-12 text-center">
           <div className="text-4xl mb-3">✓</div>
@@ -154,6 +208,16 @@ export function VistaPedidos({ catalogo, esAdmin, onToast }) {
             </div>
           ))}
         </div>
+      )}
+      {sedeImprimiendo && (
+        <PortalImpresion>
+          <ImprimiblePedido
+            sedeNombre={sedeImprimiendo.nombre}
+            generadoPor={usuario?.nombre || "—"}
+            aReponer={items.filter((i) => i.sede.id === sedeImprimiendo.id)}
+            enStock={enStockDeSede(sedeImprimiendo.id)}
+          />
+        </PortalImpresion>
       )}
     </div>
   );
