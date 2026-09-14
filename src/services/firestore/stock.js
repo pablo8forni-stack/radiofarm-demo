@@ -13,6 +13,7 @@ import {
 } from "firebase/firestore";
 import { db } from "../../firebase.js";
 import { conMensajeDeContingencia } from "../../helpers/erroresRed.js";
+import { normalizarLoteSeisDigitos } from "../../helpers/lote.js";
 
 const lotesRef = (sedeId, loteId) => doc(db, "sedes", sedeId, "lotes", loteId);
 const movimientosCol = collection(db, "movimientos");
@@ -37,9 +38,15 @@ export function listenLotes(callback) {
 // Ingreso: siempre crea un lote nuevo (no mergea), no depende de leer nada
 // antes -> writeBatch, offline-safe (se encola y sincroniza solo).
 export function ingresoBatch({ sedeId, sedeNombre, farm, lote, vencimiento, cantidad, kits, unidadesSueltas, proveedorNombre, observacion, usuario }) {
+  // normalizarLoteSeisDigitos (no sólo .trim()) -- defensivo, por si se
+  // guarda sin haber pasado por el onBlur del campo (ver ModalIngreso.jsx).
+  // Se calcula UNA vez acá y se reusa en los dos documentos de abajo, para
+  // que el lote nuevo y su movimiento de ingreso queden con el mismo texto
+  // exacto, nunca desalineados entre sí.
+  const loteNormalizado = normalizarLoteSeisDigitos(lote);
   const batch = writeBatch(db);
   const nuevoLoteRef = doc(collection(db, "sedes", sedeId, "lotes"));
-  batch.set(nuevoLoteRef, { farmId: farm.id, lote, vencimiento, cantidad, proveedorNombre, creadoEn: serverTimestamp() });
+  batch.set(nuevoLoteRef, { farmId: farm.id, lote: loteNormalizado, vencimiento, cantidad, proveedorNombre, creadoEn: serverTimestamp() });
   // unidadesSueltas: kits ya empezados al inventariar (frascos usados antes
   // de existir este registro) -- se refleja en el motivo para que el
   // Historial muestre el desglose real, no sólo el total (cantidad ya lo
@@ -52,7 +59,7 @@ export function ingresoBatch({ sedeId, sedeNombre, farm, lote, vencimiento, cant
     : "Recepción de pedido";
   batch.set(doc(movimientosCol), {
     fecha: serverTimestamp(), tipo: "ingreso", sedeId, sedeNombre,
-    farmId: farm.id, farmNombre: farm.nombre, cantidad, lote, loteId: nuevoLoteRef.id,
+    farmId: farm.id, farmNombre: farm.nombre, cantidad, lote: loteNormalizado, loteId: nuevoLoteRef.id,
     motivo, observacion, proveedorNombre, usuarioNombre: usuario.nombre, usuarioEmail: usuario.email,
   });
   return batch.commit();

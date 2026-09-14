@@ -9,8 +9,19 @@ import { fmtF, fmtTs } from "../../helpers/formato.js";
 import { listenActas, anularActaTransaction, listenAnulacionesActas } from "../../services/firestore/actas.js";
 import { addMibgLote, listenMibgLotes } from "../../services/firestore/mibgLotes.js";
 import { estadoMibgLote } from "../../helpers/mibgLote.js";
+import { actividadCalibradaHaciaAtras } from "../../helpers/decaimientoLu177.js";
 
-const VACIO = { numeroLote: "", proveedor: "", actividadCalibrada: "", volumen: "", fechaHoraCalibracion: "", fechaVencimiento: "", conformidad: null, obs: "" };
+// concentracionCalibracion/actividadAdministracion/fechaHoraAdministracion y
+// calibradaTocada son EFÍMEROS -- sólo existen acá para calcular
+// actividadCalibrada (que sí se guarda, como siempre); guardar() más abajo
+// nunca los lee, así que nunca viajan a Firestore. Si algún día RadioFarm
+// absorbe el libro aparte que llevan los físicos (dosis administrada vs.
+// remanente), ahí se diseña la trazabilidad completa del cálculo con ese
+// panorama entero a la vista -- no antes, a medias, sin saber qué necesita.
+const VACIO = {
+  numeroLote: "", proveedor: "", actividadCalibrada: "", volumen: "", fechaHoraCalibracion: "", fechaVencimiento: "", conformidad: null, obs: "",
+  concentracionCalibracion: "", actividadAdministracion: "", fechaHoraAdministracion: "", calibradaTocada: false,
+};
 
 const ESTADO_LOTE = {
   disponible: { label: "Disponible", color: "green" },
@@ -113,6 +124,38 @@ export function TabLoteDosisUnica({ catalogo, usuario, esAdmin, onToast, isotopo
     setMAnular(lote);
   }
 
+  // Cálculo principal (sólo Lutecio-177, ver placeholderLote/isotopoId):
+  // MBq/mL en calibración × volumen = MBq totales, /37 = mCi. Autocompleta
+  // "Actividad calibrada (mCi)" EN VIVO mientras no se haya tocado a mano
+  // (calibradaTocada) -- mismo patrón ya usado para la sugerencia de N° de
+  // Ficha en TabPacientes.jsx: una vez que la técnica edita el campo
+  // directamente, se deja de pisar por el resto de esta carga.
+  useEffect(() => {
+    if (isotopoId !== "lutecio177" || form.calibradaTocada) return;
+    const conc = parseFloat(form.concentracionCalibracion);
+    const vol = parseFloat(form.volumen);
+    if (!conc || !vol) return;
+    const mCi = (conc * vol) / 37;
+    setForm((f) => (f.calibradaTocada ? f : { ...f, actividadCalibrada: mCi.toFixed(2) }));
+  }, [isotopoId, form.concentracionCalibracion, form.volumen, form.calibradaTocada]);
+
+  // Verificación cruzada (sólo Lutecio-177): recalcula la actividad de
+  // calibración HACIA ATRÁS desde la actividad de administración -- si
+  // difiere de lo que quedó en "Actividad calibrada (mCi)" en más de 15%
+  // (mismo umbral ya usado para el aviso activímetro-vs-calculado en
+  // VialDetalle.jsx), es sólo una guía -- nunca bloquea "Guardar lote", la
+  // decisión final es de la técnica.
+  const cruzadaMCi = useMemo(() => {
+    if (isotopoId !== "lutecio177") return null;
+    const actAdmin = parseFloat(form.actividadAdministracion);
+    if (!actAdmin || !form.fechaHoraAdministracion || !form.fechaHoraCalibracion) return null;
+    const mbq = actividadCalibradaHaciaAtras(actAdmin, form.fechaHoraCalibracion, form.fechaHoraAdministracion);
+    return mbq / 37;
+  }, [isotopoId, form.actividadAdministracion, form.fechaHoraAdministracion, form.fechaHoraCalibracion]);
+  const actividadCalibradaActual = parseFloat(form.actividadCalibrada) || 0;
+  const difierenMucho = cruzadaMCi != null && actividadCalibradaActual > 0 &&
+    Math.abs(cruzadaMCi - actividadCalibradaActual) > actividadCalibradaActual * 0.15;
+
   async function guardar() {
     if (!form.numeroLote.trim() || !form.proveedor.trim() || !form.actividadCalibrada || !form.volumen || !form.fechaHoraCalibracion || !form.fechaVencimiento) return;
     if (form.conformidad === null) return;
@@ -173,11 +216,38 @@ export function TabLoteDosisUnica({ catalogo, usuario, esAdmin, onToast, isotopo
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <Input label="N° de lote" value={form.numeroLote} onChange={(e) => setForm((f) => ({ ...f, numeroLote: e.target.value }))} placeholder={placeholderLote} />
             <Input label="Proveedor" value={form.proveedor} onChange={(e) => setForm((f) => ({ ...f, proveedor: e.target.value }))} placeholder="Ej: IPEN" />
-            <Input label="Actividad calibrada (mCi)" type="number" min={0} step={0.1} value={form.actividadCalibrada} onChange={(e) => setForm((f) => ({ ...f, actividadCalibrada: e.target.value }))} placeholder={placeholderActividad} />
+            <Input label="Actividad calibrada (mCi)" type="number" min={0} step={0.1} value={form.actividadCalibrada}
+              onChange={(e) => setForm((f) => ({ ...f, actividadCalibrada: e.target.value, calibradaTocada: true }))} placeholder={placeholderActividad} />
             <Input label="Volumen (mL)" type="number" min={0} step={0.1} value={form.volumen} onChange={(e) => setForm((f) => ({ ...f, volumen: e.target.value }))} placeholder="10" />
             <Input label="Fecha/hora de calibración" type="datetime-local" value={form.fechaHoraCalibracion} onChange={(e) => setForm((f) => ({ ...f, fechaHoraCalibracion: e.target.value }))} />
             <Input label="Fecha de vencimiento" type="date" value={form.fechaVencimiento} onChange={(e) => setForm((f) => ({ ...f, fechaVencimiento: e.target.value }))} />
           </div>
+
+          {isotopoId === "lutecio177" && (
+            <div className="border border-gray-100 rounded-xl p-3 flex flex-col gap-3 bg-gray-50/50">
+              <p className="text-xs font-semibold text-gray-600">
+                Datos de la etiqueta (opcional) -- calcula "Actividad calibrada (mCi)" sola, para no convertir MBq→mCi a mano.
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <Input label="Concentración en calibración (MBq/mL)" type="number" min={0} step={0.01}
+                  value={form.concentracionCalibracion} onChange={(e) => setForm((f) => ({ ...f, concentracionCalibracion: e.target.value }))} />
+                <Input label="Actividad en administración (MBq)" type="number" min={0} step={0.01}
+                  value={form.actividadAdministracion} onChange={(e) => setForm((f) => ({ ...f, actividadAdministracion: e.target.value }))} />
+                <Input label="Fecha/hora de administración" type="datetime-local"
+                  value={form.fechaHoraAdministracion} onChange={(e) => setForm((f) => ({ ...f, fechaHoraAdministracion: e.target.value }))} />
+              </div>
+              {cruzadaMCi != null && (
+                <div className="text-xs text-gray-500">
+                  Verificación cruzada (hacia atrás desde administración): <span className="font-semibold text-gray-700">{cruzadaMCi.toFixed(2)} mCi</span>
+                </div>
+              )}
+              {difierenMucho && (
+                <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-1.5">
+                  Los datos no cierran entre sí -- revisá lo tipeado.
+                </div>
+              )}
+            </div>
+          )}
           <div>
             <label className="text-xs font-semibold text-gray-600 mb-1.5 block">¿Lo recibido coincide con lo pedido?</label>
             <div className="flex gap-2">

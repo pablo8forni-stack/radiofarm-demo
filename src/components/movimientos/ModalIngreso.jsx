@@ -4,6 +4,7 @@ import { Btn } from "../ui/Btn.jsx";
 import { Input } from "../ui/Input.jsx";
 import { Sel } from "../ui/Sel.jsx";
 import { hoy } from "../../helpers/formato.js";
+import { normalizarLoteSeisDigitos } from "../../helpers/lote.js";
 
 // itemEditando: cuando se pasa, precarga el formulario con un ítem ya
 // agregado al carrito (para corregirlo sin tener que recargarlo de cero) en
@@ -46,7 +47,12 @@ export function ModalIngreso({ open, farm, proveedores, itemEditando, onConfirm,
   return (
     <Modal open={open} title={`${itemEditando ? "Editar ingreso" : "Ingreso"} — ${farm?.nombre}`} onClose={onClose} size="sm">
       <div className="flex flex-col gap-4">
-        <Input label="N° de lote" value={lote} onChange={(e) => setLote(e.target.value)} placeholder="Ej: ARN-2025-050" />
+        <div className="flex flex-col gap-1">
+          <Input label="N° de lote" value={lote} onChange={(e) => setLote(e.target.value)}
+            onBlur={() => setLote((l) => normalizarLoteSeisDigitos(l))}
+            placeholder="Ej: 1-11111" />
+          <p className="text-xs text-gray-400">No hace falta poner el guion, se completa solo al salir del campo.</p>
+        </div>
         <Input label="Fecha de vencimiento" type="date" value={venc} onChange={(e) => setVenc(e.target.value)} min={hoy()} />
         <div className="flex flex-col gap-1">
           {/* Mínimo 1 SÓLO cuando no hay kits (ahí cant es la única cantidad

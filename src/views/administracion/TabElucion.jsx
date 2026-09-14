@@ -7,7 +7,8 @@ import { ModalAnularActa } from "../../components/actas/ModalAnularActa.jsx";
 import { fmtF, fmtTs, fmtHora, fmtFechaISO, hoy, agruparPorFecha } from "../../helpers/formato.js";
 import { descargarArchivo } from "../../helpers/descargarArchivo.js";
 import { sedesActivas } from "../../helpers/stock.js";
-import { listenActas, addActaElucion, actasPorRango, anularActaTransaction, listenAnulacionesActas, loteGeneradorYaRegistrado, normalizarLoteGenerador } from "../../services/firestore/actas.js";
+import { normalizarLoteSeisDigitos } from "../../helpers/lote.js";
+import { listenActas, addActaElucion, actasPorRango, anularActaTransaction, listenAnulacionesActas, loteGeneradorYaRegistrado } from "../../services/firestore/actas.js";
 
 const TIMEOUT_BUSQUEDA_MS = 20000;
 const MSJ_TIMEOUT_BUSQUEDA = "La consulta tardó demasiado, puede haber un problema de conexión -- intentá cerrar las otras pestañas de RadioFarm que tengas abiertas y reintentá.";
@@ -70,11 +71,11 @@ export function TabElucion({ catalogo, usuario, esAdmin, onToast }) {
   useEffect(() => {
     const lote = loteVerificado.trim();
     if (!lote) { setEsPrimeraVez(false); return; }
-    // Mismo criterio de normalización que el id determinístico del marcador
-    // (services/firestore/actas.js) -- si compara el texto tal cual lo tipeó
-    // cada quien, "Gen2026014" y "gen2026014" nunca matchean entre sí.
-    const loteNormalizado = normalizarLoteGenerador(lote);
-    if (actasTodas.some((a) => a.loteGenerador && normalizarLoteGenerador(a.loteGenerador) === loteNormalizado)) {
+    // Misma normalización compartida (helpers/lote.js) que arma el id
+    // determinístico del marcador en actas.js -- si compara el texto tal
+    // cual lo tipeó cada quien, "1-11111" y "111111" nunca matchean entre sí.
+    const loteNormalizado = normalizarLoteSeisDigitos(lote);
+    if (actasTodas.some((a) => a.loteGenerador && normalizarLoteSeisDigitos(a.loteGenerador) === loteNormalizado)) {
       setEsPrimeraVez(false);
       return;
     }
@@ -126,11 +127,11 @@ export function TabElucion({ catalogo, usuario, esAdmin, onToast }) {
     if (!catalogo.sedes[sedeId]?.eluye) return;
     const datos = {
       sedeId, sedeNombre: catalogo.sedes[sedeId]?.nombre,
-      // normalizarLoteGenerador (no sólo .trim()) -- defensivo, por si se
+      // normalizarLoteSeisDigitos (no sólo .trim()) -- defensivo, por si se
       // guarda sin haber pasado por el onBlur del campo (poco probable,
       // pero así el valor GUARDADO queda siempre en el formato correcto,
       // no sólo lo que se ve en pantalla).
-      loteGenerador: normalizarLoteGenerador(loteGenerador),
+      loteGenerador: normalizarLoteSeisDigitos(loteGenerador),
       actividadEluida: parseFloat(actividadEluida) || 0,
       volumen: parseFloat(volumen) || 0,
       usuarioNombre: usuario.nombre, usuarioEmail: usuario.email, observacion: obs.trim(),
@@ -360,7 +361,7 @@ export function TabElucion({ catalogo, usuario, esAdmin, onToast }) {
                   // (no sólo lo usa para comparar internamente) -- así el
                   // técnico ve al toque que "111111"/"1 11111" quedó en
                   // "1-11111", el mismo formato que efectivamente se guarda.
-                  const normalizado = normalizarLoteGenerador(loteGenerador);
+                  const normalizado = normalizarLoteSeisDigitos(loteGenerador);
                   setLoteGenerador(normalizado);
                   setLoteVerificado(normalizado);
                 }}

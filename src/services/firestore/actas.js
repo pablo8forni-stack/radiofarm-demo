@@ -2,41 +2,20 @@ import { collection, doc, getDoc, getDocs, onSnapshot, orderBy, limit, query, ru
 import { db } from "../../firebase.js";
 import { conMensajeDeContingencia } from "../../helpers/erroresRed.js";
 import { hoy } from "../../helpers/formato.js";
+import { normalizarLoteSeisDigitos } from "../../helpers/lote.js";
 
 const actasCol = collection(db, "actas");
 const generadoresCol = collection(db, "generadoresVistos");
 const fichasUsadasCol = collection(db, "fichasUsadas");
-// El id determinístico no puede depender de mayúsculas/espacios tal como los
-// tipeó cada quien -- un teclado de celular autocapitaliza/autocorrige
-// distinto entre dos cargas del "mismo" lote, y eso alcanza para que
-// "Gen2026014" y "gen2026014" construyan ids distintos y el marcador nunca
-// se encuentre. El campo loteGenerador de la propia acta (lo que se ve en
-// listado/CSV) conserva el texto tal cual se tipeó -- esto normaliza sólo
-// para el id interno, no para el dato mostrado.
-// Formato real del proveedor (hace años, sin garantía de que dure para
-// siempre -- no sobre-diseñamos para un cambio futuro hipotético): 1
-// dígito - 5 dígitos (ej. "1-11111"). Distintos técnicos anotaban el MISMO
-// lote real con guion en lugares distintos (o sin guion) -- como el id de
-// generadoresVistos/loteGeneradorVisto compara texto exacto, eso hacía que
-// el sistema tratara el mismo lote real como "generador nuevo" dos veces
-// (pedía de nuevo la calibración). Normalizar acá, en el único lugar que
-// arma tanto ese id como la comparación local (TabElucion.jsx), cierra el
-// problema de fondo en los dos lugares a la vez.
-// Sólo reformatea si el texto ORIGINAL es puramente numérico (dígitos,
-// espacios y/o guiones, nada más) Y da exactamente 6 dígitos al sacar los
-// separadores -- si tiene CUALQUIER letra u otro carácter, se deja intacto
-// tal cual, aunque por casualidad tenga 6 dígitos "escondidos" adentro (ej.
-// "TN111111" nunca debe perder las letras). Chequear sólo la cantidad de
-// dígitos extraídos, sin primero confirmar que el original no tenía nada
-// más, fue exactamente el bug real que esto reemplaza.
-export function normalizarLoteGenerador(lote) {
-  const limpio = (lote || "").trim().toUpperCase();
-  if (!/^[\d\s-]+$/.test(limpio)) return limpio;
-  const soloDigitos = limpio.replace(/[^0-9]/g, "");
-  if (/^\d{6}$/.test(soloDigitos)) return `${soloDigitos[0]}-${soloDigitos.slice(1)}`;
-  return limpio;
-}
-const generadorRef = (sedeId, loteGenerador) => doc(generadoresCol, `${sedeId}_${normalizarLoteGenerador(loteGenerador)}`);
+// El id determinístico no puede depender de mayúsculas/espacios ni de
+// guion-sí/guion-no tal como los tipeó cada quien -- eso hacía que el
+// sistema tratara el mismo lote real como "generador nuevo" dos veces
+// (pedía de nuevo la calibración). normalizarLoteSeisDigitos (helpers/
+// lote.js, compartida con Ingreso en Inventario -- misma regla real del
+// mismo proveedor, no una coincidencia) resuelve esto. El campo
+// loteGenerador de la propia acta (lo que se ve en listado/CSV) usa esa
+// misma normalización desde TabElucion.jsx -- acá sólo arma el id interno.
+const generadorRef = (sedeId, loteGenerador) => doc(generadoresCol, `${sedeId}_${normalizarLoteSeisDigitos(loteGenerador)}`);
 const PAGINA = 150;
 
 // tipo: "paciente" | "marcacion". El filtro de fecha se aplica client-side
