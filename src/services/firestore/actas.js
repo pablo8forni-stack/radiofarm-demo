@@ -84,6 +84,18 @@ export async function actasPorRango(tipo, { desde, hasta, sedeId }) {
   return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
 }
 
+// Un solo día de Marcación (Libro 1) para una sede -- caso especial de
+// actasPorRango con tipo fijo "marcacion" y desde == hasta. Usado por
+// TabPacientes.jsx SOLO cuando hay una fecha real de atención distinta de
+// hoy (carga tardía, ver fechaFichaSiguiente/mostrarFechaReal): un día
+// pasado no cambia, no amerita el listener en vivo que sí usa
+// listenActasMarcacionHoy para el caso normal. Mismo shape de índice
+// compuesto (tipo, sedeId, fecha) que ya usan listenActas/actasPorRango/
+// listenActasMarcacionHoy -- no debería requerir ningún índice nuevo.
+export function actasMarcacionPorFecha(sedeId, fecha) {
+  return actasPorRango("marcacion", { desde: fecha, hasta: fecha, sedeId });
+}
+
 // Historial completo de I-131 por paciente (Parte C, para auditorías ARN) --
 // consulta acotada directamente por pacienteDni + tipo (nunca trae el
 // histórico de otros pacientes). Requiere el índice compuesto
@@ -188,6 +200,26 @@ export async function obtenerUltimaFicha(sedeId) {
   const q = query(fichasUsadasCol, where("sedeId", "==", sedeId), orderBy("pacienteFichaNum", "desc"), limit(1));
   const snap = await getDocs(q);
   return snap.empty ? null : snap.docs[0].data().pacienteFichaNum;
+}
+
+// Detección de carga tardía (Libro 2, TabPacientes.jsx): compara contra la
+// ficha SIGUIENTE (N+1), no la anterior -- como el N° de Ficha no se
+// reinicia por día (secuencia continua de VM RIS), comparar contra N-1
+// daría un falso positivo todos los días para el primer paciente de la
+// mañana (la ficha de ayer SIEMPRE es "de otro día", sin que eso implique
+// ningún atraso real). N+1 sólo da señal real cuando alguien YA cargó el
+// paciente siguiente -- evidencia genuina de estar completando un hueco.
+// Misma fecha propia del marcador (fichasUsadas.fecha, ver
+// datosFichaUsada) -- no hace falta ningún lookup al acta vinculada. Si
+// N+1 tiene más de un marcador (reintentos tras anular), toma el de fecha
+// más reciente -- el intento que probablemente quedó vigente; no es 100%
+// infalible ante un caso raro (anular y reintentar otro día), pero es
+// razonable para un aviso informativo, no bloqueante.
+export async function fechaFichaSiguiente(sedeId, pacienteFicha) {
+  const siguiente = parseInt(pacienteFicha, 10) + 1;
+  const snap = await getDocs(query(fichasUsadasCol, where("sedeId", "==", sedeId), where("pacienteFichaNum", "==", siguiente)));
+  if (snap.empty) return null;
+  return snap.docs.map((d) => d.data().fecha).reduce((masReciente, f) => (!masReciente || f.toMillis() > masReciente.toMillis() ? f : masReciente), null);
 }
 
 // Crea la acta Y el marcador de ficha usada en el MISMO batch -- si el

@@ -11,9 +11,11 @@
     "lint": "oxlint",
     "preview": "vite preview",
     "seed": "node scripts/seed.mjs",
+    "test:unit": "node --test scripts/testing/guardSecuencia.test.mjs",
     "test:staging": "node --env-file=.env.staging --test --test-concurrency=1 --test-timeout=30000 scripts/testing/reglas.test.mjs scripts/testing/transacciones.test.mjs scripts/testing/anulacion.test.mjs scripts/testing/solicitudes.test.mjs",
     "test:emulator": "firebase emulators:exec --only firestore,auth --project radiofarm-fuesmen-staging \"node --env-file=.env.emulator --test --test-concurrency=1 --test-timeout=30000 scripts/testing/reglas.test.mjs scripts/testing/transacciones.test.mjs scripts/testing/anulacion.test.mjs scripts/testing/solicitudes.test.mjs\"",
-    "staging:reset": "firebase firestore:delete --all-collections --project radiofarm-fuesmen-staging --force"
+    "staging:reset": "firebase firestore:delete --all-collections --project radiofarm-fuesmen-staging --force",
+    "staging:ultimas-actas": "node --env-file=.env.staging scripts/testing/ultimasActas.mjs"
   },
   "dependencies": {
     "firebase": "^12.16.0",

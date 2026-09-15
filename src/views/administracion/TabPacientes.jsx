@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { Badge } from "../../components/ui/Badge.jsx";
 import { Btn } from "../../components/ui/Btn.jsx";
 import { Input } from "../../components/ui/Input.jsx";
@@ -11,12 +11,13 @@ import { parseQR } from "../../helpers/qr.js";
 import { prepararSonidoEscaneo } from "../../helpers/feedbackEscaneo.js";
 import { sedesActivas, farmsDeSede } from "../../helpers/stock.js";
 import { normalizarFicha, compararPorSedeYFichaDescendente } from "../../helpers/fichaPaciente.js";
+import { crearGuardDeSecuencia } from "../../helpers/guardSecuencia.js";
 import { TIPO_LABEL_I131 } from "../../constants/tipoI131.js";
 import {
   listenActas, addActaPaciente, actasPorRango, anularActaTransaction, listenAnulacionesActas,
   addActaI131Ablativa, addActaI131Dosis, addActaI131Barrido,
   addActaI131Captacion, addActaI131Centellograma, addActaI131CaptacionCentellograma,
-  resolverFichaIntento, obtenerUltimaFicha, listenActasMarcacionHoy,
+  resolverFichaIntento, obtenerUltimaFicha, listenActasMarcacionHoy, fechaFichaSiguiente, actasMarcacionPorFecha,
 } from "../../services/firestore/actas.js";
 import { listenMibgLotes, administrarMibgTransaction, administrarLutecioTransaction } from "../../services/firestore/mibgLotes.js";
 import { estadoMibgLote } from "../../helpers/mibgLote.js";
@@ -36,6 +37,32 @@ function tsMillis(fecha) {
   if (!fecha) return 0;
   const d = typeof fecha?.toDate === "function" ? fecha.toDate() : new Date(fecha);
   return Number.isNaN(d.getTime()) ? 0 : d.getTime();
+}
+
+// Componentes LOCALES (no toISOString(), que convierte a UTC y desfasa la
+// hora mostrada -- mismo motivo por el que hoy()/fmtFechaISO en
+// helpers/formato.js tampoco usan toISOString()) -- para precargar el
+// <input type="datetime-local"> de "Fecha real de atención" con el
+// momento actual.
+function ahoraComoDatetimeLocal() {
+  const d = new Date();
+  const y = d.getFullYear(), m = String(d.getMonth() + 1).padStart(2, "0"), day = String(d.getDate()).padStart(2, "0");
+  const h = String(d.getHours()).padStart(2, "0"), min = String(d.getMinutes()).padStart(2, "0");
+  return `${y}-${m}-${day}T${h}:${min}`;
+}
+
+// Dedupe de lotes marcados (Libro 1) para un radiofármaco -- compartida
+// entre el caso normal (lotesMarcadosHoy, actas de HOY) y el de carga
+// tardía (lotesMarcadosFecha, actas de la fecha real de atención): misma
+// regla exacta, sólo cambia la fuente de actas cruda. Si el mismo lote se
+// marcó varias veces, aparece una sola vez; lotes DISTINTOS se acumulan.
+// vencimiento es sólo un dato de Inventario (stock ACTUAL) para mostrar en
+// la opción -- si el lote ya no está en stock, igual queda en la lista,
+// sin ese dato extra.
+function dedupeLotesPorFarm(actasRaw, farmId, lotesEnStock) {
+  const stockPorLote = new Map(lotesEnStock.map((l) => [l.lote, l]));
+  const lotesUnicos = [...new Set(actasRaw.filter((a) => a.farmId === farmId).map((a) => a.lote))];
+  return lotesUnicos.map((loteTxt) => ({ id: loteTxt, lote: loteTxt, vencimiento: stockPorLote.get(loteTxt)?.vencimiento }));
 }
 
 // Conformidad de un lote (MIBG/Lutecio-177) -- 3 estados, no 2: además de
@@ -106,6 +133,37 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
   // apenas fichaNro cambia (ver onChange más abajo), así nunca queda un
   // error viejo pegado a un valor ya distinto.
   const [fichaEstado, setFichaEstado] = useState(null);
+  // Guard de secuencia para resolverYSetFichaEstado (ver esa función) --
+  // sólo el resultado de la llamada MÁS RECIENTE puede escribir estado; una
+  // respuesta tardía de una llamada vieja (con otra ficha) se descarta.
+  // Lógica extraída a helpers/guardSecuencia.js (testeada aparte, ver
+  // scripts/testing/guardSecuencia.test.mjs) -- useRef sólo guarda LA
+  // instancia estable entre renders, no reimplementa el conteo acá.
+  const fichaCheckGuard = useRef(crearGuardDeSecuencia()).current;
+  // Detección de carga tardía -- ver fechaFichaSiguiente (actas.js) para el
+  // porqué de comparar contra N+1 y no N-1. Dos flags separados en vez de
+  // uno solo: atrasoDetectado lo escribe SÓLO resolverYSetFichaEstado (la
+  // detección automática), modoManual lo escribe SÓLO el botón "Es una
+  // carga con fecha distinta" -- si fuera un único estado, el próximo blur
+  // del campo Ficha volvería a correr la detección automática y, al no
+  // encontrar atraso, pisaría a false lo que la técnica activó a mano.
+  // mostrarFechaReal (si se MUESTRA el campo/cambia el selector de lote,
+  // ver más abajo) es sólo la unión de los dos, nunca un estado propio.
+  // fechaRealAtencion es el valor en sí, nunca obligatorio, nunca reemplaza
+  // a `fecha` (el timestamp automático real).
+  const [atrasoDetectado, setAtrasoDetectado] = useState(false);
+  const [modoManual, setModoManual] = useState(false);
+  const mostrarFechaReal = atrasoDetectado || modoManual;
+  const [fechaRealAtencion, setFechaRealAtencion] = useState("");
+  // Mismo patrón que fichaTocada: una vez que la técnica edita el campo a
+  // mano, la precarga automática (ver useEffect más abajo) nunca lo vuelve
+  // a pisar -- defensa en profundidad además del guard de secuencia de
+  // resolverYSetFichaEstado (bug real encontrado con evidencia de Firebase
+  // Console: una respuesta tardía de una consulta vieja podía ocultar el
+  // campo y, al reaparecer, se re-precargaba con "ahora" sobre el valor ya
+  // tipeado). Sólo lo resetea limpiarForm -- ocultar/mostrar el campo por
+  // sí solo no lo toca.
+  const [fechaRealAtencionTocada, setFechaRealAtencionTocada] = useState(false);
   // Último "sugerida - 1" ya resuelto por precargarSugerenciaFicha (one-shot,
   // ver obtenerUltimaFicha) -- alimenta SÓLO el placeholder de abajo, para
   // el instante en que fichaNro está vacío. Ya no es un listener en tiempo
@@ -153,6 +211,21 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
   const [verTodoElStock, setVerTodoElStock] = useState(false);
   const [marcadosHoyRaw, setMarcadosHoyRaw] = useState([]);
   useEffect(() => { if (sedeId) return listenActasMarcacionHoy(sedeId, setMarcadosHoyRaw); }, [sedeId]);
+  // Carga tardía (mostrarFechaReal): mismos lotes marcados, pero de la
+  // fecha real de atención en vez de hoy -- getDocs suelto (actasMarcacionPorFecha),
+  // NO listener: un día pasado no cambia, no amerita onSnapshot en vivo.
+  // Sólo se dispara si mostrarFechaReal está activo -- en el flujo normal
+  // este estado queda vacío y sin usarse. Depende de la parte de FECHA de
+  // fechaRealAtencion (no del string completo), así que ajustar sólo la
+  // hora dentro del mismo día no reconsulta.
+  const [marcadosFechaRaw, setMarcadosFechaRaw] = useState([]);
+  const fechaRealSolo = fechaRealAtencion ? fechaRealAtencion.slice(0, 10) : "";
+  useEffect(() => {
+    if (!mostrarFechaReal || !fechaRealSolo || !sedeId) { setMarcadosFechaRaw([]); return; }
+    let cancelado = false;
+    actasMarcacionPorFecha(sedeId, fechaRealSolo).then((docs) => { if (!cancelado) setMarcadosFechaRaw(docs); });
+    return () => { cancelado = true; };
+  }, [mostrarFechaReal, fechaRealSolo, sedeId]);
   // Freno real (mismo patrón que TabMarcacion.jsx, mismo motivo): si se usa
   // "Ver todos los lotes en stock" y el lote elegido NO fue marcado hoy en
   // Libro 1, confirmación obligatoria antes de poder guardar -- no sólo
@@ -215,19 +288,61 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
   // render). La unicidad es por (sede, número) -- ver nota larga en
   // firestore.rules -- así que sedeId es tan parte de la consulta como el
   // número mismo.
+  // Bug real (hallado con evidencia de Firebase Console, no en teoría):
+  // esta función puede dispararse dos veces casi en simultáneo con fichas
+  // DISTINTAS -- típicamente precargarSugerenciaFicha (con la ficha
+  // SUGERIDA, al abrir el formulario) seguida de inmediato por el blur del
+  // técnico sobreescribiendo con la ficha REAL de un paciente atrasado. Las
+  // dos consultas a Firestore corren en paralelo y NO hay garantía de que
+  // resuelvan en el orden en que arrancaron -- si la de la ficha sugerida
+  // (ya irrelevante) resuelve DESPUÉS que la de la ficha real, pisaba
+  // silenciosamente atrasoDetectado con el resultado de una ficha que ya no
+  // es la que está en pantalla. fichaCheckGuard (mismo espíritu que el
+  // "cancelado" de la consulta de marcadosFechaRaw) descarta cualquier
+  // resultado que llegue cuando ya no es el más reciente en curso.
   async function resolverYSetFichaEstado(sedeIdChequeo, valorFicha) {
+    const miId = fichaCheckGuard.empezar();
     const normalizada = normalizarFicha(valorFicha);
-    if (!valorFicha?.trim()) { setFichaEstado(null); return; }
-    if (!normalizada) { setFichaEstado({ tipo: "formato" }); return; }
+    if (!valorFicha?.trim()) { setFichaEstado(null); setAtrasoDetectado(false); return; }
+    if (!normalizada) { setFichaEstado({ tipo: "formato" }); setAtrasoDetectado(false); return; }
     setFichaEstado("verificando");
-    const r = await resolverFichaIntento(sedeIdChequeo, normalizada);
+    const [r, fechaSiguiente] = await Promise.all([
+      resolverFichaIntento(sedeIdChequeo, normalizada),
+      fechaFichaSiguiente(sedeIdChequeo, normalizada),
+    ]);
+    if (!fichaCheckGuard.esVigente(miId)) return; // Llegó tarde -- ya hay (o hubo) una consulta más nueva, no pisar su resultado.
     if (r.intento) setFichaEstado({ tipo: "ok", intento: r.intento });
     else if (r.agotado) setFichaEstado({ tipo: "agotado" });
     else setFichaEstado({ tipo: "usada", data: r.bloqueadaPor });
+    // Sólo "anterior a hoy" (no sólo "distinto") -- si la ficha siguiente
+    // se cargó más tarde HOY mismo, no hay ningún atraso real que señalar.
+    const hayAtrasoReal = fechaSiguiente && fmtFechaISO(fechaSiguiente) < hoy();
+    setAtrasoDetectado(!!hayAtrasoReal);
   }
   function chequearFicha() {
     return resolverYSetFichaEstado(sedeId, fichaNro);
   }
+
+  // Único lugar que precarga/limpia fechaRealAtencion (mismo patrón
+  // "tocada" que ya usa el resto del form): al mostrarse el campo (por
+  // detección automática o por el botón manual), se precarga con el
+  // momento actual -- pero SÓLO si la técnica todavía no lo tocó a mano
+  // (fechaRealAtencionTocada), nunca pisando una edición real. Al
+  // ocultarse, se limpia para que un valor viejo no quede pegado y se cuele
+  // en guardar() si el campo ya no está visible. Además, si "Ver todo el
+  // stock" (lotesEnStock = STOCK ACTUAL, no de la fecha real -- ver
+  // comentario en su declaración) estaba tildado al entrar en modo fecha
+  // real, se apaga a la fuerza: dejarlo prendido ahí reabriría el mismo bug
+  // que este modo viene a cerrar (ver lotesDisp).
+  useEffect(() => {
+    if (mostrarFechaReal) {
+      if (!fechaRealAtencionTocada) setFechaRealAtencion(ahoraComoDatetimeLocal());
+      if (verTodoElStock) { setVerTodoElStock(false); setLote(""); setConfirmoSinMarcacion(false); }
+    } else if (fechaRealAtencion) {
+      setFechaRealAtencion("");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mostrarFechaReal]);
 
   // Precarga el campo N° de Ficha con la sugerencia (último real cargado +
   // 1, de la sede recibida como parámetro) como valor REAL y editable, no
@@ -406,6 +521,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
     setMostrarIsotopo(false); setIsotopoId("tc99m"); setMedicoResponsable("");
     setTipoI131("barrido"); setActividadAdministrada(""); setIndicacion(""); setDosisVinculada(""); setMibgLoteSeleccionado(""); setLutecioLoteSeleccionado("");
     setSedeId(usuario.sede); setVerTodoElStock(false); setConfirmoSinMarcacion(false);
+    setAtrasoDetectado(false); setModoManual(false); setFechaRealAtencion(""); setFechaRealAtencionTocada(false);
   }
 
   const esLutecio = isotopoId === "lu177";
@@ -452,6 +568,10 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
         // vez de mandar 0 (que se leería como "pesa 0kg", no "sin dato").
         ...(peso.trim() ? { peso: parseFloat(peso) || 0 } : {}),
         ...(talla.trim() ? { talla: parseFloat(talla) || 0 } : {}),
+        // Sólo se manda si el usuario completó el campo (caso de carga
+        // tardía detectada, ver fechaFichaSiguiente) -- NUNCA reemplaza
+        // `fecha` (el timestamp automático real de guardado, inmodificable).
+        ...(fechaRealAtencion ? { fechaRealAtencion: new Date(fechaRealAtencion) } : {}),
         usuarioNombre: usuario.nombre, usuarioEmail: usuario.email, observacion: obs.trim(),
       };
       if (tipoI131Actual.requierePermiso && !puedeCargarDosisI131) return;
@@ -522,7 +642,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
     if (!farmId) return;
     // Mismo freno que el botón (disabled más abajo) -- acá también, por si
     // guardar() se llegara a invocar de otra forma en el futuro.
-    if (loteSinMarcacionHoy && !confirmoSinMarcacion) return;
+    if (loteSinMarcacion && !confirmoSinMarcacion) return;
     const farm = catalogo.farms.find((f) => f.id === farmId);
     addActaPaciente({
       sedeId, sedeNombre: catalogo.sedes[sedeId]?.nombre,
@@ -531,6 +651,9 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
       peso: parseFloat(peso) || 0, talla: parseFloat(talla) || 0,
       estudio: estudio === "Otro" ? estudioOtro.trim() : estudio, mciAdministrados: parseFloat(mci) || 0,
       isotopoId, lote: lote.trim(), farmId, farmNombre: farm?.nombre || "",
+      // Antes se perdía silenciosamente para este caso (el más común) --
+      // sólo se mandaba en el `base` de la rama esI131, ver arriba.
+      ...(fechaRealAtencion ? { fechaRealAtencion: new Date(fechaRealAtencion) } : {}),
       usuarioNombre: usuario.nombre, usuarioEmail: usuario.email, observacion: obs.trim(),
     }).catch((e) => onToast(e.message || "No se pudo guardar el registro", "error"));
     onToast("Registro guardado"); limpiarForm(); setMostrarForm(false);
@@ -574,25 +697,32 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
       .map((g) => ({ ...g, items: [...g.items].sort(compararPorSedeYFichaDescendente) }));
   }, [actas, filtroFecha]);
 
+  // lotesEnStock es STOCK ACTUAL (de HOY, ahora mismo) -- por eso "Ver todo
+  // el stock" se oculta por completo en modo fecha real (mostrarFechaReal,
+  // ver JSX): ofrecerlo ahí mostraría lotes que no necesariamente existían
+  // el día real del estudio, reabriendo el mismo problema que este modo
+  // viene a cerrar. El useEffect de arriba ya lo apaga a la fuerza si
+  // estaba prendido al entrar en el modo.
   const lotesEnStock = (catalogo.stock[sedeId]?.[farmId] || []).filter((l) => l.cantidad > 0);
-  // Marcados HOY para el radiofármaco elegido -- deduplicados por lote (si
-  // el mismo lote se marcó varias veces hoy, aparece una sola vez; si se
-  // marcaron lotes DISTINTOS, todos aparecen -- se acumulan, no se
-  // reemplazan). El vencimiento es sólo un dato de Inventario, no de
-  // Marcación -- se cruza acá contra el stock SOLO para mostrarlo si
-  // todavía existe ahí; si ya no está (se consumió desde que se marcó), el
-  // lote igual queda en la lista, sin ese dato extra.
-  const lotesMarcadosHoy = useMemo(() => {
-    const stockPorLote = new Map(lotesEnStock.map((l) => [l.lote, l]));
-    const lotesUnicos = [...new Set(marcadosHoyRaw.filter((a) => a.farmId === farmId).map((a) => a.lote))];
-    return lotesUnicos.map((loteTxt) => ({ id: loteTxt, lote: loteTxt, vencimiento: stockPorLote.get(loteTxt)?.vencimiento }));
-  }, [marcadosHoyRaw, farmId, lotesEnStock]);
-  const lotesDisp = verTodoElStock ? lotesEnStock : lotesMarcadosHoy;
+  const lotesMarcadosHoy = useMemo(() => dedupeLotesPorFarm(marcadosHoyRaw, farmId, lotesEnStock), [marcadosHoyRaw, farmId, lotesEnStock]);
+  const lotesMarcadosFecha = useMemo(() => dedupeLotesPorFarm(marcadosFechaRaw, farmId, lotesEnStock), [marcadosFechaRaw, farmId, lotesEnStock]);
+  // En modo fecha real, la lista relevante es la de esa fecha, no la de
+  // hoy -- lotesDisp sólo cede el paso a lotesEnStock si "Ver todo el
+  // stock" está prendido, cosa que ya no puede pasar en modo fecha real.
+  const lotesRelevantes = mostrarFechaReal ? lotesMarcadosFecha : lotesMarcadosHoy;
+  const lotesDisp = verTodoElStock ? lotesEnStock : lotesRelevantes;
+  // Sin ningún lote marcado para la fecha real elegida (también se
+  // olvidaron de cargar Libro 1 ese día): el selector se reemplaza por un
+  // campo de texto libre en el JSX (mismo criterio que "Otro" en Estudio)
+  // -- no bloquea Guardar, no pide ninguna confirmación extra.
+  const sinMarcacionParaFecha = mostrarFechaReal && !verTodoElStock && !!farmId && lotesMarcadosFecha.length === 0;
   // Riesgo real (mismo patrón que TabMarcacion.jsx): con "Ver todos los
   // lotes en stock" activo, el lote elegido puede no estar entre los
-  // marcados hoy en Libro 1 -- hueco de trazabilidad un paso más adelante
-  // en la cadena (Egreso → Marcación → Administración).
-  const loteSinMarcacionHoy = verTodoElStock && !!lote && !lotesMarcadosHoy.some((l) => l.lote === lote);
+  // marcados (hoy, o la fecha real si aplica) en Libro 1 -- hueco de
+  // trazabilidad un paso más adelante en la cadena (Egreso → Marcación →
+  // Administración). Sólo puede dispararse fuera de modo fecha real (ver
+  // arriba), pero compara contra lotesRelevantes por si el modo cambia.
+  const loteSinMarcacion = verTodoElStock && !!lote && !lotesRelevantes.some((l) => l.lote === lote);
 
   // "tc99m" (o ausente, actas viejas anteriores a este cambio) no se marca
   // con nada -- es el caso de siempre. Sólo Lutecio-177 se distingue en el
@@ -988,6 +1118,34 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
                     : `Este N° de Ficha ya fue usado el ${fmtTs(fichaEstado.data.fecha)} para el paciente ${fichaEstado.data.pacienteNombre}.`}
               </div>
             )}
+            {!mostrarFechaReal && (
+              <div className="sm:col-span-2 -mt-2">
+                <button type="button" onClick={() => setModoManual(true)} className="text-xs text-blue-600 hover:text-blue-800 underline underline-offset-2">
+                  Es una carga con fecha distinta
+                </button>
+              </div>
+            )}
+            {mostrarFechaReal && (
+              <div className="sm:col-span-2">
+                <div className="-mt-1 mb-1 text-xs text-amber-600">
+                  {atrasoDetectado
+                    ? "La ficha siguiente ya fue cargada con fecha anterior a hoy -- si este paciente fue atendido otro día, indicalo acá."
+                    : "Indicá la fecha y hora reales en que se atendió a este paciente."}
+                </div>
+                <Input
+                  label="Fecha real de atención" type="datetime-local"
+                  value={fechaRealAtencion} onChange={(e) => { setFechaRealAtencion(e.target.value); setFechaRealAtencionTocada(true); }}
+                />
+                {/* No se ofrece "cancelar" si además hay atraso detectado por
+                    el sistema (N+1) -- no tiene sentido descartar una señal
+                    real, aunque además se haya activado a mano. */}
+                {modoManual && !atrasoDetectado && (
+                  <button type="button" onClick={() => setModoManual(false)} className="mt-1 text-xs text-gray-500 hover:text-gray-700 underline underline-offset-2">
+                    Usar fecha de hoy
+                  </button>
+                )}
+              </div>
+            )}
             <Input label="Apellido y nombre" value={nombre} onChange={(e) => setNombre(capitalizarPalabras(e.target.value))} placeholder="García Juan" />
             <Input label="DNI" value={dni} onChange={(e) => setDni(e.target.value)} placeholder="28456789" />
             {/* Peso/Talla se piden siempre, para los 3 casos (Tc-99m/Lutecio/
@@ -1122,27 +1280,44 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
                   {farmsDeSede(catalogo, sedeId).map((f) => <option key={f.id} value={f.id}>{f.nombre}</option>)}
                 </Sel>
                 <div className="flex flex-col gap-1">
-                  <Sel label="Lote" value={lote} onChange={(e) => { setLote(e.target.value); setConfirmoSinMarcacion(false); }} disabled={!farmId}>
-                    <option value="">Seleccionar lote...</option>
-                    {lotesDisp.map((l) => <option key={l.id} value={l.lote}>{l.lote} · Venc: {fmtF(l.vencimiento)}</option>)}
-                  </Sel>
+                  {sinMarcacionParaFecha ? (
+                    // Sin ningún lote marcado en Libro 1 para la fecha real
+                    // elegida (también se olvidaron de cargarlo ese día) --
+                    // texto libre en vez de selector, mismo criterio que
+                    // "Otro" en Estudio: no bloquea Guardar, sin
+                    // confirmación extra (a diferencia de "Ver todo el
+                    // stock" abajo, que sí la exige).
+                    <Input label="Lote (sin marcación registrada para esta fecha)" value={lote} onChange={(e) => setLote(e.target.value)} placeholder="Tipear lote manualmente" />
+                  ) : (
+                    <Sel label="Lote" value={lote} onChange={(e) => { setLote(e.target.value); setConfirmoSinMarcacion(false); }} disabled={!farmId}>
+                      <option value="">Seleccionar lote...</option>
+                      {lotesDisp.map((l) => <option key={l.id} value={l.lote}>{l.lote} · Venc: {fmtF(l.vencimiento)}</option>)}
+                    </Sel>
+                  )}
                   {/* Por defecto sólo lo marcado hoy en Libro 1 (regla de
                       negocio confirmada) -- este checkbox es la vía de
                       escape para un caso excepcional (corrección, lote
-                      marcado otro día), apagada por defecto a propósito. */}
-                  <label className="flex items-center gap-1.5 text-xs text-gray-500">
-                    <input type="checkbox" className="w-3.5 h-3.5 accent-blue-600" checked={verTodoElStock}
-                      onChange={(e) => { setVerTodoElStock(e.target.checked); setLote(""); setConfirmoSinMarcacion(false); }} />
-                    Ver todos los lotes en stock (excepcional)
-                  </label>
-                  {!verTodoElStock && farmId && lotesMarcadosHoy.length === 0 && (
+                      marcado otro día), apagada por defecto a propósito.
+                      Oculto por completo en modo fecha real: lotesEnStock es
+                      STOCK ACTUAL (de hoy), ofrecerlo ahí reabriría el mismo
+                      problema que este modo viene a cerrar -- las únicas dos
+                      opciones en ese modo son los lotes de la fecha real, o
+                      el texto libre de arriba si no hay ninguno. */}
+                  {!mostrarFechaReal && (
+                    <label className="flex items-center gap-1.5 text-xs text-gray-500">
+                      <input type="checkbox" className="w-3.5 h-3.5 accent-blue-600" checked={verTodoElStock}
+                        onChange={(e) => { setVerTodoElStock(e.target.checked); setLote(""); setConfirmoSinMarcacion(false); }} />
+                      Ver todos los lotes en stock (excepcional)
+                    </label>
+                  )}
+                  {!mostrarFechaReal && !verTodoElStock && farmId && lotesMarcadosHoy.length === 0 && (
                     <p className="text-xs text-amber-600">Ningún lote de este radiofármaco fue marcado hoy en esta sede.</p>
                   )}
                   {/* Freno real (mismo patrón que TabMarcacion.jsx, no sólo
                       texto): con "Ver todos los lotes en stock" activo y un
-                      lote que NO fue marcado hoy, esta confirmación es
-                      obligatoria para poder guardar. */}
-                  {loteSinMarcacionHoy && (
+                      lote que NO fue marcado (hoy, o la fecha real), esta
+                      confirmación es obligatoria para poder guardar. */}
+                  {loteSinMarcacion && (
                     <label className="flex items-start gap-2 text-xs text-red-700 bg-red-50 border border-red-200 rounded-xl px-3 py-2 mt-1">
                       <input type="checkbox" className="w-3.5 h-3.5 accent-red-600 mt-0.5" checked={confirmoSinMarcacion}
                         onChange={(e) => setConfirmoSinMarcacion(e.target.checked)} />
@@ -1166,7 +1341,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
                    (tipoI131Actual.categoria === "mibg" && !mibgLoteSeleccionado))
                 : esLutecio
                   ? (!medicoResponsable.trim() || !lutecioLoteSeleccionado || !actividadAdministrada)
-                  : (!mci || !estudio || (estudio === "Otro" && !estudioOtro.trim()) || !lote.trim() || !farmId || (loteSinMarcacionHoy && !confirmoSinMarcacion)))
+                  : (!mci || !estudio || (estudio === "Otro" && !estudioOtro.trim()) || !lote.trim() || !farmId || (loteSinMarcacion && !confirmoSinMarcacion)))
             }>Guardar registro</Btn>
           </div>
         </div>
