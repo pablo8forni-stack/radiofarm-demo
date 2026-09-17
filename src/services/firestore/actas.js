@@ -101,11 +101,19 @@ export function actasMarcacionPorFecha(sedeId, fecha) {
 // histórico de otros pacientes). Requiere el índice compuesto
 // (tipo, pacienteDni, fecha desc) -- o (tipo, sedeId, pacienteDni, fecha
 // desc) para técnico -- ver firestore.indexes.json.
-// EXCEPCIÓN deliberada al criterio de "una sede a la vez" del resto de este
-// archivo: es la única vista pensada para seguir a UN paciente puntual (por
-// DNI) a través de las sedes donde haya pasado -- admin puede pasar
-// sedeId=null a propósito para verlas todas. Confirmado con el usuario que
-// esto se mantiene como excepción, no se scopea a sedeAuditando.
+// Antes existía acá una "excepción" para que admin pasara sedeId=null y
+// viera TODAS las sedes de un mismo DNI -- bug real, encontrado con
+// evidencia de staging: firestore.rules exige resource.data.sedeId ==
+// miRol().sedeAuditando para admin, y Firestore no puede validar esa
+// condición en una consulta sin ningún filtro where("sedeId", ...) --
+// rechazaba las 9 consultas de HistorialPacienteI131 con permission-denied,
+// para cualquier paciente, siempre (nunca funcionó en la práctica, sólo se
+// notó al probar con un paciente de MIBG). Confirmado con Pablo: admin ve
+// el historial sólo de la sede que está auditando en ese momento, igual
+// que el resto de la app -- ver sedeEfectiva en TabRegistrosI131.jsx, el
+// único llamador. El `if` de abajo queda igual (sigue soportando sedeId
+// vacío si algún llamador futuro lo necesitara), pero ya no hay ningún
+// caso real que lo ejercite.
 export async function actasPorPacienteDni(tipo, { dni, sedeId, esAdmin }) {
   const clausulas = [where("tipo", "==", tipo), where("pacienteDni", "==", dni)];
   if (!esAdmin || sedeId) clausulas.push(where("sedeId", "==", sedeId));

@@ -390,15 +390,22 @@ export function TabRegistrosI131({ catalogo, usuario, esAdmin, onToast }) {
         />
       )}
 
-      {/* Excepción deliberada: HistorialPacienteI131 sigue viendo TODAS las
-          sedes de este DNI para admin (null), sin importar qué sede esté
-          auditando -- es la única vista pensada para seguir a un paciente
-          puntual a través de las sedes por las que pasó. */}
+      {/* Bug real encontrado con evidencia de staging: la "excepción" de
+          antes (sedeId=null para admin, para ver TODAS las sedes de este
+          DNI) nunca funcionó en la práctica -- firestore.rules exige
+          resource.data.sedeId == miRol().sedeAuditando para admin, y
+          Firestore no puede validar esa condición en una consulta sin
+          ningún filtro where("sedeId", ...): rechaza las 9 consultas de
+          HistorialPacienteI131 con permission-denied, para CUALQUIER
+          paciente, no sólo MIBG (que fue el caso donde se notó). Confirmado
+          con Pablo: el admin debe ver el historial sólo de la sede
+          actualmente auditada, igual que el resto de esta pantalla --
+          mismo sedeEfectiva que ya usan los listenActas de arriba. */}
       {puedeVerHistorial && (
         <HistorialPacienteI131
           open={!!historialDni}
           dni={historialDni}
-          sedeId={esAdmin ? null : usuario.sede}
+          sedeId={sedeEfectiva}
           esAdmin={esAdmin}
           onClose={() => setHistorialDni(null)}
           onToast={onToast}
