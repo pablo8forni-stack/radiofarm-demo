@@ -11,6 +11,7 @@ import {
   crearLoteDirecto, borrarLote,
 } from "./fixtures.mjs";
 import { addActaI131Vial, addActaI131Extraccion } from "../../src/services/firestore/actas.js";
+import { setSedeAuditando } from "../../src/services/auth.js";
 
 before(async () => { await prepararFixturesGlobales(); });
 after(cerrarConexiones);
@@ -269,7 +270,14 @@ test("control positivo: dos sedes distintas pueden usar el MISMO N° de Ficha si
     pacienteNombre: "Paciente Italiano", pacienteDni: "2",
   });
   assert.ok((await getDoc(refA)).exists());
+  // Leer una acta de SEDE_B como admin exige sedeAuditando == SEDE_B (ver
+  // firestore.rules) -- acá SÍ es parte de lo que se prueba (el test es
+  // justamente sobre dos sedes distintas), así que el swap se justifica,
+  // a diferencia de los casos donde SEDE_B era incidental. Se restaura de
+  // una para no filtrar estado a los tests que corren después.
+  await setSedeAuditando(PERSONAS.admin.email, SEDE_B);
   assert.ok((await getDoc(refB)).exists());
+  await setSedeAuditando(PERSONAS.admin.email, SEDE_A);
 });
 
 // Regresión directa del bug reportado: anular la acta que usó el intento 1
@@ -529,9 +537,13 @@ test("control positivo: admin SÍ puede leer actas de cualquier sede", async () 
   await loguearComo(PERSONAS.tecnicoB);
   const actaRef = await addDoc(collection(db, "actas"), actaBase({ sedeId: SEDE_B, usuarioEmail: PERSONAS.tecnicoB.email }));
 
+  // SEDE_B es acá parte de lo que se prueba ("cualquier sede") -- swap de
+  // sedeAuditando, restaurado de una para no afectar los tests siguientes.
   await loguearComo(PERSONAS.admin);
+  await setSedeAuditando(PERSONAS.admin.email, SEDE_B);
   const snap = await getDoc(actaRef);
   assert.ok(snap.exists());
+  await setSedeAuditando(PERSONAS.admin.email, SEDE_A);
 });
 
 // Anulación de actas: mismo criterio admin-only que movimientos (nunca update
@@ -773,8 +785,12 @@ test("control positivo: técnico CON accesoTerapiaI131 SÍ puede crear una Dosis
 
 test("control positivo: admin SÍ puede crear una Dosis ablativa de I-131 sin el flag", async () => {
   await loguearComo(PERSONAS.admin);
+  // SEDE_B era incidental acá -- el punto real es el bypass de
+  // accesoTerapiaI131 para admin, no la sede. SEDE_A evita el swap de
+  // sedeAuditando que sólo hace falta cuando la sede SÍ es parte de lo
+  // que se prueba (ver los dos tests de "cualquier sede" más arriba).
   const ref = await addDoc(collection(db, "actas"), i131Base("i131_ablativa", {
-    sedeId: SEDE_B, usuarioEmail: PERSONAS.admin.email, actividadAdministrada: 150, unidadActividad: "mCi", lote: "I131-TEST", indicacion: "Ca. de tiroides",
+    sedeId: SEDE_A, usuarioEmail: PERSONAS.admin.email, actividadAdministrada: 150, unidadActividad: "mCi", lote: "I131-TEST", indicacion: "Ca. de tiroides",
   }));
   const snap = await getDoc(ref);
   assert.ok(snap.exists());
@@ -783,7 +799,7 @@ test("control positivo: admin SÍ puede crear una Dosis ablativa de I-131 sin el
 test("control positivo: admin SÍ puede crear una Captación de I-131 sin el flag", async () => {
   await loguearComo(PERSONAS.admin);
   const ref = await addDoc(collection(db, "actas"), i131Base("i131_captacion", {
-    sedeId: SEDE_B, usuarioEmail: PERSONAS.admin.email, actividadAdministrada: 90, unidadActividad: "uCi",
+    sedeId: SEDE_A, usuarioEmail: PERSONAS.admin.email, actividadAdministrada: 90, unidadActividad: "uCi",
   }));
   const snap = await getDoc(ref);
   assert.ok(snap.exists());
@@ -792,10 +808,10 @@ test("control positivo: admin SÍ puede crear una Captación de I-131 sin el fla
 test("control positivo: admin SÍ puede crear un Centellograma de I-131, vinculado a una dosis", async () => {
   await loguearComo(PERSONAS.admin);
   const dosisRef = await addDoc(collection(db, "actas"), i131Base("i131_dosis", {
-    sedeId: SEDE_B, usuarioEmail: PERSONAS.admin.email, actividadAdministrada: 10, unidadActividad: "mCi", lote: "I131-TEST",
+    sedeId: SEDE_A, usuarioEmail: PERSONAS.admin.email, actividadAdministrada: 10, unidadActividad: "mCi", lote: "I131-TEST",
   }));
   const ref = await addDoc(collection(db, "actas"), i131Base("i131_centellograma", {
-    sedeId: SEDE_B, usuarioEmail: PERSONAS.admin.email, actividadAdministrada: 90, unidadActividad: "uCi", dosisActaId: dosisRef.id,
+    sedeId: SEDE_A, usuarioEmail: PERSONAS.admin.email, actividadAdministrada: 90, unidadActividad: "uCi", dosisActaId: dosisRef.id,
   }));
   const snap = await getDoc(ref);
   assert.equal(snap.data().dosisActaId, dosisRef.id);
@@ -804,7 +820,7 @@ test("control positivo: admin SÍ puede crear un Centellograma de I-131, vincula
 test("control positivo: admin SÍ puede crear un registro de Captación y Centellograma de I-131", async () => {
   await loguearComo(PERSONAS.admin);
   const ref = await addDoc(collection(db, "actas"), i131Base("i131_captacion_centellograma", {
-    sedeId: SEDE_B, usuarioEmail: PERSONAS.admin.email, actividadAdministrada: 100, unidadActividad: "uCi",
+    sedeId: SEDE_A, usuarioEmail: PERSONAS.admin.email, actividadAdministrada: 100, unidadActividad: "uCi",
   }));
   const snap = await getDoc(ref);
   assert.ok(snap.exists());
@@ -862,7 +878,9 @@ test("técnico sin accesoTerapiaI131 NO puede crear un vial de I-131", async () 
 
 test("control positivo: admin SÍ puede crear un vial de I-131", async () => {
   await loguearComo(PERSONAS.admin);
-  const ref = await addDoc(collection(db, "actas"), vialBase({ sedeId: SEDE_B, usuarioEmail: PERSONAS.admin.email }));
+  // SEDE_B incidental -- el punto es el bypass de accesoTerapiaI131, ver
+  // nota igual en las pruebas "sin el flag" de arriba.
+  const ref = await addDoc(collection(db, "actas"), vialBase({ sedeId: SEDE_A, usuarioEmail: PERSONAS.admin.email }));
   const snap = await getDoc(ref);
   assert.ok(snap.exists());
 });
@@ -924,10 +942,11 @@ test("extracción de I-131 sin actividadMedida es rechazada, aunque sea admin", 
 
 test("control positivo: admin SÍ puede crear una extracción de I-131 combinando dos viales", async () => {
   await loguearComo(PERSONAS.admin);
-  const v1 = await addDoc(collection(db, "actas"), vialBase({ sedeId: SEDE_B, usuarioEmail: PERSONAS.admin.email, lote: "V1" }));
-  const v2 = await addDoc(collection(db, "actas"), vialBase({ sedeId: SEDE_B, usuarioEmail: PERSONAS.admin.email, lote: "V2" }));
+  // SEDE_B incidental -- el punto real es combinar dos viales, no la sede.
+  const v1 = await addDoc(collection(db, "actas"), vialBase({ sedeId: SEDE_A, usuarioEmail: PERSONAS.admin.email, lote: "V1" }));
+  const v2 = await addDoc(collection(db, "actas"), vialBase({ sedeId: SEDE_A, usuarioEmail: PERSONAS.admin.email, lote: "V2" }));
   const ref = await addDoc(collection(db, "actas"), extraccionBase(v1.id, {
-    sedeId: SEDE_B, usuarioEmail: PERSONAS.admin.email,
+    sedeId: SEDE_A, usuarioEmail: PERSONAS.admin.email,
     viales: [{ vialId: v1.id, mlExtraidos: 1 }, { vialId: v2.id, mlExtraidos: 0.5 }],
     vialIds: [v1.id, v2.id],
   }));
@@ -985,12 +1004,13 @@ test("extracción de I-131 con más de 4 viales combinados es rechazada (tope fi
 
 test("control positivo: extracción de I-131 combinando 4 viales (el tope) es aceptada", async () => {
   await loguearComo(PERSONAS.admin);
+  // SEDE_B incidental -- el punto real es el tope de 4 viales, no la sede.
   const viales = [];
   for (let i = 0; i < 4; i++) {
-    viales.push(await addDoc(collection(db, "actas"), vialBase({ sedeId: SEDE_B, usuarioEmail: PERSONAS.admin.email, lote: `CUATRO-${i}` })));
+    viales.push(await addDoc(collection(db, "actas"), vialBase({ sedeId: SEDE_A, usuarioEmail: PERSONAS.admin.email, lote: `CUATRO-${i}` })));
   }
   const ref = await addDoc(collection(db, "actas"), extraccionBase(viales[0].id, {
-    sedeId: SEDE_B, usuarioEmail: PERSONAS.admin.email,
+    sedeId: SEDE_A, usuarioEmail: PERSONAS.admin.email,
     viales: viales.map((v) => ({ vialId: v.id, mlExtraidos: 0.5 })),
     vialIds: viales.map((v) => v.id),
   }));
@@ -1021,8 +1041,9 @@ test("vial de I-131 con categoria inválida es rechazado", async () => {
 
 test("control positivo: admin SÍ puede crear un vial de I-131 categoría diagnóstico", async () => {
   await loguearComo(PERSONAS.admin);
+  // SEDE_B incidental -- el punto real es categoria: "diagnostico", no la sede.
   const ref = await addDoc(collection(db, "actas"), vialBase({
-    sedeId: SEDE_B, usuarioEmail: PERSONAS.admin.email, categoria: "diagnostico", actividadCalibrada: 10, volumenInicial: 100,
+    sedeId: SEDE_A, usuarioEmail: PERSONAS.admin.email, categoria: "diagnostico", actividadCalibrada: 10, volumenInicial: 100,
   }));
   const snap = await getDoc(ref);
   assert.equal(snap.data().categoria, "diagnostico");
@@ -1074,8 +1095,10 @@ test("control positivo: resultado de %Captación con cuentasPaciente/fondo en 0 
   await loguearComo(PERSONAS.admin);
   const dosisActaId = `dosis-ceros-${Date.now()}`;
   const ref = doc(db, "actas", `captacion_${dosisActaId}_hora`);
+  // SEDE_B incidental -- el punto real es aceptar cuentasPaciente/fondo=0
+  // como dato real, no la sede.
   await setDoc(ref, resultadoCaptacionBase({
-    sedeId: SEDE_B, usuarioEmail: PERSONAS.admin.email, dosisActaId, cuentasPaciente: 0, fondo: 0, porcentajeCaptacion: 0,
+    sedeId: SEDE_A, usuarioEmail: PERSONAS.admin.email, dosisActaId, cuentasPaciente: 0, fondo: 0, porcentajeCaptacion: 0,
   }));
   const snap = await getDoc(ref);
   assert.ok(snap.exists());
