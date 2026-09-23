@@ -16,7 +16,10 @@
     "test:staging": "node --env-file=.env.staging --test --test-concurrency=1 --test-timeout=30000 scripts/testing/reglas.test.mjs scripts/testing/transacciones.test.mjs scripts/testing/anulacion.test.mjs scripts/testing/solicitudes.test.mjs",
     "test:emulator": "firebase emulators:exec --only firestore,auth --project radiofarm-fuesmen-staging \"node --env-file=.env.emulator --test --test-concurrency=1 --test-timeout=30000 scripts/testing/reglas.test.mjs scripts/testing/transacciones.test.mjs scripts/testing/anulacion.test.mjs scripts/testing/solicitudes.test.mjs\"",
     "staging:reset": "firebase firestore:delete --all-collections --project radiofarm-fuesmen-staging --force",
-    "staging:ultimas-actas": "node --env-file=.env.staging scripts/testing/ultimasActas.mjs"
+    "staging:ultimas-actas": "node --env-file=.env.staging scripts/testing/ultimasActas.mjs",
+    "check:bundle": "node scripts/checkBundle.mjs",
+    "deploy:prod": "rm -rf dist && npm run build && npm run check:bundle && npx firebase deploy --only hosting --project radiofarm-fuesmen",
+    "deploy:staging": "rm -rf dist && npm run build:staging && npm run check:bundle && npx firebase deploy --only hosting --project radiofarm-fuesmen-staging"
   },
   "dependencies": {
     "firebase": "^12.16.0",
