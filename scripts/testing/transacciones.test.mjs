@@ -24,19 +24,27 @@ test("ingreso: crea lote nuevo con la cantidad indicada y su movimiento", async 
   await loguearComo(PERSONAS.admin);
   const loteNum = loteDePrueba();
 
-  await ingresoBatch({
+  const { loteId, movimientoId } = await ingresoBatch({
     sedeId: SEDE_A, sedeNombre: NOMBRE_SEDE[SEDE_A], farm: FARM, lote: loteNum,
     vencimiento: "2027-01-01", cantidad: 10, kits: null, proveedorNombre: "Proveedor Principal",
     observacion: "", usuario: PERSONAS.admin,
   });
 
-  const lote = await buscarLotePorNumero(SEDE_A, loteNum);
-  assert.ok(lote, "el lote debería existir");
+  // getDoc por id directo, NO buscarLotePorNumero/buscarMovimientos (queries)
+  // -- bug real encontrado: batch.commit() resuelto no garantiza que una
+  // query posterior ya refleje la escritura (fallaba ~1 de cada 8 veces),
+  // mientras que un getDoc por id conocido es inmediato. ingresoBatch ya
+  // devuelve el loteId y el movimientoId (los conoce localmente desde antes
+  // de escribir).
+  const loteSnap = await getDoc(doc(db, "sedes", SEDE_A, "lotes", loteId));
+  assert.ok(loteSnap.exists(), "el lote debería existir");
+  const lote = { id: loteSnap.id, ...loteSnap.data() };
   assert.equal(lote.cantidad, 10);
 
-  const movs = await buscarMovimientos("lote", loteNum);
-  const ingreso = movs.find((m) => m.tipo === "ingreso");
-  assert.ok(ingreso, "debería haber un movimiento de ingreso");
+  const movSnap = await getDoc(doc(db, "movimientos", movimientoId));
+  assert.ok(movSnap.exists(), "debería haber un movimiento de ingreso");
+  const ingreso = { id: movSnap.id, ...movSnap.data() };
+  assert.equal(ingreso.tipo, "ingreso");
   assert.equal(ingreso.cantidad, 10);
   assert.equal(ingreso.sedeId, SEDE_A);
   assert.equal(ingreso.loteId, lote.id);

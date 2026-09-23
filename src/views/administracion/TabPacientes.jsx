@@ -140,6 +140,20 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
   // scripts/testing/guardSecuencia.test.mjs) -- useRef sólo guarda LA
   // instancia estable entre renders, no reimplementa el conteo acá.
   const fichaCheckGuard = useRef(crearGuardDeSecuencia()).current;
+  // { sedeId, numero } del último guardado CONFIRMADO en esta sesión (los 7
+  // tipos comparten la misma secuencia de N° de Ficha por sede -- Tc-99m,
+  // los 6 de I-131 y Lutecio-177, ver crearActaConFicha/
+  // administrarLoteDosisUnicaTransaction) -- alimenta precargarSugerenciaFicha
+  // para no depender de una query justo después de escribir (mismo problema
+  // de consistencia eventual encontrado en transacciones.test.mjs -- ver
+  // loteId/movimientoId en stock.js). Se escribe SÓLO en el .then() de éxito
+  // de cada rama de guardar(), nunca optimista: si el guardado falla, el
+  // ref queda como estaba, para no sugerir después un número que en
+  // realidad nunca se guardó. useRef (no useState): sólo se lee bajo
+  // demanda al abrir el form de nuevo, no necesita re-render. limpiarForm()
+  // no lo toca a propósito -- es memoria entre aperturas del form, no
+  // estado del formulario en sí.
+  const ultimaFichaGuardadaRef = useRef(null);
   // Detección de carga tardía -- ver fechaFichaSiguiente (actas.js) para el
   // porqué de comparar contra N+1 y no N-1. Dos flags separados en vez de
   // uno solo: atrasoDetectado lo escribe SÓLO resolverYSetFichaEstado (la
@@ -364,7 +378,15 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
   // número de la sede vieja) mientras resuelve.
   async function precargarSugerenciaFicha(sedeIdDestino) {
     setFichaNro(""); setFichaTocada(false); setFichaEstado(null);
-    const ultima = await obtenerUltimaFicha(sedeIdDestino);
+    // Cache de guardar() (ultimaFichaGuardadaRef) sólo si es de la MISMA
+    // sede -- si cambió de sede o todavía no hay nada guardado esta sesión,
+    // cae a la consulta de siempre (obtenerUltimaFicha, one-shot). Evita la
+    // ventana de consistencia eventual de esa query justo después de un
+    // guardado propio (bug real encontrado en transacciones.test.mjs -- ver
+    // nota en ultimaFichaGuardadaRef más arriba), sin dejar de cubrir el
+    // caso de otra sede o de una sesión recién abierta.
+    const cache = ultimaFichaGuardadaRef.current;
+    const ultima = cache?.sedeId === sedeIdDestino ? cache.numero : await obtenerUltimaFicha(sedeIdDestino);
     setUltimaFicha(ultima);
     const sugerida = ultima != null ? String(ultima + 1) : "";
     setFichaNro(sugerida);
@@ -578,11 +600,13 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
       if (tipoI131Actual.categoria === "dosis") {
         if (!actividadAdministrada || !lote.trim()) return;
         tipoI131Actual.fn({ ...base, actividadAdministrada: parseFloat(actividadAdministrada) || 0, unidadActividad: "mCi", lote: lote.trim(), indicacion: indicacion.trim() })
+          .then(() => { ultimaFichaGuardadaRef.current = { sedeId, numero: parseInt(fichaNormalizada, 10) }; })
           .catch((e) => onToast(e.message || "No se pudo guardar el registro", "error"));
         onToast(`${tipoI131Actual.label} registrada — consultala en la pestaña Gestión I-131`);
       } else if (tipoI131Actual.categoria === "diagnostico") {
         if (!actividadAdministrada) return;
         tipoI131Actual.fn({ ...base, actividadAdministrada: parseFloat(actividadAdministrada) || 0, unidadActividad: "uCi", dosisActaId: dosisVinculada || null })
+          .then(() => { ultimaFichaGuardadaRef.current = { sedeId, numero: parseInt(fichaNormalizada, 10) }; })
           .catch((e) => onToast(e.message || "No se pudo guardar el registro", "error"));
         onToast(`${tipoI131Actual.label} registrado — consultalo en la pestaña Gestión I-131`);
       } else if (tipoI131Actual.categoria === "mibg") {
@@ -602,10 +626,11 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
           ...base, numeroLote: loteElegido.numeroLote, actividadCalibrada: loteElegido.actividadCalibrada, volumen: loteElegido.volumen,
           actividadAdministrada: parseFloat(actividadAdministrada) || 0,
         })
-          .then(() => onToast("MIBG registrado — consultalo en la pestaña Gestión I-131"))
+          .then(() => { ultimaFichaGuardadaRef.current = { sedeId, numero: parseInt(fichaNormalizada, 10) }; onToast("MIBG registrado — consultalo en la pestaña Gestión I-131"); })
           .catch((e) => onToast(e.message || "No se pudo registrar la administración de MIBG", "error"));
       } else {
         tipoI131Actual.fn(base)
+          .then(() => { ultimaFichaGuardadaRef.current = { sedeId, numero: parseInt(fichaNormalizada, 10) }; })
           .catch((e) => onToast(e.message || "No se pudo guardar el barrido", "error"));
         onToast("Barrido corporal registrado — consultalo en la pestaña Gestión I-131");
       }
@@ -632,7 +657,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
         medicoResponsable: medicoResponsable.trim(),
         usuarioNombre: usuario.nombre, usuarioEmail: usuario.email, observacion: obs.trim(),
       })
-        .then(() => onToast("Lutecio-177 registrado — consultalo en Libro 4"))
+        .then(() => { ultimaFichaGuardadaRef.current = { sedeId, numero: parseInt(fichaNormalizada, 10) }; onToast("Lutecio-177 registrado — consultalo en Libro 4"); })
         .catch((e) => onToast(e.message || "No se pudo registrar la administración de Lutecio-177", "error"));
       limpiarForm(); setMostrarForm(false);
       return;
@@ -655,7 +680,9 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
       // sólo se mandaba en el `base` de la rama esI131, ver arriba.
       ...(fechaRealAtencion ? { fechaRealAtencion: new Date(fechaRealAtencion) } : {}),
       usuarioNombre: usuario.nombre, usuarioEmail: usuario.email, observacion: obs.trim(),
-    }).catch((e) => onToast(e.message || "No se pudo guardar el registro", "error"));
+    })
+      .then(() => { ultimaFichaGuardadaRef.current = { sedeId, numero: parseInt(fichaNormalizada, 10) }; })
+      .catch((e) => onToast(e.message || "No se pudo guardar el registro", "error"));
     onToast("Registro guardado"); limpiarForm(); setMostrarForm(false);
   }
 

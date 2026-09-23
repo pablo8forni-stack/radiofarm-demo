@@ -57,12 +57,20 @@ export function ingresoBatch({ sedeId, sedeNombre, farm, lote, vencimiento, cant
   const motivo = kits != null
     ? `Recepción (${kits} kit${kits === 1 ? "" : "s"} × ${farm.viales_x_kit}${unidadesSueltas ? ` + ${unidadesSueltas} suelta${unidadesSueltas > 1 ? "s" : ""}` : ""} = ${cantidad} viales)`
     : "Recepción de pedido";
-  batch.set(doc(movimientosCol), {
+  const nuevoMovimientoRef = doc(movimientosCol);
+  batch.set(nuevoMovimientoRef, {
     fecha: serverTimestamp(), tipo: "ingreso", sedeId, sedeNombre,
     farmId: farm.id, farmNombre: farm.nombre, cantidad, lote: loteNormalizado, loteId: nuevoLoteRef.id,
     motivo, observacion, proveedorNombre, usuarioNombre: usuario.nombre, usuarioEmail: usuario.email,
   });
-  return batch.commit();
+  // nuevoLoteRef.id y nuevoMovimientoRef.id ya se conocen acá, generados
+  // localmente por el SDK antes de escribir nada -- devolverlos permite a
+  // quien llama leer el lote y el movimiento recién creados por getDoc
+  // directo (inmediato) en vez de una query por campo (eventualmente
+  // consistente: batch.commit() resuelto no garantiza que una query
+  // posterior ya refleje la escritura -- bug real encontrado en
+  // transacciones.test.mjs, fallaba ~1 de cada 8 veces con ese patrón).
+  return batch.commit().then(() => ({ loteId: nuevoLoteRef.id, movimientoId: nuevoMovimientoRef.id }));
 }
 
 // Egreso: requiere leer el stock real del lote antes de descontar -> runTransaction.
