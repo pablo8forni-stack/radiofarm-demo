@@ -817,7 +817,12 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
                 {a.pacienteNombre} {expandido ? "▲" : "▼"}
               </button>
             ) : a.pacienteNombre}
-            {(a.peso || a.talla) && <div className="text-xs font-normal text-gray-400">{a.peso && `${a.peso}kg`}{a.talla && ` · ${a.talla}cm`}</div>}
+            {/* != null (no la truthiness cruda del número) -- peso/talla=0 es
+                un dato real cargado, no "sin dato". `0 && ...` en JS da `0`
+                (no `false`), y React SÍ renderiza un 0 suelto como texto --
+                bug real encontrado con evidencia de staging: un "0" quedaba
+                pegado al nombre del paciente cuando peso Y talla eran 0. */}
+            {(a.peso != null || a.talla != null) && <div className="text-xs font-normal text-gray-400">{a.peso != null && `${a.peso}kg`}{a.talla != null && ` · ${a.talla}cm`}</div>}
             {a.medicoResponsable && <div className="text-xs font-normal text-gray-400">Médico: {a.medicoResponsable}</div>}
             {anulacion && <div className="text-xs text-orange-500 font-semibold">ANULADO: {anulacion.motivo}</div>}
           </td>
@@ -873,7 +878,10 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
         {tipo && <div><Badge color={tipo.color}>{tipo.label}</Badge></div>}
         <div className="text-xs text-gray-500">
           Ficha {a.pacienteFicha || "—"} · DNI {a.pacienteDni}
-          {(a.peso || a.talla) && <> · {a.peso ? `${a.peso}kg` : ""}{a.talla ? ` ${a.talla}cm` : ""}</>}
+          {/* != null, mismo motivo que la fila de escritorio -- peso/talla=0
+              es un dato real, no puede tratarse como falsy crudo (0 quedaba
+              pegado al DNI en la vista mobile, mismo bug real). */}
+          {(a.peso != null || a.talla != null) && <> · {a.peso != null ? `${a.peso}kg` : ""}{a.talla != null ? ` ${a.talla}cm` : ""}</>}
         </div>
         {a.estudio && <div className="text-xs text-gray-700">{a.estudio}</div>}
         <div className="text-xs text-gray-700">
@@ -1107,10 +1115,10 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
               placeholder={ultimaFicha != null ? String(ultimaFicha + 1) : "4521"}
             />
             {fichaEstado === "verificando" && (
-              <div className="sm:col-span-2 -mt-2 text-xs text-gray-400">Verificando N° de Ficha...</div>
+              <div key="ficha-verificando" className="sm:col-span-2 -mt-2 text-xs text-gray-400">Verificando N° de Ficha...</div>
             )}
             {fichaEstado && fichaEstado !== "verificando" && fichaEstado.tipo !== "ok" && (
-              <div className="sm:col-span-2 -mt-2 text-xs text-red-600">
+              <div key="ficha-error" className="sm:col-span-2 -mt-2 text-xs text-red-600">
                 {fichaEstado.tipo === "formato"
                   ? "El N° de Ficha debe ser sólo números."
                   : fichaEstado.tipo === "agotado"
@@ -1119,14 +1127,14 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
               </div>
             )}
             {!mostrarFechaReal && (
-              <div className="sm:col-span-2 -mt-2">
+              <div key="toggle-fecha-real" className="sm:col-span-2 -mt-2">
                 <button type="button" onClick={() => setModoManual(true)} className="text-xs text-blue-600 hover:text-blue-800 underline underline-offset-2">
                   Es una carga con fecha distinta
                 </button>
               </div>
             )}
             {mostrarFechaReal && (
-              <div className="sm:col-span-2">
+              <div key="fecha-real" className="sm:col-span-2">
                 <div className="-mt-1 mb-1 text-xs text-amber-600">
                   {atrasoDetectado
                     ? "La ficha siguiente ya fue cargada con fecha anterior a hoy -- si este paciente fue atendido otro día, indicalo acá."
