@@ -11,7 +11,23 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 
-const PATRONES = [/__test_login/, /admin\.test@radiofarm\.local/, /Test-Radiofarm-2026/];
+// La contraseña de prueba vive en .env.staging (gitignored), nunca acá --
+// se arma el patrón en runtime a partir de esa variable, no un literal
+// escrito en el archivo (así una futura rotación no exige tocar código
+// trackeado). Falla fuerte si falta: si se dejara pasar como undefined,
+// new RegExp(undefined) busca literalmente la palabra "undefined" -- el
+// chequeo "pasaría" siempre sin detectar nunca una contraseña real filtrada,
+// un camino silencioso peor que no tener el chequeo.
+const PASSWORD_TEST_STAGING = process.env.PASSWORD_TEST_STAGING;
+if (!PASSWORD_TEST_STAGING) {
+  console.error("Falta PASSWORD_TEST_STAGING -- correr con: node --env-file=.env.staging scripts/checkBundle.mjs");
+  process.exit(1);
+}
+// Escapada antes de meterla en el RegExp -- una rotación futura podría
+// generar una contraseña con caracteres especiales de regex (. + ( etc.),
+// que sin escapar se interpretarían como sintaxis en vez de texto literal.
+const escapeRegExp = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const PATRONES = [/__test_login/, /admin\.test@radiofarm\.local/, new RegExp(escapeRegExp(PASSWORD_TEST_STAGING))];
 
 function archivosDe(dir) {
   return readdirSync(dir).flatMap((nombre) => {

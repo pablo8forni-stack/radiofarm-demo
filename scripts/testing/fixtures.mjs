@@ -52,7 +52,15 @@ if (process.env.USE_FIRESTORE_EMULATOR === "1") {
   connectAuthEmulator(auth, "http://127.0.0.1:9099", { disableWarnings: true });
 }
 
-const PASSWORD_TEST = "Test-Radiofarm-2026!";
+// Nunca hardcodeada -- vive en .env.staging (gitignored) o .env.emulator
+// (trackeado, con un placeholder inofensivo, el emulador no valida nada
+// real). Corta acá con un mensaje claro en vez de dejar que
+// signInWithEmailAndPassword falle más abajo con un error genérico de
+// Firebase si alguien corre esto sin --env-file.
+const PASSWORD_TEST = process.env.PASSWORD_TEST_STAGING;
+if (!PASSWORD_TEST) {
+  throw new Error("Falta PASSWORD_TEST_STAGING -- correr con --env-file=.env.staging o --env-file=.env.emulator.");
+}
 
 export const SEDE_A = "central";
 export const SEDE_B = "italiano";
