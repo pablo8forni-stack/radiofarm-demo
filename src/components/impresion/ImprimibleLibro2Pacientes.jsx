@@ -2,6 +2,7 @@ import { EncabezadoImpresion } from "./EncabezadoImpresion.jsx";
 import { BloqueFirma } from "./BloqueFirma.jsx";
 import { claseFilaAnulada, claseCampoAnulado, LeyendaAnulado } from "./marcadoAnulada.jsx";
 import { fmtFechaHora, tipoTextoCSV, dosisRegistro, textoConformidad } from "./actasFormatoImpresion.js";
+import { TEXTO_SIN_RADIOFARMACO } from "../../constants/sinRadiofarmaco.js";
 
 // El CSV de Libro 2 tiene 26 columnas (ver TabPacientes.jsx#filaCSV) porque
 // además de los datos del paciente lleva 7 columnas del lote vinculado
@@ -52,7 +53,7 @@ export function ImprimibleLibro2Pacientes({ actas, anulaciones, lotesPorId, sede
                 <td className={`py-1 pr-1 ${campo}`}>{a.peso ?? "—"}/{a.talla ?? "—"}</td>
                 <td className={`py-1 pr-1 ${campo}`}>{tipoTextoCSV(a, catalogo)}</td>
                 <td className={`py-1 pr-1 ${campo}`}>{a.estudio || "—"}</td>
-                <td className={`py-1 pr-1 ${campo}`}>{a.farmNombre || a.lote || "—"}{a.lote && a.farmNombre ? ` (${a.lote})` : ""}</td>
+                <td className={`py-1 pr-1 ${campo}`}>{a.sinRadiofarmaco ? TEXTO_SIN_RADIOFARMACO : (a.farmNombre || a.lote || "—")}{a.lote && a.farmNombre ? ` (${a.lote})` : ""}</td>
                 <td className={`py-1 pr-1 ${campo}`}>{dosis ? `${dosis.valor} ${dosis.unidad}` : "—"}</td>
                 <td className={`py-1 pr-1 ${campo}`}>{a.usuarioNombre}</td>
                 <td className="py-1">

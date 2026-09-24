@@ -124,6 +124,94 @@ test("acta de paciente sin isotopoId es rechazada (siempre presente en actas nue
   );
 });
 
+// Excepción sinRadiofarmaco (Tc-99m puro, sin marcar ningún radiofármaco --
+// centellograma de tiroides, glóbulos rojos marcados): cerrada. Sólo vale el
+// flag en true con farmId/farmNombre/lote AUSENTES, sólo para Tc-99m.
+function actaPacienteBase(overrides = {}) {
+  return {
+    tipo: "paciente", fecha: serverTimestamp(), sedeId: SEDE_A,
+    usuarioEmail: PERSONAS.tecnicoA.email, mciAdministrados: 10, pacienteFicha: fichaDePrueba(), fichaIntentoNro: "1", isotopoId: "tc99m",
+    pacienteNombre: "Test", pacienteDni: "1", estudio: "Test",
+    ...overrides,
+  };
+}
+
+test("control positivo: acta de paciente Tc-99m con sinRadiofarmaco=true y SIN farmId/lote es aceptada", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  const ref = await addDoc(collection(db, "actas"), actaPacienteBase({ sinRadiofarmaco: true }));
+  const snap = await getDoc(ref);
+  assert.ok(snap.exists());
+  assert.equal(snap.data().sinRadiofarmaco, true);
+  assert.equal(snap.data().farmId, undefined);
+  assert.equal(snap.data().lote, undefined);
+});
+
+test("sinRadiofarmaco=true junto con farmId es rechazada (el flag y un radiofármaco se contradicen)", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  await assertPermissionDenied(() =>
+    addDoc(collection(db, "actas"), actaPacienteBase({ sinRadiofarmaco: true, farmId: FARM_ID }))
+  );
+});
+
+test("sinRadiofarmaco=true junto con lote es rechazada", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  await assertPermissionDenied(() =>
+    addDoc(collection(db, "actas"), actaPacienteBase({ sinRadiofarmaco: true, lote: loteDePrueba() }))
+  );
+});
+
+test("sinRadiofarmaco=false sin farmId/lote es rechazada (sólo vale el flag en true)", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  await assertPermissionDenied(() =>
+    addDoc(collection(db, "actas"), actaPacienteBase({ sinRadiofarmaco: false }))
+  );
+});
+
+test("sinRadiofarmaco con un valor que no es booleano true es rechazada", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  await assertPermissionDenied(() =>
+    addDoc(collection(db, "actas"), actaPacienteBase({ sinRadiofarmaco: "true" }))
+  );
+});
+
+test("acta de paciente Tc-99m sin flag y sin farmId/lote sigue rechazada (regresión: no puede pasar por un olvido)", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  await assertPermissionDenied(() =>
+    addDoc(collection(db, "actas"), actaPacienteBase())
+  );
+});
+
+test("acta de paciente Tc-99m con farmId pero sin lote sigue rechazada (regresión)", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  await assertPermissionDenied(() =>
+    addDoc(collection(db, "actas"), actaPacienteBase({ farmId: FARM_ID }))
+  );
+});
+
+test("acta de paciente Tc-99m con lote pero sin farmId sigue rechazada (regresión)", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  await assertPermissionDenied(() =>
+    addDoc(collection(db, "actas"), actaPacienteBase({ lote: loteDePrueba() }))
+  );
+});
+
+test("sinRadiofarmaco no aplica a Lutecio-177 (sigue exigiendo su lote y médico responsable)", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  await assertPermissionDenied(() =>
+    addDoc(collection(db, "actas"), actaPacienteBase({ isotopoId: "lu177", medicoResponsable: "Dr. Test", sinRadiofarmaco: true }))
+  );
+});
+
+test("sinRadiofarmaco no aplica a Marcación (Libro 1): sigue exigiendo farmId, lote y mciMarcacion", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  await assertPermissionDenied(() =>
+    addDoc(collection(db, "actas"), {
+      tipo: "marcacion", fecha: serverTimestamp(), sedeId: SEDE_A,
+      usuarioEmail: PERSONAS.tecnicoA.email, mciMarcacion: 10, sinRadiofarmaco: true,
+    })
+  );
+});
+
 test("acta de paciente Lutecio-177 sin médico responsable es rechazada", async () => {
   await loguearComo(PERSONAS.tecnicoA);
   await assertPermissionDenied(() =>

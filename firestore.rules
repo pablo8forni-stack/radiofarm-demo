@@ -466,7 +466,9 @@ service cloud.firestore {
     // siguen leyéndose igual, el cliente las trata como tc99m). Con
     // isotopoId=='lu177' (Teragnosis) el lote también es texto libre y en
     // cambio exige medicoResponsable; con cualquier otro valor (tc99m, el
-    // caso de siempre) sigue exigiendo farmId como hasta ahora.
+    // caso de siempre) sigue exigiendo farmId como hasta ahora -- salvo la
+    // excepción explícita sinRadiofarmaco == true (Tc-99m puro, sin ningún
+    // radiofármaco marcado; ver el comentario en la rama de abajo).
     // actaId: pasado por el match block -- necesario para forzar que el id
     // del documento coincida con el patrón determinístico esperado en las
     // ramas que dependen de uno (anulacion, i131_mibg, i131_captacion_resultado,
@@ -572,14 +574,30 @@ service cloud.firestore {
                              d.pacienteDni is string && d.pacienteDni.size() > 0 &&
                              d.pacienteNombre is string && d.pacienteNombre.size() > 0 &&
                              actaId == 'fin_' + d.dosisActaId)
-                          : (d.lote is string && d.lote.size() > 0 &&
-                   (d.tipo == 'paciente'
+                          : (d.tipo == 'paciente'
                      ? (d.mciAdministrados is number && d.mciAdministrados > 0 &&
                         fichaValida(d.pacienteFicha) && d.fichaIntentoNro in ['1', '2', '3', '4', '5'] && fichaIntentoHabilitado(d.sedeId, d.pacienteFicha, d.fichaIntentoNro) &&
                         d.isotopoId is string && d.isotopoId.size() > 0 &&
                         (d.isotopoId != 'lu177'
-                          ? (d.farmId is string && d.farmId.size() > 0)
-                          : (d.medicoResponsable is string && d.medicoResponsable.size() > 0 &&
+                          // Tc-99m: o bien la forma de siempre (farmId + lote
+                          // no vacíos), o bien la excepción explícita
+                          // sinRadiofarmaco == true (estudios donde no se
+                          // marca ningún radiofármaco -- Tc-99m puro directo,
+                          // p. ej. centellograma de tiroides o glóbulos rojos
+                          // marcados -- y por lo tanto no pasa por Libro 1).
+                          // La excepción es cerrada: exige el flag en true Y
+                          // que farmId/farmNombre/lote estén AUSENTES (no
+                          // vacíos), para que un acta sin radiofármaco nunca
+                          // pueda pasar por un olvido -- sólo por esta vía
+                          // explícita. Un flag en false, o el flag junto con
+                          // farmId/lote, se rechaza.
+                          ? ('sinRadiofarmaco' in d
+                              ? (d.sinRadiofarmaco == true && d.isotopoId == 'tc99m' &&
+                                 !('farmId' in d) && !('farmNombre' in d) && !('lote' in d))
+                              : (d.farmId is string && d.farmId.size() > 0 &&
+                                 d.lote is string && d.lote.size() > 0))
+                          : (d.lote is string && d.lote.size() > 0 &&
+                             d.medicoResponsable is string && d.medicoResponsable.size() > 0 &&
                              // Libro 4: administrar Lutecio-177 exige elegir un
                              // lote registrado (mismo rigor que MIBG) -- ya no
                              // alcanza con tipear "lote" a mano. actaId forzado
@@ -600,8 +618,9 @@ service cloud.firestore {
                              // llegó) -- mismo criterio que MIBG, dos hechos
                              // distintos.
                              d.actividadCalibrada is number && d.actividadCalibrada > 0)))
-                     : (d.farmId is string && d.farmId.size() > 0 &&
-                        d.mciMarcacion is number && d.mciMarcacion > 0))));
+                     : (d.lote is string && d.lote.size() > 0 &&
+                        d.farmId is string && d.farmId.size() > 0 &&
+                        d.mciMarcacion is number && d.mciMarcacion > 0)));
     }
 
     // Las actas tienen nombre y DNI de pacientes (Libro 2) -- Ley 25.326.

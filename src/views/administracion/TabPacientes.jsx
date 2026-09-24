@@ -13,6 +13,7 @@ import { sedesActivas, farmsDeSede } from "../../helpers/stock.js";
 import { normalizarFicha, compararPorSedeYFichaDescendente } from "../../helpers/fichaPaciente.js";
 import { crearGuardDeSecuencia } from "../../helpers/guardSecuencia.js";
 import { TIPO_LABEL_I131 } from "../../constants/tipoI131.js";
+import { TEXTO_SIN_RADIOFARMACO } from "../../constants/sinRadiofarmaco.js";
 import {
   listenActas, addActaPaciente, actasPorRango, anularActaTransaction, listenAnulacionesActas,
   addActaI131Ablativa, addActaI131Dosis, addActaI131Barrido,
@@ -245,6 +246,14 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
   // Libro 1, confirmación obligatoria antes de poder guardar -- no sólo
   // texto de advertencia.
   const [confirmoSinMarcacion, setConfirmoSinMarcacion] = useState(false);
+  // Excepción explícita (sólo Tc-99m plano): estudios donde NO se marca
+  // ningún radiofármaco -- Tc-99m puro directo (p. ej. centellograma de
+  // tiroides, glóbulos rojos marcados) -- y por eso no hay nada en Libro 1.
+  // Checkbox manual, independiente del Estudio elegido. No es lo mismo que
+  // loteSinMarcacion/confirmoSinMarcacion de arriba (ahí el lote SÍ existe,
+  // sólo que no se marcó hoy). Se guarda como sinRadiofarmaco: true en el
+  // acta, sin farmId/farmNombre/lote (ver firestore.rules#actaValida).
+  const [sinRadiofarmaco, setSinRadiofarmaco] = useState(false);
   // Sólo para isotopoId === "i131" -- ver esI131/guardar() más abajo. El N°
   // de Ficha, nombre, DNI, médico responsable y lote ya están arriba
   // (compartidos con Tc-99m/Lutecio, mismo campo/misma numeración diaria
@@ -500,7 +509,10 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
       } else {
         const iso = acta.isotopoId || "tc99m";
         setMostrarIsotopo(iso !== "tc99m"); setIsotopoId(iso); setMedicoResponsable(acta.medicoResponsable || "");
-        setFarmId(acta.farmId || ""); setLote(acta.lote); setMci(String(acta.mciAdministrados ?? ""));
+        // acta.lote/farmId no existen si es sinRadiofarmaco -- lote nunca
+        // puede quedar undefined (guardar() y el input controlado hacen .trim()).
+        setSinRadiofarmaco(!!acta.sinRadiofarmaco);
+        setFarmId(acta.farmId || ""); setLote(acta.lote || ""); setMci(String(acta.mciAdministrados ?? ""));
         if (iso === "lu177") {
           setLutecioLoteSeleccionado(acta.loteDosisUnicaId || "");
           setActividadAdministrada(String(acta.mciAdministrados ?? ""));
@@ -542,7 +554,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
     setFichaNro(""); setFichaTocada(false); setFichaEstado(null); setNombre(""); setDni(""); setPeso(""); setTalla(""); setEstudio(""); setEstudioOtro(""); setMci(""); setFarmId(""); setLote(""); setObs("");
     setMostrarIsotopo(false); setIsotopoId("tc99m"); setMedicoResponsable("");
     setTipoI131("barrido"); setActividadAdministrada(""); setIndicacion(""); setDosisVinculada(""); setMibgLoteSeleccionado(""); setLutecioLoteSeleccionado("");
-    setSedeId(usuario.sede); setVerTodoElStock(false); setConfirmoSinMarcacion(false);
+    setSedeId(usuario.sede); setVerTodoElStock(false); setConfirmoSinMarcacion(false); setSinRadiofarmaco(false);
     setAtrasoDetectado(false); setModoManual(false); setFechaRealAtencion(""); setFechaRealAtencionTocada(false);
   }
 
@@ -662,12 +674,12 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
       limpiarForm(); setMostrarForm(false);
       return;
     }
-    if (!mci || !estudio || !lote.trim()) return;
+    if (!mci || !estudio) return;
     if (estudio === "Otro" && !estudioOtro.trim()) return;
-    if (!farmId) return;
+    if (!sinRadiofarmaco && (!lote.trim() || !farmId)) return;
     // Mismo freno que el botón (disabled más abajo) -- acá también, por si
     // guardar() se llegara a invocar de otra forma en el futuro.
-    if (loteSinMarcacion && !confirmoSinMarcacion) return;
+    if (!sinRadiofarmaco && loteSinMarcacion && !confirmoSinMarcacion) return;
     const farm = catalogo.farms.find((f) => f.id === farmId);
     addActaPaciente({
       sedeId, sedeNombre: catalogo.sedes[sedeId]?.nombre,
@@ -675,7 +687,13 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
       pacienteNombre: nombre.trim(), pacienteDni: dni.trim(),
       peso: parseFloat(peso) || 0, talla: parseFloat(talla) || 0,
       estudio: estudio === "Otro" ? estudioOtro.trim() : estudio, mciAdministrados: parseFloat(mci) || 0,
-      isotopoId, lote: lote.trim(), farmId, farmNombre: farm?.nombre || "",
+      isotopoId,
+      // sinRadiofarmaco: se omiten farmId/farmNombre/lote por completo (no
+      // vacíos) y va el flag explícito -- lo exigen así las reglas, para que
+      // un acta sin radiofármaco nunca pueda pasar por un olvido.
+      ...(sinRadiofarmaco
+        ? { sinRadiofarmaco: true }
+        : { lote: lote.trim(), farmId, farmNombre: farm?.nombre || "" }),
       // Antes se perdía silenciosamente para este caso (el más común) --
       // sólo se mandaba en el `base` de la rama esI131, ver arriba.
       ...(fechaRealAtencion ? { fechaRealAtencion: new Date(fechaRealAtencion) } : {}),
@@ -780,6 +798,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
     }
     if (a.tipo === "i131_barrido") return { principal: "—", sub: null };
     if (a.tipo === "i131_mibg") return { principal: `Lote MIBG: ${a.numeroLote || "—"}`, sub: null };
+    if (a.sinRadiofarmaco) return { principal: TEXTO_SIN_RADIOFARMACO, sub: null };
     return { principal: a.isotopoId === "lu177" ? null : (a.farmNombre || "—"), sub: a.lote || null };
   }
 
@@ -942,7 +961,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
     const lote = loteVinculadoDe(a);
     return [d.toLocaleDateString("es-AR"), fmtHora(a.fecha),
       a.sedeNombre, tipoTextoCSV(a), a.pacienteFicha || "—", a.pacienteNombre, a.pacienteDni, a.medicoResponsable || "—",
-      a.peso ?? "—", a.talla ?? "—", a.estudio || "—", a.farmNombre || "—", a.lote || a.numeroLote || "—",
+      a.peso ?? "—", a.talla ?? "—", a.estudio || "—", a.sinRadiofarmaco ? TEXTO_SIN_RADIOFARMACO : (a.farmNombre || "—"), a.lote || a.numeroLote || "—",
       dosis?.valor ?? "—", dosis?.unidad ?? "—", a.indicacion || "—", a.dosisActaId || "—", a.usuarioNombre, a.observacion || "—",
       // Lote vinculado (MIBG/Lutecio-177) -- "—" en las filas sin lote (Tc-99m
       // y cualquier otro registro sin este dato), ver loteVinculadoDe.
@@ -1310,6 +1329,21 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
             )}
             {!esI131 && !esLutecio && (
               <>
+                {/* Excepción explícita, manual (NO automática según el Estudio):
+                    hay estudios donde no se marca ningún radiofármaco y por
+                    eso tampoco hay nada en Libro 1. Al tildar se ocultan
+                    Radiofármaco/Lote y se limpia lo que hubiera elegido. No
+                    se registra de qué elución salió el Tc-99m -- el único
+                    rastro sigue siendo Libro 3. */}
+                <label className="sm:col-span-2 flex items-start gap-2 text-sm text-gray-700">
+                  <input type="checkbox" className="w-4 h-4 accent-blue-600 mt-0.5" checked={sinRadiofarmaco}
+                    onChange={(e) => {
+                      setSinRadiofarmaco(e.target.checked);
+                      setFarmId(""); setLote(""); setVerTodoElStock(false); setConfirmoSinMarcacion(false);
+                    }} />
+                  <span>No requiere marcación de radiofármaco (Tc-99m puro)</span>
+                </label>
+                {!sinRadiofarmaco && (<>
                 <Sel label="Radiofármaco utilizado" value={farmId} onChange={(e) => { setFarmId(e.target.value); setLote(""); }}>
                   <option value="">Seleccionar...</option>
                   {farmsDeSede(catalogo, sedeId).map((f) => <option key={f.id} value={f.id}>{f.nombre}</option>)}
@@ -1360,6 +1394,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
                     </label>
                   )}
                 </div>
+                </>)}
                 <Input label="Dosis administrada (mCi)" type="number" min={0} step={0.1} value={mci} onChange={(e) => setMci(e.target.value)} placeholder="10.5" />
               </>
             )}
@@ -1376,7 +1411,8 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
                    (tipoI131Actual.categoria === "mibg" && !mibgLoteSeleccionado))
                 : esLutecio
                   ? (!medicoResponsable.trim() || !lutecioLoteSeleccionado || !actividadAdministrada)
-                  : (!mci || !estudio || (estudio === "Otro" && !estudioOtro.trim()) || !lote.trim() || !farmId || (loteSinMarcacion && !confirmoSinMarcacion)))
+                  : (!mci || !estudio || (estudio === "Otro" && !estudioOtro.trim()) ||
+                     (!sinRadiofarmaco && (!lote.trim() || !farmId || (loteSinMarcacion && !confirmoSinMarcacion)))))
             }>Guardar registro</Btn>
           </div>
         </div>
