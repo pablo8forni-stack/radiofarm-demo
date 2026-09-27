@@ -3,6 +3,8 @@ import { Badge } from "../../components/ui/Badge.jsx";
 import { Btn } from "../../components/ui/Btn.jsx";
 import { Input } from "../../components/ui/Input.jsx";
 import { Sel } from "../../components/ui/Sel.jsx";
+import { ListaSeleccionable } from "../../components/ui/ListaSeleccionable.jsx";
+import { dedupeLotesPorFarm } from "../../helpers/dedupeLotesPorFarm.js";
 import { QRScanner } from "../../components/scanner/QRScanner.jsx";
 import { ModalAnularActa } from "../../components/actas/ModalAnularActa.jsx";
 import { fmtF, fmtTs, fmtHora, fmtFechaISO, hoy, capitalizarPalabras, agruparPorFecha } from "../../helpers/formato.js";
@@ -50,20 +52,6 @@ function ahoraComoDatetimeLocal() {
   const y = d.getFullYear(), m = String(d.getMonth() + 1).padStart(2, "0"), day = String(d.getDate()).padStart(2, "0");
   const h = String(d.getHours()).padStart(2, "0"), min = String(d.getMinutes()).padStart(2, "0");
   return `${y}-${m}-${day}T${h}:${min}`;
-}
-
-// Dedupe de lotes marcados (Libro 1) para un radiofármaco -- compartida
-// entre el caso normal (lotesMarcadosHoy, actas de HOY) y el de carga
-// tardía (lotesMarcadosFecha, actas de la fecha real de atención): misma
-// regla exacta, sólo cambia la fuente de actas cruda. Si el mismo lote se
-// marcó varias veces, aparece una sola vez; lotes DISTINTOS se acumulan.
-// vencimiento es sólo un dato de Inventario (stock ACTUAL) para mostrar en
-// la opción -- si el lote ya no está en stock, igual queda en la lista,
-// sin ese dato extra.
-function dedupeLotesPorFarm(actasRaw, farmId, lotesEnStock) {
-  const stockPorLote = new Map(lotesEnStock.map((l) => [l.lote, l]));
-  const lotesUnicos = [...new Set(actasRaw.filter((a) => a.farmId === farmId).map((a) => a.lote))];
-  return lotesUnicos.map((loteTxt) => ({ id: loteTxt, lote: loteTxt, vencimiento: stockPorLote.get(loteTxt)?.vencimiento }));
 }
 
 // Conformidad de un lote (MIBG/Lutecio-177) -- 3 estados, no 2: además de
@@ -1358,10 +1346,22 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
                     // stock" abajo, que sí la exige).
                     <Input label="Lote (sin marcación registrada para esta fecha)" value={lote} onChange={(e) => setLote(e.target.value)} placeholder="Tipear lote manualmente" />
                   ) : (
-                    <Sel label="Lote" value={lote} onChange={(e) => { setLote(e.target.value); setConfirmoSinMarcacion(false); }} disabled={!farmId}>
-                      <option value="">Seleccionar lote...</option>
-                      {lotesDisp.map((l) => <option key={l.id} value={l.lote}>{l.lote} · Venc: {fmtF(l.vencimiento)}</option>)}
-                    </Sel>
+                    // ListaSeleccionable, no Sel: sólo acá hace falta mostrar
+                    // filas no elegibles (marcaciones viejas del mismo
+                    // radiofármaco, ver dedupeLotesPorFarm) sin ocultarlas.
+                    // seleccionable sólo viene en falso desde lotesRelevantes
+                    // -- en modo "Ver todo el stock" (lotesDisp = lotesEnStock)
+                    // ninguna fila lo trae, así que todas quedan elegibles,
+                    // sin cambio de comportamiento ahí.
+                    <ListaSeleccionable
+                      label="Lote" value={lote} disabled={!farmId} placeholder="Seleccionar lote..."
+                      onChange={(v) => { setLote(v); setConfirmoSinMarcacion(false); }}
+                      options={lotesDisp.map((l) => ({
+                        value: l.lote, label: `${l.lote} · Venc: ${fmtF(l.vencimiento)}`,
+                        disabled: l.seleccionable === false,
+                        disabledHint: l.seleccionable === false ? "ya no es la marcación más reciente" : undefined,
+                      }))}
+                    />
                   )}
                   {/* Por defecto sólo lo marcado hoy en Libro 1 (regla de
                       negocio confirmada) -- este checkbox es la vía de
