@@ -18,8 +18,8 @@
     "staging:reset": "firebase firestore:delete --all-collections --project radiofarm-fuesmen-staging --force",
     "staging:ultimas-actas": "node --env-file=.env.staging scripts/testing/ultimasActas.mjs",
     "check:bundle": "node --env-file=.env.staging scripts/checkBundle.mjs",
-    "deploy:prod": "rm -rf dist && npm run build && npm run check:bundle && npx firebase deploy --only hosting --project radiofarm-fuesmen",
-    "deploy:staging": "rm -rf dist && npm run build:staging && npm run check:bundle && npx firebase deploy --only hosting --project radiofarm-fuesmen-staging"
+    "deploy:prod": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\" && npm run build && npm run check:bundle && npx firebase deploy --only hosting --project radiofarm-fuesmen",
+    "deploy:staging": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\" && npm run build:staging && npm run check:bundle && npx firebase deploy --only hosting --project radiofarm-fuesmen-staging"
   },
   "dependencies": {
     "firebase": "^12.16.0",
