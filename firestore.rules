@@ -620,7 +620,53 @@ service cloud.firestore {
                              d.actividadCalibrada is number && d.actividadCalibrada > 0)))
                      : (d.lote is string && d.lote.size() > 0 &&
                         d.farmId is string && d.farmId.size() > 0 &&
-                        d.mciMarcacion is number && d.mciMarcacion > 0)));
+                        d.mciMarcacion is number && d.mciMarcacion > 0 &&
+                        // Bug real encontrado (Pablo, evidencia propia): con
+                        // 2 egresos + 2 marcaciones reales (stock a 0), se
+                        // pudo crear una TERCERA marcación del mismo lote sin
+                        // ningún egreso real que la respalde -- el cliente
+                        // sólo deduplicaba por texto de lote, sin llevar
+                        // ninguna cuenta de cuántos egresos existían ni de
+                        // cuáles ya se usaron, y el servidor no exigía nada
+                        // contra movimientos/stock (pura validación de
+                        // formato). "1 egreso = 1 marcación", confirmado --
+                        // sin excepción por cantidad (siempre se egresa de a
+                        // un vial). Mismo patrón exacto que MIBG/Lutecio-177:
+                        // la propia acta de marcación ES el marcador
+                        // (marcacion_${egresoMovimientoId}_${n}), así que
+                        // anularActaTransaction ya la libera gratis (crea
+                        // anula_marcacion_..._n, que es exactamente lo que
+                        // intentoHabilitado espera) -- no hizo falta tocar
+                        // esa función.
+                        // Excepción explícita (checkbox "Ver todo el stock",
+                        // TabMarcacion.jsx) para el caso legítimo sin egreso
+                        // -- mismo criterio que sinRadiofarmaco en Libro 2:
+                        // XOR estricto, nunca ambos campos, nunca ninguno.
+                        ('egresoMovimientoId' in d
+                          ? (!('confirmoSinEgreso' in d) &&
+                             d.egresoMovimientoId is string && d.egresoMovimientoId.size() > 0 &&
+                             d.intentoNro in ['1', '2', '3', '4', '5'] &&
+                             actaId == 'marcacion_' + d.egresoMovimientoId + '_' + d.intentoNro &&
+                             egresoValidoParaMarcar(d.egresoMovimientoId, d.farmId, d.lote, d.sedeId) &&
+                             intentoHabilitado('marcacion_', d.egresoMovimientoId, d.intentoNro))
+                          : (d.confirmoSinEgreso == true && !('egresoMovimientoId' in d))))));
+    }
+
+    // Egreso real que respalda una Marcación (ver bug real arriba) --
+    // existe, es tipo=='egreso', del mismo farmId/lote/sedeId que la
+    // marcación (defensa en profundidad: sin esto, un egreso de OTRO
+    // radiofármaco o de otra sede podría "prestar" su id), y no fue
+    // anulado. Los 4 get() al mismo path no cuestan de más -- Firestore
+    // cachea llamadas idénticas dentro de una misma evaluación de reglas
+    // (confirmado empíricamente en staging con intentoNro=5, el peor caso
+    // de lecturas -- ver notas de la verificación).
+    function egresoValidoParaMarcar(movId, farmId, lote, sedeId) {
+      return exists(/databases/$(database)/documents/movimientos/$(movId)) &&
+        !exists(/databases/$(database)/documents/movimientos/$('anula_' + movId)) &&
+        get(/databases/$(database)/documents/movimientos/$(movId)).data.tipo == 'egreso' &&
+        get(/databases/$(database)/documents/movimientos/$(movId)).data.farmId == farmId &&
+        get(/databases/$(database)/documents/movimientos/$(movId)).data.lote == lote &&
+        get(/databases/$(database)/documents/movimientos/$(movId)).data.sedeId == sedeId;
     }
 
     // Las actas tienen nombre y DNI de pacientes (Libro 2) -- Ley 25.326.

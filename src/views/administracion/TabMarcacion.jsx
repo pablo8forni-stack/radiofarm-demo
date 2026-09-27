@@ -3,19 +3,14 @@ import { Badge } from "../../components/ui/Badge.jsx";
 import { Btn } from "../../components/ui/Btn.jsx";
 import { Input } from "../../components/ui/Input.jsx";
 import { Sel } from "../../components/ui/Sel.jsx";
+import { ListaSeleccionable } from "../../components/ui/ListaSeleccionable.jsx";
 import { ModalAnularActa } from "../../components/actas/ModalAnularActa.jsx";
 import { fmtF, fmtTs, fmtHora, fmtFechaISO, hoy, agruparPorFecha } from "../../helpers/formato.js";
 import { descargarArchivo } from "../../helpers/descargarArchivo.js";
 import { sedesActivas, farmsDeSede } from "../../helpers/stock.js";
+import { egresosDisponiblesParaMarcar } from "../../helpers/egresosDisponiblesParaMarcar.js";
 import { listenActas, addActaMarcacion, actasPorRango, anularActaTransaction, listenAnulacionesActas } from "../../services/firestore/actas.js";
 import { listenMovimientosEgresoHoy } from "../../services/firestore/movimientos.js";
-
-// Motivos de Egreso que representan DESCARTE del vial (vencido / roto), no
-// un vial que se va a marcar -- confirmado con el usuario real, el flujo es
-// Egreso primero (saca el vial de la heladera), Marcación después sobre ESE
-// vial. Excluirlos evita que un egreso de descarte aparezca como candidato
-// de marcación. Strings exactos, mismos que ModalEgreso.jsx.
-const MOTIVOS_DESCARTE = ["Vencimiento", "Derrame / accidente"];
 
 const TIMEOUT_BUSQUEDA_MS = 20000;
 const MSJ_TIMEOUT_BUSQUEDA = "La consulta tardó demasiado, puede haber un problema de conexión -- intentá cerrar las otras pestañas de RadioFarm que tengas abiertas y reintentá.";
@@ -51,19 +46,26 @@ export function TabMarcacion({ catalogo, usuario, esAdmin, onToast }) {
   }
 
   const [farmId, setFarmId] = useState(""); const [lote, setLote] = useState("");
+  // Egreso puntual elegido (id del movimiento) -- lo que de verdad vincula
+  // esta marcación a un egreso real y consumible (ver
+  // egresosDisponiblesParaMarcar/addActaMarcacion). `lote` (texto) se sigue
+  // llevando aparte, derivado del mismo egreso elegido, porque todo lo demás
+  // en la app (CSV, cruce con Libro 2) sigue leyendo por texto de lote.
+  const [egresoMovimientoId, setEgresoMovimientoId] = useState("");
   const [mciMarcacion, setMciMarcacion] = useState(""); const [obs, setObs] = useState("");
   const [sedeId, setSedeId] = useState(usuario.sede);
-  // Freno real (no sólo texto) para el caso confirmado en producción: un
-  // técnico usó "Ver todo el stock" y marcó un lote SIN Egreso registrado
-  // hoy, generando un desfasaje con el stock físico. Sólo se pide cuando
-  // hace falta de verdad (verTodoElStock activo Y el lote elegido no tiene
-  // Egreso de hoy, ver loteSinEgresoHoy más abajo) -- no cada vez que el
-  // checkbox está tildado.
-  const [confirmoSinEgreso, setConfirmoSinEgreso] = useState(false);
-  // Lista de lotes seleccionables -- por defecto SÓLO los egresados hoy
-  // (regla de negocio confirmada: el técnico egresa el vial primero, marca
-  // después sobre ese mismo vial). "Ver todo el stock" es la vía de escape
-  // excepcional -- mismo criterio y mismo nombre que ya usamos en Libro 2.
+  // Bug real encontrado (Pablo, evidencia propia): con 2 egresos + 2
+  // marcaciones reales del mismo lote (stock a 0), se pudo crear una
+  // TERCERA marcación sin ningún egreso real que la respalde -- el
+  // selector viejo deduplicaba por texto de lote, sin llevar la cuenta de
+  // cuántos egresos existían ni de cuáles ya se usaron. Ahora cada egreso
+  // de hoy es su propia fila (ver egresosDisponiblesParaMarcar), y el
+  // servidor exige egresoMovimientoId válido y no consumido (o
+  // confirmoSinEgreso explícito) -- ver firestore.rules#actaValida.
+  // "Ver todo el stock" es la vía de escape para el caso legítimo sin
+  // egreso -- UN solo checkbox, mismo criterio que sinRadiofarmaco en
+  // Libro 2 (tildarlo YA implica confirmoSinEgreso: true al guardar, sin
+  // un segundo paso de confirmación aparte).
   const [verTodoElStock, setVerTodoElStock] = useState(false);
   const [egresadosHoyRaw, setEgresadosHoyRaw] = useState([]);
   useEffect(() => { if (sedeId) return listenMovimientosEgresoHoy(sedeId, setEgresadosHoyRaw); }, [sedeId]);
@@ -81,8 +83,15 @@ export function TabMarcacion({ catalogo, usuario, esAdmin, onToast }) {
       onToast("Marcación anulada", "info", 6000);
       setMAnular(null);
       // Precarga el formulario con los mismos datos para corregir sólo lo
-      // que estaba mal, en vez de tipear todo de nuevo.
+      // que estaba mal, en vez de tipear todo de nuevo. Restaura el mismo
+      // camino que tenía la marcación original -- best effort, no
+      // garantizado: si tenía egresoMovimientoId, la anulación de arriba ya
+      // lo liberó (mismo id determinístico que intentoHabilitado espera),
+      // así que vuelve a aparecer seleccionable en la lista; si venía de
+      // "Ver todo el stock" (confirmoSinEgreso), vuelve a ese modo.
       setSedeId(acta.sedeId); setFarmId(acta.farmId); setLote(acta.lote);
+      setVerTodoElStock(!acta.egresoMovimientoId);
+      setEgresoMovimientoId(acta.egresoMovimientoId || "");
       setMciMarcacion(String(acta.mciMarcacion ?? "")); setObs(acta.observacion || "");
       setMostrarForm(true);
     } catch (e) {
@@ -91,41 +100,36 @@ export function TabMarcacion({ catalogo, usuario, esAdmin, onToast }) {
   }
 
   const lotesEnStock = (catalogo.stock[sedeId]?.[farmId] || []).filter((l) => l.cantidad > 0);
-  // Egresados HOY para el radiofármaco elegido -- deduplicados por lote,
-  // excluyendo motivos de descarte (MOTIVOS_DESCARTE). El vencimiento es
-  // sólo un dato de Inventario -- se cruza acá contra el stock SOLO para
-  // mostrarlo si todavía existe ahí; si ya no está (se consumió desde el
-  // egreso), el lote igual queda en la lista, sin ese dato extra.
-  const lotesEgresadosHoy = useMemo(() => {
-    const stockPorLote = new Map(lotesEnStock.map((l) => [l.lote, l]));
-    const lotesUnicos = [...new Set(
-      egresadosHoyRaw.filter((m) => m.farmId === farmId && !MOTIVOS_DESCARTE.includes(m.motivo)).map((m) => m.lote)
-    )];
-    return lotesUnicos.map((loteTxt) => ({ id: loteTxt, lote: loteTxt, vencimiento: stockPorLote.get(loteTxt)?.vencimiento }));
-  }, [egresadosHoyRaw, farmId, lotesEnStock]);
-  const lotesDisp = verTodoElStock ? lotesEnStock : lotesEgresadosHoy;
-  // Riesgo real (caso confirmado en producción): con "Ver todo el stock"
-  // activo, el lote elegido puede no tener Egreso de hoy -- si el único
-  // Egreso de hoy de ese lote fue por un motivo de descarte
-  // (Vencimiento/Derrame), lotesEgresadosHoy ya lo excluyó, así que
-  // TAMBIÉN cuenta como "sin Egreso" acá (correcto: marcar un lote
-  // descartado hoy es al menos igual de riesgoso).
-  const loteSinEgresoHoy = verTodoElStock && !!lote && !lotesEgresadosHoy.some((l) => l.lote === lote);
+  // Una fila POR MOVIMIENTO de egreso individual (no por texto de lote) --
+  // ver egresosDisponiblesParaMarcar. actasTodas ya trae las marcaciones
+  // necesarias para saber qué egresos están consumidos (no hace falta
+  // acotarlas a HOY: un egreso de hoy sólo puede consumirlo una marcación
+  // de hoy o de un instante después).
+  const egresosDisponibles = useMemo(
+    () => egresosDisponiblesParaMarcar(egresadosHoyRaw, farmId, lotesEnStock, actasTodas, anulaciones),
+    [egresadosHoyRaw, farmId, lotesEnStock, actasTodas, anulaciones]
+  );
+  const lotesDisp = verTodoElStock ? lotesEnStock : egresosDisponibles;
+  const hayEgresoDisponible = egresosDisponibles.some((l) => l.seleccionable);
 
   function guardar() {
     if (!farmId || !lote || !mciMarcacion) return;
     // Mismo freno que el botón (disabled más abajo) -- acá también, por si
     // guardar() se llegara a invocar de otra forma en el futuro.
-    if (loteSinEgresoHoy && !confirmoSinEgreso) return;
+    if (!verTodoElStock && !egresoMovimientoId) return;
     const farm = catalogo.farms.find((f) => f.id === farmId);
     addActaMarcacion({
       sedeId, sedeNombre: catalogo.sedes[sedeId]?.nombre,
       farmId, farmNombre: farm?.nombre || "", lote,
       mciMarcacion: parseFloat(mciMarcacion) || 0,
       usuarioNombre: usuario.nombre, usuarioEmail: usuario.email, observacion: obs.trim(),
+      // XOR estricto -- ver firestore.rules#actaValida: nunca los dos
+      // juntos, nunca ninguno. verTodoElStock manda directo confirmoSinEgreso
+      // (un solo checkbox, mismo criterio que sinRadiofarmaco en Libro 2).
+      ...(verTodoElStock ? { confirmoSinEgreso: true } : { egresoMovimientoId }),
     }).catch((e) => onToast(e.message || "No se pudo guardar la marcación", "error"));
     onToast("Marcación registrada");
-    setFarmId(""); setLote(""); setMciMarcacion(""); setObs(""); setMostrarForm(false); setVerTodoElStock(false); setConfirmoSinEgreso(false);
+    setFarmId(""); setLote(""); setEgresoMovimientoId(""); setMciMarcacion(""); setObs(""); setMostrarForm(false); setVerTodoElStock(false);
   }
 
   const actas = useMemo(
@@ -316,41 +320,62 @@ export function TabMarcacion({ catalogo, usuario, esAdmin, onToast }) {
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             {esAdmin && (
-              <Sel label="Sede" value={sedeId} onChange={(e) => { setSedeId(e.target.value); setFarmId(""); setLote(""); }}>
+              <Sel label="Sede" value={sedeId} onChange={(e) => { setSedeId(e.target.value); setFarmId(""); setLote(""); setEgresoMovimientoId(""); }}>
                 {sedesActivas(catalogo).map((s) => <option key={s.id} value={s.id}>{s.short}</option>)}
               </Sel>
             )}
-            <Sel label="Radiofármaco" value={farmId} onChange={(e) => { setFarmId(e.target.value); setLote(""); }}>
+            <Sel label="Radiofármaco" value={farmId} onChange={(e) => { setFarmId(e.target.value); setLote(""); setEgresoMovimientoId(""); }}>
               <option value="">Seleccionar...</option>
               {farmsDeSede(catalogo, sedeId).map((f) => <option key={f.id} value={f.id}>{f.nombre}</option>)}
             </Sel>
             <div className="flex flex-col gap-1">
-              <Sel label="Lote" value={lote} onChange={(e) => { setLote(e.target.value); setConfirmoSinEgreso(false); }} disabled={!farmId}>
-                <option value="">Seleccionar lote...</option>
-                {lotesDisp.map((l) => <option key={l.id} value={l.lote}>{l.lote} · Venc: {fmtF(l.vencimiento)}</option>)}
-              </Sel>
-              {/* Por defecto sólo lo egresado hoy (regla de negocio
-                  confirmada) -- este checkbox es la vía de escape para un
-                  caso excepcional, apagada por defecto a propósito. */}
+              {verTodoElStock ? (
+                <Sel label="Lote" value={lote} onChange={(e) => setLote(e.target.value)} disabled={!farmId}>
+                  <option value="">Seleccionar lote...</option>
+                  {lotesDisp.map((l) => <option key={l.id} value={l.lote}>{l.lote} · Venc: {fmtF(l.vencimiento)}</option>)}
+                </Sel>
+              ) : (
+                // ListaSeleccionable, no Sel: cada fila es un EGRESO
+                // individual (no un texto de lote deduplicado) -- si el
+                // mismo lote se egresó 2 veces hoy, son 2 filas, y una
+                // puede estar consumida (ya usada en otra marcación) sin
+                // que la otra lo esté. La hora distingue filas con el mismo
+                // texto de lote.
+                <ListaSeleccionable
+                  label="Lote" value={egresoMovimientoId} disabled={!farmId} placeholder="Seleccionar lote..."
+                  onChange={(movId) => {
+                    const fila = egresosDisponibles.find((l) => l.id === movId);
+                    setEgresoMovimientoId(movId);
+                    setLote(fila?.lote || "");
+                  }}
+                  options={egresosDisponibles.map((l) => ({
+                    value: l.id, label: `${l.lote} · ${fmtHora(l.fecha)} · Venc: ${fmtF(l.vencimiento)}`,
+                    disabled: l.seleccionable === false,
+                    disabledHint: l.seleccionable === false ? "ya se usó en una marcación" : undefined,
+                  }))}
+                />
+              )}
+              {/* Por defecto sólo lo egresado hoy y no consumido todavía
+                  (regla de negocio confirmada, "1 egreso = 1 marcación") --
+                  este checkbox es la vía de escape para un caso
+                  excepcional, apagada por defecto a propósito. UN solo
+                  checkbox -- tildarlo ya manda confirmoSinEgreso: true al
+                  guardar (ver guardar()), mismo criterio que sinRadiofarmaco
+                  en Libro 2, sin un segundo paso de confirmación aparte. */}
               <label className="flex items-center gap-1.5 text-xs text-gray-500">
                 <input type="checkbox" className="w-3.5 h-3.5 accent-blue-600" checked={verTodoElStock}
-                  onChange={(e) => { setVerTodoElStock(e.target.checked); setLote(""); setConfirmoSinEgreso(false); }} />
+                  onChange={(e) => { setVerTodoElStock(e.target.checked); setLote(""); setEgresoMovimientoId(""); }} />
                 Ver todo el stock (excepcional)
               </label>
-              {!verTodoElStock && farmId && lotesEgresadosHoy.length === 0 && (
+              {!verTodoElStock && farmId && egresosDisponibles.length === 0 && (
                 <p className="text-xs text-amber-600">Ningún lote de este radiofármaco fue egresado hoy en esta sede.</p>
               )}
-              {/* Freno real (caso confirmado en producción, no sólo texto):
-                  con "Ver todo el stock" activo y un lote SIN Egreso de hoy
-                  elegido, esta confirmación es obligatoria para poder
-                  guardar -- ver loteSinEgresoHoy y el disabled del botón
-                  más abajo. */}
-              {loteSinEgresoHoy && (
-                <label className="flex items-start gap-2 text-xs text-red-700 bg-red-50 border border-red-200 rounded-xl px-3 py-2 mt-1">
-                  <input type="checkbox" className="w-3.5 h-3.5 accent-red-600 mt-0.5" checked={confirmoSinEgreso}
-                    onChange={(e) => setConfirmoSinEgreso(e.target.checked)} />
-                  <span>Confirmo que este lote NO tiene un Egreso registrado hoy -- voy a registrarlo por separado en Inventario.</span>
-                </label>
+              {/* Visibilidad que habría evitado el bug real (Pablo): antes
+                  esto se veía IGUAL que "ningún egreso hoy" -- no había
+                  forma de distinguir "nunca egresé nada" de "ya usé todo lo
+                  que egresé". */}
+              {!verTodoElStock && farmId && egresosDisponibles.length > 0 && !hayEgresoDisponible && (
+                <p className="text-xs text-amber-600">Todos los egresos de hoy para este radiofármaco ya fueron usados en una marcación.</p>
               )}
             </div>
             <Input label="mCi utilizados en marcación" type="number" min={0} step={0.1} value={mciMarcacion} onChange={(e) => setMciMarcacion(e.target.value)} placeholder="20" />
@@ -358,7 +383,7 @@ export function TabMarcacion({ catalogo, usuario, esAdmin, onToast }) {
           </div>
           <div className="flex gap-2 justify-end mt-4">
             <Btn variant="outline" onClick={() => setMostrarForm(false)}>Cancelar</Btn>
-            <Btn onClick={guardar} disabled={!farmId || !lote || !mciMarcacion || (loteSinEgresoHoy && !confirmoSinEgreso)}>Guardar marcación</Btn>
+            <Btn onClick={guardar} disabled={!farmId || !lote || !mciMarcacion || (!verTodoElStock && !egresoMovimientoId)}>Guardar marcación</Btn>
           </div>
         </div>
       )}

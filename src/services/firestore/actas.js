@@ -247,10 +247,65 @@ export function addActaPaciente(data) {
   return crearActaConFicha("paciente", data);
 }
 
+// Bug real encontrado (Pablo, evidencia propia): con 2 egresos + 2
+// marcaciones reales (stock a 0), se pudo crear una TERCERA marcación del
+// mismo lote sin ningún egreso real que la respalde -- el selector de
+// TabMarcacion.jsx deduplicaba por texto de lote (perdía la cuenta de
+// cuántos egresos existían) y el servidor no exigía nada contra
+// movimientos/stock. "1 egreso = 1 marcación", confirmado, sin excepción
+// por cantidad (siempre se egresa de a un vial).
+//
+// data.egresoMovimientoId (camino normal) o data.confirmoSinEgreso (checkbox
+// "Ver todo el stock", TabMarcacion.jsx) -- exactamente uno de los dos,
+// nunca ambos, nunca ninguno (ver firestore.rules#actaValida). El llamador
+// (guardar() en TabMarcacion.jsx) ya arma `data` con uno u otro, nunca los
+// dos juntos.
+//
+// Camino confirmoSinEgreso: alta simple offline-safe, sin lectura previa --
+// igual que siempre, sólo que ahora el flag queda persistido (transparente,
+// nunca un agujero silencioso).
+//
+// Camino egresoMovimientoId: mismo patrón EXACTO que
+// administrarLoteDosisUnicaTransaction (mibgLotes.js) -- la propia acta de
+// marcación ES el marcador de "este egreso ya se usó"
+// (marcacion_${egresoMovimientoId}_${n}, intentos 1..5, create-only,
+// progresión secuencial vía anulación). anularActaTransaction no necesitó
+// ningún cambio para esto: ya crea anula_${acta.id} sin importar la forma
+// del id, así que anular una marcación con este id determinístico libera el
+// egreso automáticamente (intentoHabilitado, en las reglas, ya sabe leer
+// ese mismo patrón -- lo comparte con MIBG/Lutecio-177).
+const CAP_INTENTOS_MARCACION = 5;
+
 export function addActaMarcacion(data) {
-  const batch = writeBatch(db);
-  batch.set(doc(actasCol), { ...data, tipo: "marcacion", fecha: serverTimestamp() });
-  return batch.commit();
+  if (data.confirmoSinEgreso) {
+    const batch = writeBatch(db);
+    batch.set(doc(actasCol), { ...data, tipo: "marcacion", fecha: serverTimestamp() });
+    return batch.commit();
+  }
+  const { egresoMovimientoId, ...resto } = data;
+  const movimientoRef = doc(db, "movimientos", egresoMovimientoId);
+  const anulaMovRef = doc(db, "movimientos", `anula_${egresoMovimientoId}`);
+  return conMensajeDeContingencia(() =>
+    runTransaction(db, async (tx) => {
+      const movSnap = await tx.get(movimientoRef);
+      if (!movSnap.exists()) throw new Error("El egreso elegido ya no existe.");
+      if (movSnap.data().tipo !== "egreso") throw new Error("La referencia elegida no es un egreso.");
+      const anulaMovSnap = await tx.get(anulaMovRef);
+      if (anulaMovSnap.exists()) throw new Error("Este egreso fue anulado -- no se puede usar para una marcación.");
+
+      for (let n = 1; n <= CAP_INTENTOS_MARCACION; n++) {
+        const marcacionRef = doc(actasCol, `marcacion_${egresoMovimientoId}_${n}`);
+        const marcacionSnap = await tx.get(marcacionRef);
+        if (!marcacionSnap.exists()) {
+          tx.set(marcacionRef, { ...resto, tipo: "marcacion", egresoMovimientoId, intentoNro: String(n), fecha: serverTimestamp() });
+          return;
+        }
+        const anulaSnap = await tx.get(doc(actasCol, `anula_marcacion_${egresoMovimientoId}_${n}`));
+        if (!anulaSnap.exists()) throw new Error("Este egreso ya fue usado en otra marcación.");
+      }
+      throw new Error("Este egreso ya tuvo demasiadas correcciones -- contactá soporte.");
+    })
+  );
 }
 
 // Gestión I-131: 6 tipos planos (mismo criterio que transferencia_salida/

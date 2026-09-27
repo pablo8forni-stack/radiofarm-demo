@@ -212,6 +212,197 @@ test("sinRadiofarmaco no aplica a Marcación (Libro 1): sigue exigiendo farmId, 
   );
 });
 
+// Bloqueo real egreso<->marcación (ver egresoValidoParaMarcar/
+// intentoHabilitado en firestore.rules): bug real encontrado por Pablo --
+// con 2 egresos + 2 marcaciones reales del mismo lote (stock a 0), se pudo
+// crear una TERCERA marcación sin ningún egreso real que la respalde. "1
+// egreso = 1 marcación": el id determinístico marcacion_${movId}_${n} hace
+// que la propia acta sea el marcador de consumo (mismo patrón exacto que
+// MIBG/Lutecio-177) -- anularActaTransaction no necesitó ningún cambio para
+// liberarlo: ya crea anula_${acta.id} sin importar la forma del id.
+async function crearEgresoDePrueba(lote, overrides = {}) {
+  const ref = await addDoc(collection(db, "movimientos"), movimientoBase({ tipo: "egreso", loteId: "x", lote, ...overrides }));
+  return ref.id;
+}
+function marcacionConEgresoBase(egresoMovimientoId, lote, overrides = {}) {
+  return {
+    tipo: "marcacion", fecha: serverTimestamp(), sedeId: SEDE_A, farmId: FARM_ID, lote, mciMarcacion: 10,
+    egresoMovimientoId, intentoNro: "1",
+    usuarioEmail: PERSONAS.tecnicoA.email, usuarioNombre: PERSONAS.tecnicoA.nombre,
+    ...overrides,
+  };
+}
+function marcacionRef(movId, n) {
+  return doc(collection(db, "actas"), `marcacion_${movId}_${n}`);
+}
+
+test("control positivo: técnico SÍ puede crear una marcación con un egreso real (mismo farmId/lote/sede) que la respalda", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  const lote = loteDePrueba();
+  const movId = await crearEgresoDePrueba(lote);
+  await setDoc(marcacionRef(movId, 1), marcacionConEgresoBase(movId, lote));
+  const snap = await getDoc(marcacionRef(movId, 1));
+  assert.ok(snap.exists());
+  assert.equal(snap.data().egresoMovimientoId, movId);
+});
+
+test("marcación con egresoMovimientoId de un movimiento inexistente es rechazada", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  const lote = loteDePrueba();
+  await assertPermissionDenied(() =>
+    setDoc(marcacionRef("no-existe", 1), marcacionConEgresoBase("no-existe", lote))
+  );
+});
+
+test("marcación con egresoMovimientoId de un movimiento de OTRO farmId es rechazada", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  const lote = loteDePrueba();
+  const movId = await crearEgresoDePrueba(lote, { farmId: "otro-farm-inexistente" });
+  await assertPermissionDenied(() =>
+    setDoc(marcacionRef(movId, 1), marcacionConEgresoBase(movId, lote))
+  );
+});
+
+test("marcación con egresoMovimientoId de un movimiento de OTRO lote (texto distinto) es rechazada", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  const loteEgreso = loteDePrueba();
+  const loteMarcacion = loteDePrueba();
+  const movId = await crearEgresoDePrueba(loteEgreso);
+  await assertPermissionDenied(() =>
+    setDoc(marcacionRef(movId, 1), marcacionConEgresoBase(movId, loteMarcacion))
+  );
+});
+
+test("marcación con egresoMovimientoId de un movimiento de OTRA sede es rechazada", async () => {
+  // El egreso lo crea tecnicoB (su propia sede es SEDE_B -- tecnicoA no
+  // puede escribir un movimiento con sedeId ajeno, ver movimientoValido()).
+  await loguearComo(PERSONAS.tecnicoB);
+  const lote = loteDePrueba();
+  const movId = await crearEgresoDePrueba(lote, {
+    sedeId: SEDE_B, sedeNombre: "C. Gamma Hospital Italiano",
+    usuarioEmail: PERSONAS.tecnicoB.email, usuarioNombre: PERSONAS.tecnicoB.nombre,
+  });
+  // La marcación la intenta tecnicoA, en SU sede (SEDE_A) -- el egreso
+  // referenciado es de otra sede, tiene que rechazar.
+  await loguearComo(PERSONAS.tecnicoA);
+  await assertPermissionDenied(() =>
+    setDoc(marcacionRef(movId, 1), marcacionConEgresoBase(movId, lote))
+  );
+});
+
+test("marcación con egresoMovimientoId de un movimiento que NO es egreso (ingreso) es rechazada", async () => {
+  await loguearComo(PERSONAS.admin); // ingreso directo exige isAdmin() en movimientoValido()
+  const lote = loteDePrueba();
+  const movId = await crearEgresoDePrueba(lote, { tipo: "ingreso", usuarioEmail: PERSONAS.admin.email, usuarioNombre: PERSONAS.admin.nombre, proveedorNombre: "Test" });
+  await loguearComo(PERSONAS.tecnicoA);
+  await assertPermissionDenied(() =>
+    setDoc(marcacionRef(movId, 1), marcacionConEgresoBase(movId, lote))
+  );
+});
+
+test("marcación con egresoMovimientoId de un movimiento ya ANULADO es rechazada", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  const lote = loteDePrueba();
+  const movId = await crearEgresoDePrueba(lote);
+  await loguearComo(PERSONAS.admin); // anular un movimiento exige isAdmin()
+  // Mismo shape exacto que anularMovimientoTransaction (movimientos.js) --
+  // movimientoValido() exige cantidad/farmId/lote en CUALQUIER tipo,
+  // incluida 'anulacion'.
+  await setDoc(doc(db, "movimientos", `anula_${movId}`), {
+    tipo: "anulacion", anulaId: movId, sedeId: SEDE_A, farmId: FARM_ID, lote, cantidad: 1,
+    fecha: serverTimestamp(), usuarioEmail: PERSONAS.admin.email, usuarioNombre: PERSONAS.admin.nombre,
+  });
+  await loguearComo(PERSONAS.tecnicoA);
+  await assertPermissionDenied(() =>
+    setDoc(marcacionRef(movId, 1), marcacionConEgresoBase(movId, lote))
+  );
+});
+
+test("mismo egreso, dos marcaciones activas: la segunda (intento 2, sin anular la 1) es rechazada -- 1 egreso = 1 marcación", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  const lote = loteDePrueba();
+  const movId = await crearEgresoDePrueba(lote);
+  await setDoc(marcacionRef(movId, 1), marcacionConEgresoBase(movId, lote));
+  await assertPermissionDenied(() =>
+    setDoc(marcacionRef(movId, 2), marcacionConEgresoBase(movId, lote, { intentoNro: "2" }))
+  );
+});
+
+test("control positivo: tras anular la marcación activa, el mismo egreso vuelve a estar disponible (intento 2)", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  const lote = loteDePrueba();
+  const movId = await crearEgresoDePrueba(lote);
+  await setDoc(marcacionRef(movId, 1), marcacionConEgresoBase(movId, lote));
+
+  await loguearComo(PERSONAS.admin);
+  await setDoc(doc(db, "actas", `anula_marcacion_${movId}_1`), {
+    tipo: "anulacion", anulaId: `marcacion_${movId}_1`, sedeId: SEDE_A, fecha: serverTimestamp(),
+    motivo: "Test", usuarioEmail: PERSONAS.admin.email, usuarioNombre: PERSONAS.admin.nombre,
+  });
+
+  await loguearComo(PERSONAS.tecnicoA);
+  await setDoc(marcacionRef(movId, 2), marcacionConEgresoBase(movId, lote, { intentoNro: "2" }));
+  const snap = await getDoc(marcacionRef(movId, 2));
+  assert.ok(snap.exists());
+});
+
+test("marcación con actaId que no sigue el patrón marcacion_<id>_<n> es rechazada, aunque el egreso sea válido", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  const lote = loteDePrueba();
+  const movId = await crearEgresoDePrueba(lote);
+  await assertPermissionDenied(() =>
+    addDoc(collection(db, "actas"), marcacionConEgresoBase(movId, lote))
+  );
+});
+
+test("marcación con intentoNro fuera de 1..5 es rechazada", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  const lote = loteDePrueba();
+  const movId = await crearEgresoDePrueba(lote);
+  await assertPermissionDenied(() =>
+    setDoc(doc(db, "actas", `marcacion_${movId}_6`), marcacionConEgresoBase(movId, lote, { intentoNro: "6" }))
+  );
+});
+
+test("marcación SIN egresoMovimientoId y SIN confirmoSinEgreso es rechazada -- el bug real (nunca ninguno de los dos)", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  await assertPermissionDenied(() =>
+    addDoc(collection(db, "actas"), {
+      tipo: "marcacion", fecha: serverTimestamp(), sedeId: SEDE_A, farmId: FARM_ID, lote: loteDePrueba(), mciMarcacion: 10,
+      usuarioEmail: PERSONAS.tecnicoA.email, usuarioNombre: PERSONAS.tecnicoA.nombre,
+    })
+  );
+});
+
+test("control positivo: marcación con confirmoSinEgreso=true (sin egresoMovimientoId) es aceptada -- 'Ver todo el stock'", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  const ref = await addDoc(collection(db, "actas"), {
+    tipo: "marcacion", fecha: serverTimestamp(), sedeId: SEDE_A, farmId: FARM_ID, lote: loteDePrueba(), mciMarcacion: 10,
+    confirmoSinEgreso: true, usuarioEmail: PERSONAS.tecnicoA.email, usuarioNombre: PERSONAS.tecnicoA.nombre,
+  });
+  const snap = await getDoc(ref);
+  assert.ok(snap.exists());
+});
+
+test("marcación con confirmoSinEgreso=false (sin egresoMovimientoId) es rechazada -- sólo vale el flag en true", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  await assertPermissionDenied(() =>
+    addDoc(collection(db, "actas"), {
+      tipo: "marcacion", fecha: serverTimestamp(), sedeId: SEDE_A, farmId: FARM_ID, lote: loteDePrueba(), mciMarcacion: 10,
+      confirmoSinEgreso: false, usuarioEmail: PERSONAS.tecnicoA.email, usuarioNombre: PERSONAS.tecnicoA.nombre,
+    })
+  );
+});
+
+test("marcación con egresoMovimientoId Y confirmoSinEgreso=true a la vez es rechazada -- se contradicen, XOR estricto", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  const lote = loteDePrueba();
+  const movId = await crearEgresoDePrueba(lote);
+  await assertPermissionDenied(() =>
+    setDoc(marcacionRef(movId, 1), { ...marcacionConEgresoBase(movId, lote), confirmoSinEgreso: true })
+  );
+});
+
 test("acta de paciente Lutecio-177 sin médico responsable es rechazada", async () => {
   await loguearComo(PERSONAS.tecnicoA);
   await assertPermissionDenied(() =>
@@ -602,8 +793,14 @@ test("control positivo: admin SÍ puede subir la cantidad de un lote (anulación
 // Auditoría de seguridad: las actas tienen nombre/DNI de pacientes (Libro 2)
 // -- Ley 25.326. Antes cualquier técnico autenticado podía leer actas de
 // CUALQUIER sede con su propia sesión (la regla vieja sólo pedía tieneAcceso()).
+// confirmoSinEgreso:true -- desde el bloqueo real egreso↔marcación (ver
+// egresoValidoParaMarcar/actaValida en firestore.rules), una marcación
+// exige egresoMovimientoId O confirmoSinEgreso explícito, nunca ninguno.
+// Estos tests son de PERMISOS DE LECTURA, no del bloqueo en sí -- cualquier
+// acta válida alcanza, confirmoSinEgreso es la forma más simple de armar
+// una.
 function actaBase(overrides = {}) {
-  return { tipo: "marcacion", fecha: serverTimestamp(), farmId: FARM_ID, lote: loteDePrueba(), mciMarcacion: 10, ...overrides };
+  return { tipo: "marcacion", fecha: serverTimestamp(), farmId: FARM_ID, lote: loteDePrueba(), mciMarcacion: 10, confirmoSinEgreso: true, ...overrides };
 }
 
 test("técnico NO puede leer un acta de otra sede", async () => {
