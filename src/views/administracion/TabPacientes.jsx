@@ -575,6 +575,29 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
 
   const tipoI131Actual = TIPOS_I131.find((t) => t.id === tipoI131);
 
+  // Aviso INFORMATIVO (nunca auto-completa ni preselecciona nada -- la
+  // técnica decide) si este DNI ya tiene un registro de I-131 en los
+  // últimos 10 días, en esta misma sede. Costo real: CERO consultas nuevas
+  // -- actasTodas ya está en memoria (listeners de "Registros del día", ver
+  // más abajo), así que esto es sólo un filtro sincrónico sobre datos que
+  // ya se cargaron por otra razón. a.tipo?.startsWith("i131_") en vez de
+  // enumerar los 8 ids -- se mantiene solo si se agrega un tipo más.
+  // Excluye anulados (confirmado con Pablo): un registro corregido después
+  // no cuenta como "visita reciente real". El caso de confirmarAnulacion
+  // (DNI precargado desde la propia acta que se está corrigiendo) queda
+  // tal cual, sin ocultar el aviso ahí -- es correcto que lo muestre.
+  const DIEZ_DIAS_MS = 10 * 24 * 60 * 60 * 1000;
+  const avisoI131Previo = useMemo(() => {
+    const dniTrim = dni.trim();
+    if (!dniTrim) return null;
+    const ahora = Date.now();
+    const candidatos = actasTodas.filter((a) =>
+      a.tipo?.startsWith("i131_") && a.pacienteDni === dniTrim &&
+      !anulaciones.has(a.id) && (ahora - tsMillis(a.fecha)) <= DIEZ_DIAS_MS
+    );
+    return candidatos.reduce((masReciente, a) => (!masReciente || tsMillis(a.fecha) > tsMillis(masReciente.fecha) ? a : masReciente), null);
+  }, [dni, actasTodas, anulaciones]);
+
   // Dosis/Ablativas recientes ya cargadas en memoria (mismo límite/sede que
   // el resto de esta pantalla) para vincular un diagnóstico (Captación/
   // Centellograma/Captación y Centellograma) al registro de dosis que lo
@@ -598,10 +621,11 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
         // resolver DENTRO de su transacción y pisa este valor, así que
         // mandarlo acá también no hace daño.
         pacienteFicha: fichaNormalizada, fichaIntentoNro: fichaEstado?.intento, pacienteNombre: nombre.trim(), pacienteDni: dni.trim(),
-        // Opcionales para I-131 -- se omiten del todo si quedaron vacíos, en
-        // vez de mandar 0 (que se leería como "pesa 0kg", no "sin dato").
-        ...(peso.trim() ? { peso: parseFloat(peso) || 0 } : {}),
-        ...(talla.trim() ? { talla: parseFloat(talla) || 0 } : {}),
+        // peso/talla: NUNCA se mandan para I-131 (decisión de Pablo -- las
+        // técnicas de esa sección no toman esos datos), aunque hayan quedado
+        // cargados en el estado (p. ej. de un escaneo de pulsera anterior en
+        // la misma sesión del form) -- sólo afecta a registros nuevos, las
+        // actas viejas que ya los tengan cargados quedan como están.
         // Sólo se manda si el usuario completó el campo (caso de carga
         // tardía detectada, ver fechaFichaSiguiente) -- NUNCA reemplaza
         // `fecha` (el timestamp automático real de guardado, inmodificable).
@@ -1209,12 +1233,25 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
             )}
             <Input label="Apellido y nombre" value={nombre} onChange={(e) => setNombre(capitalizarPalabras(e.target.value))} placeholder="García Juan" />
             <Input label="DNI" value={dni} onChange={(e) => setDni(e.target.value)} placeholder="28456789" />
-            {/* Peso/Talla se piden siempre, para los 3 casos (Tc-99m/Lutecio/
-                I-131) -- para I-131 son opcionales (no bloquean Guardar, ver
-                el disabled del botón), para Tc-99m/Lutecio quedan igual que
-                siempre (ya eran opcionales ahí también). */}
+            {/* Puramente informativo -- nunca auto-completa nada, la técnica
+                decide qué hacer con el dato. Ver avisoI131Previo más arriba. */}
+            {avisoI131Previo && (
+              <div className="sm:col-span-2 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 text-xs text-amber-700">
+                Este DNI tiene un registro de I-131 del {fmtTs(avisoI131Previo.fecha)} — {TIPO_LABEL_I131[avisoI131Previo.tipo]?.label || avisoI131Previo.tipo}.
+              </div>
+            )}
+            {/* Peso/Talla: para Tc-99m/Lutecio-177, opcionales, igual que
+                siempre. NO se piden para ninguno de los 8 tipos de I-131
+                (decisión de Pablo -- las técnicas de esa sección no toman
+                esos datos) -- sólo para registros NUEVOS, sin backfill ni
+                ocultamiento retroactivo de actas viejas que ya los tengan
+                cargados (ver detalleRegistro/filaCSV/impresión, que ya
+                muestran "—" cuando faltan). guardar() ya no los manda en el
+                payload de la rama esI131, ver más abajo. */}
+            {!esI131 && (<>
             <Input label="Peso (kg)" type="number" min={0} value={peso} onChange={(e) => setPeso(e.target.value)} placeholder="78" />
             <Input label="Talla (cm)" type="number" min={0} value={talla} onChange={(e) => setTalla(e.target.value)} placeholder="172" />
+            </>)}
             {/* Tc-99m es el 99% de los casos -- sin selector visible por
                 defecto, cero fricción. Este link revela el selector de
                 isótopo sólo cuando hace falta (Lutecio-177 o I-131, lista

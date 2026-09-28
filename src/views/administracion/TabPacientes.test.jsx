@@ -18,7 +18,7 @@
 // enfocado ya no es el de Peso), React lo reconcilió por posición en vez de
 // por identidad -- exactamente la causa del bug real. Esto es 100%
 // determinístico: no depende de timing de red ni de la velocidad de tipeo.
-import { describe, test, expect, vi, afterEach } from "vitest";
+import { describe, test, expect, vi, afterEach, beforeEach } from "vitest";
 import { cleanup, render, screen, act, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { TabPacientes } from "./TabPacientes.jsx";
@@ -44,10 +44,16 @@ let resolverFichaIntentoDeferido;
 // reasigna en cada test antes de montar el componente (ver
 // listenActas más abajo, que sólo la usa para tipo "paciente").
 let actasParaListado = [];
+// Por tipo de I-131 (ablativaI131/dosisI131/etc., ver TabPacientes.jsx) --
+// {} por defecto (listenActas devuelve [] para cualquier tipo no listado
+// acá), cada test que necesite datos de un tipo puntual (ver
+// avisoI131Previo) la reasigna antes de montar.
+let actasI131PorTipo = {};
+let anulacionesParaTest = [];
 
 vi.mock("../../services/firestore/actas.js", () => ({
-  listenActas: (tipo, cb) => listenerCon(cb, tipo === "paciente" ? actasParaListado : []),
-  listenAnulacionesActas: (cb) => listenerCon(cb),
+  listenActas: (tipo, cb) => listenerCon(cb, tipo === "paciente" ? actasParaListado : (actasI131PorTipo[tipo] || [])),
+  listenAnulacionesActas: (cb) => listenerCon(cb, anulacionesParaTest),
   listenActasMarcacionHoy: (_sedeId, cb) => listenerCon(cb),
   obtenerUltimaFicha: vi.fn(async () => null),
   // El eje de la prueba: NO resuelve hasta que el test llame a .resolver()
@@ -260,5 +266,76 @@ describe("TabPacientes -- Gestión I-131, Dosis de barrido corporal no muestra '
 
     expect(screen.getByText("Actividad administrada (µCi)")).toBeTruthy();
     expect(screen.getByText("Dosis relacionada (opcional)")).toBeTruthy();
+  });
+});
+
+function haceDias(n) {
+  return { toDate: () => new Date(Date.now() - n * 24 * 60 * 60 * 1000) };
+}
+
+// Aviso informativo por DNI (avisoI131Previo): NUNCA auto-completa nada --
+// sólo un cartel. Costo real cero (filtra actasI131PorTipo, ya "en
+// memoria" vía el mock de listenActas, ninguna consulta nueva).
+describe("TabPacientes -- aviso informativo de I-131 previo por DNI", () => {
+  beforeEach(() => { actasI131PorTipo = {}; anulacionesParaTest = []; });
+
+  async function abrirFormYEscribirDni(user, dniValor) {
+    render(<TabPacientes catalogo={catalogo} usuario={usuario} esAdmin={false} onToast={vi.fn()} nav={null} />);
+    await user.click(await screen.findByText("+ Manual"));
+    await user.type(labelInput("DNI"), dniValor);
+  }
+
+  test("muestra el aviso -- registro de I-131 no anulado del mismo DNI, dentro de los últimos 10 días", async () => {
+    actasI131PorTipo.i131_captacion = [{ id: "a1", tipo: "i131_captacion", pacienteDni: "12345678", fecha: haceDias(3) }];
+    const user = userEvent.setup();
+    await abrirFormYEscribirDni(user, "12345678");
+    expect(await screen.findByText(/Este DNI tiene un registro de I-131/)).toBeTruthy();
+    expect(screen.getByText(/Captación/)).toBeTruthy();
+  });
+
+  test("NO muestra el aviso si el único registro de ese DNI está anulado", async () => {
+    actasI131PorTipo.i131_captacion = [{ id: "a1", tipo: "i131_captacion", pacienteDni: "12345678", fecha: haceDias(3) }];
+    anulacionesParaTest = [{ id: "anula_a1", anulaId: "a1", motivo: "Test" }];
+    const user = userEvent.setup();
+    await abrirFormYEscribirDni(user, "12345678");
+    expect(screen.queryByText(/Este DNI tiene un registro de I-131/)).toBeNull();
+  });
+
+  test("NO muestra el aviso si el registro tiene más de 10 días", async () => {
+    actasI131PorTipo.i131_captacion = [{ id: "a1", tipo: "i131_captacion", pacienteDni: "12345678", fecha: haceDias(15) }];
+    const user = userEvent.setup();
+    await abrirFormYEscribirDni(user, "12345678");
+    expect(screen.queryByText(/Este DNI tiene un registro de I-131/)).toBeNull();
+  });
+
+  test("NO muestra el aviso para un DNI distinto", async () => {
+    actasI131PorTipo.i131_captacion = [{ id: "a1", tipo: "i131_captacion", pacienteDni: "99999999", fecha: haceDias(3) }];
+    const user = userEvent.setup();
+    await abrirFormYEscribirDni(user, "12345678");
+    expect(screen.queryByText(/Este DNI tiene un registro de I-131/)).toBeNull();
+  });
+});
+
+// Peso/Talla: se sacaron de los 8 tipos de I-131 (las técnicas de esa
+// sección no toman esos datos) -- siguen para Tc-99m plano (caso por
+// defecto del form) y Lutecio-177.
+describe("TabPacientes -- Peso/Talla ausentes para I-131, presentes para Tc-99m", () => {
+  test("Tc-99m (caso por defecto, sin tocar el toggle): Peso y Talla siguen visibles", async () => {
+    render(<TabPacientes catalogo={catalogo} usuario={usuario} esAdmin={false} onToast={vi.fn()} nav={null} />);
+    await userEvent.setup().click(await screen.findByText("+ Manual"));
+    expect(screen.getByText("Peso (kg)")).toBeTruthy();
+    expect(screen.getByText("Talla (cm)")).toBeTruthy();
+  });
+
+  test("I-131 (cualquier tipo, ej. Captación): Peso y Talla NO se muestran", async () => {
+    const user = userEvent.setup();
+    render(<TabPacientes catalogo={catalogo} usuario={usuarioConAccesoI131} esAdmin={false} onToast={vi.fn()} nav={null} />);
+    await user.click(await screen.findByText("+ Manual"));
+    await user.click(screen.getByText("¿Es un caso distinto a Tc-99m?"));
+    await user.selectOptions(labelInput("Isótopo"), "i131");
+    await user.selectOptions(labelInput("Tipo de registro"), "captacion");
+
+    expect(screen.queryByText("Peso (kg)")).toBeNull();
+    expect(screen.queryByText("Talla (cm)")).toBeNull();
   });
 });
