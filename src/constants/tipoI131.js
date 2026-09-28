@@ -8,6 +8,11 @@ export const TIPO_LABEL_I131 = {
   i131_ablativa: { label: "Ablativa I-131", color: "red" },
   i131_dosis: { label: "Dosis Hiper", color: "orange" },
   i131_barrido: { label: "Barrido I-131", color: "teal" },
+  // Registro simple de una sola vez (día de administración) -- el barrido
+  // en sí, 2-3 días después, no genera ningún acta nueva (ver
+  // esTipoDiagnosticoI131 en firestore.rules). "cyan" -- único color sin usar
+  // todavía en este mapa.
+  i131_dosis_barrido: { label: "Dosis de barrido corporal", color: "cyan" },
   i131_mibg: { label: "MIBG", color: "red" },
   i131_captacion: { label: "Captación I-131", color: "blue" },
   i131_centellograma: { label: "Centellograma I-131", color: "green" },

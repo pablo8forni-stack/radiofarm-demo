@@ -11,7 +11,7 @@ import { compararPorSedeYFichaDescendente } from "../../helpers/fichaPaciente.js
 import { listenActas, actasPorRango, anularActaTransaction, listenAnulacionesActas } from "../../services/firestore/actas.js";
 import { TIPO_LABEL_I131 } from "../../constants/tipoI131.js";
 
-const TIPOS_I131 = ["i131_ablativa", "i131_dosis", "i131_barrido", "i131_mibg", "i131_captacion", "i131_centellograma", "i131_captacion_centellograma"];
+const TIPOS_I131 = ["i131_ablativa", "i131_dosis", "i131_barrido", "i131_dosis_barrido", "i131_mibg", "i131_captacion", "i131_centellograma", "i131_captacion_centellograma"];
 
 const TIMEOUT_BUSQUEDA_MS = 20000;
 const MSJ_TIMEOUT_BUSQUEDA = "La consulta tardó demasiado, puede haber un problema de conexión -- intentá cerrar las otras pestañas de RadioFarm que tengas abiertas y reintentá.";
@@ -41,6 +41,7 @@ export function TabRegistrosI131({ catalogo, usuario, esAdmin, onToast }) {
   const [ablativaTodas, setAblativaTodas] = useState([]);
   const [dosisTodas, setDosisTodas] = useState([]);
   const [barridosTodas, setBarridosTodas] = useState([]);
+  const [dosisBarridoTodas, setDosisBarridoTodas] = useState([]);
   const [mibgTodas, setMibgTodas] = useState([]);
   const [captacionTodas, setCaptacionTodas] = useState([]);
   const [centellogramaTodas, setCentellogramaTodas] = useState([]);
@@ -65,6 +66,7 @@ export function TabRegistrosI131({ catalogo, usuario, esAdmin, onToast }) {
   useEffect(() => { if (sedeEfectiva) return listenActas("i131_ablativa", setAblativaTodas, { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
   useEffect(() => { if (sedeEfectiva) return listenActas("i131_dosis", setDosisTodas, { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
   useEffect(() => { if (sedeEfectiva) return listenActas("i131_barrido", setBarridosTodas, { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
+  useEffect(() => { if (sedeEfectiva) return listenActas("i131_dosis_barrido", setDosisBarridoTodas, { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
   useEffect(() => { if (sedeEfectiva) return listenActas("i131_mibg", setMibgTodas, { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
   useEffect(() => { if (sedeEfectiva) return listenActas("i131_captacion", setCaptacionTodas, { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
   useEffect(() => { if (sedeEfectiva) return listenActas("i131_centellograma", setCentellogramaTodas, { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
@@ -79,13 +81,13 @@ export function TabRegistrosI131({ catalogo, usuario, esAdmin, onToast }) {
   // accesoTerapiaI131 no puede leer.
   const puedeVerHistorial = esAdmin || !!usuario.accesoTerapiaI131;
 
-  // Los 7 tipos comparten un solo listado (con badge de tipo por fila) --
+  // Los 8 tipos comparten un solo listado (con badge de tipo por fila) --
   // cada colección ya viene ordenada desc por fecha desde el listener, así
   // que sólo hace falta mezclar y volver a ordenar, no reordenar cada una.
   const actasTodas = useMemo(
-    () => [...ablativaTodas, ...dosisTodas, ...barridosTodas, ...mibgTodas, ...captacionTodas, ...centellogramaTodas, ...captCentellogramaTodas]
+    () => [...ablativaTodas, ...dosisTodas, ...barridosTodas, ...dosisBarridoTodas, ...mibgTodas, ...captacionTodas, ...centellogramaTodas, ...captCentellogramaTodas]
       .sort((a, b) => tsMillis(b.fecha) - tsMillis(a.fecha)),
-    [ablativaTodas, dosisTodas, barridosTodas, mibgTodas, captacionTodas, centellogramaTodas, captCentellogramaTodas]
+    [ablativaTodas, dosisTodas, barridosTodas, dosisBarridoTodas, mibgTodas, captacionTodas, centellogramaTodas, captCentellogramaTodas]
   );
 
   // Sin formulario que reabrir acá -- corregir un registro anulado se hace
@@ -141,7 +143,7 @@ export function TabRegistrosI131({ catalogo, usuario, esAdmin, onToast }) {
   function detalleFila(a) {
     if (a.tipo === "i131_ablativa" || a.tipo === "i131_dosis") return `${a.actividadAdministrada} mCi · Lote ${a.lote}`;
     if (a.tipo === "i131_mibg") return `${a.actividadCalibrada} mCi · Lote ${a.numeroLote}`;
-    if (a.tipo === "i131_captacion" || a.tipo === "i131_centellograma" || a.tipo === "i131_captacion_centellograma") {
+    if (a.tipo === "i131_captacion" || a.tipo === "i131_centellograma" || a.tipo === "i131_captacion_centellograma" || a.tipo === "i131_dosis_barrido") {
       const base = a.actividadAdministrada != null ? `${a.actividadAdministrada} ${a.unidadActividad === "mCi" ? "mCi" : "µCi"}` : "—";
       return a.dosisActaId ? `${base} · Vinculado a dosis` : base;
     }
@@ -233,8 +235,8 @@ export function TabRegistrosI131({ catalogo, usuario, esAdmin, onToast }) {
   }
 
   // Buscar y descargar son dos pasos separados a propósito -- ver nota
-  // completa en TabMarcacion.jsx#buscarRango. Trae los 7 tipos por separado
-  // (siete consultas, mismo rango) y los mezcla, igual que el listado en vivo.
+  // completa en TabMarcacion.jsx#buscarRango. Trae los 8 tipos por separado
+  // (ocho consultas, mismo rango) y los mezcla, igual que el listado en vivo.
   async function buscarRango() {
     if (!rangoDesde || !rangoHasta) return;
     setBuscandoRango(true);

@@ -1090,6 +1090,55 @@ test("control positivo: admin SÍ puede crear una Captación de I-131 sin el fla
   assert.ok(snap.exists());
 });
 
+// Dosis de barrido corporal: 7° tipo diagnóstico -- agrupado dentro de
+// esTipoDiagnosticoI131() junto con Captación/Centellograma/Captación y
+// Centellograma, mismos requisitos exactos (ficha, nombre, dni, actividad
+// en µCi, tieneAccesoI131()). A diferencia de esos 3, nunca lleva
+// dosisActaId (el control positivo de abajo no lo manda -- eso ya prueba
+// que no es requisito) ni tiene seguimiento posterior.
+test("técnico sin accesoTerapiaI131 NO puede crear una Dosis de barrido corporal", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  await assertPermissionDenied(() =>
+    addDoc(collection(db, "actas"), i131Base("i131_dosis_barrido", {
+      usuarioEmail: PERSONAS.tecnicoA.email, actividadAdministrada: 90, unidadActividad: "uCi",
+    }))
+  );
+});
+
+test("Dosis de barrido corporal con unidadActividad 'mCi' (en vez de 'uCi') es rechazada, aunque tenga el permiso", async () => {
+  await loguearComo(PERSONAS.admin);
+  await assertPermissionDenied(() =>
+    addDoc(collection(db, "actas"), i131Base("i131_dosis_barrido", {
+      usuarioEmail: PERSONAS.admin.email, actividadAdministrada: 90, unidadActividad: "mCi",
+    }))
+  );
+});
+
+test("control positivo: técnico CON accesoTerapiaI131 SÍ puede crear una Dosis de barrido corporal", async () => {
+  await loguearComo(PERSONAS.admin);
+  await setDoc(doc(db, "roles", PERSONAS.tecnicoA.email), { accesoTerapiaI131: true }, { merge: true });
+
+  await loguearComo(PERSONAS.tecnicoA);
+  const ref = await addDoc(collection(db, "actas"), i131Base("i131_dosis_barrido", {
+    usuarioEmail: PERSONAS.tecnicoA.email, actividadAdministrada: 90, unidadActividad: "uCi",
+  }));
+  const snap = await getDoc(ref);
+  assert.ok(snap.exists());
+  assert.equal(snap.data().dosisActaId, undefined);
+
+  await loguearComo(PERSONAS.admin);
+  await setDoc(doc(db, "roles", PERSONAS.tecnicoA.email), { accesoTerapiaI131: false }, { merge: true });
+});
+
+test("control positivo: admin SÍ puede crear una Dosis de barrido corporal sin el flag", async () => {
+  await loguearComo(PERSONAS.admin);
+  const ref = await addDoc(collection(db, "actas"), i131Base("i131_dosis_barrido", {
+    sedeId: SEDE_A, usuarioEmail: PERSONAS.admin.email, actividadAdministrada: 90, unidadActividad: "uCi",
+  }));
+  const snap = await getDoc(ref);
+  assert.ok(snap.exists());
+});
+
 test("control positivo: admin SÍ puede crear un Centellograma de I-131, vinculado a una dosis", async () => {
   await loguearComo(PERSONAS.admin);
   const dosisRef = await addDoc(collection(db, "actas"), i131Base("i131_dosis", {

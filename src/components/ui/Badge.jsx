@@ -7,6 +7,7 @@ export function Badge({ color, children }) {
     gray: "bg-gray-100 text-gray-500 border border-gray-200",
     purple: "bg-purple-100 text-purple-700 border border-purple-200",
     teal: "bg-teal-100 text-teal-700 border border-teal-200",
+    cyan: "bg-cyan-100 text-cyan-700 border border-cyan-200",
   };
   return <span className={`inline-flex items-center text-xs font-semibold px-2 py-0.5 rounded-full ${c[color] || c.gray}`}>{children}</span>;
 }

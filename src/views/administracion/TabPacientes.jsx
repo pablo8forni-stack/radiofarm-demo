@@ -18,7 +18,7 @@ import { TIPO_LABEL_I131 } from "../../constants/tipoI131.js";
 import { TEXTO_SIN_RADIOFARMACO } from "../../constants/sinRadiofarmaco.js";
 import {
   listenActas, addActaPaciente, actasPorRango, anularActaTransaction, listenAnulacionesActas,
-  addActaI131Ablativa, addActaI131Dosis, addActaI131Barrido,
+  addActaI131Ablativa, addActaI131Dosis, addActaI131Barrido, addActaI131DosisBarrido,
   addActaI131Captacion, addActaI131Centellograma, addActaI131CaptacionCentellograma,
   resolverFichaIntento, obtenerUltimaFicha, listenActasMarcacionHoy, fechaFichaSiguiente, actasMarcacionPorFecha,
 } from "../../services/firestore/actas.js";
@@ -72,11 +72,20 @@ function textoConformidad(lote) {
 // Barrido corporal es el único sin permiso especial.
 // MIBG (131I-MIBG) es su propia categoria -- sin fn genérica: no es un alta
 // simple, es administrarMibgTransaction(loteId, data) (ver guardar()), la
-// única de las 7 que necesita leer el lote elegido antes de escribir.
+// única de las 8 que necesita leer el lote elegido antes de escribir.
+// Dosis de barrido corporal: mismos campos que un diagnóstico simple (µCi,
+// sin lote propio) -- registro de una sola vez, el día de la
+// administración; el barrido en sí (2-3 días después) no genera ningún
+// acta nueva. A diferencia de Captación/Centellograma/Captación y
+// Centellograma, NUNCA lleva vínculo a una dosis anterior (no tiene
+// sentido: no hay ninguna) ni seguimiento posterior -- por eso
+// `sinVinculoDosis: true` le oculta el picker "Dosis relacionada" más abajo
+// (ver JSX, categoria === "diagnostico").
 const TIPOS_I131 = [
   { id: "ablativa", label: "Dosis ablativa", categoria: "dosis", requierePermiso: true, fn: addActaI131Ablativa },
-  { id: "dosis", label: "Dosis terapéutica", categoria: "dosis", requierePermiso: true, fn: addActaI131Dosis },
+  { id: "dosis", label: "Dosis terapéutica de hipertiroidismo", categoria: "dosis", requierePermiso: true, fn: addActaI131Dosis },
   { id: "barrido", label: "Barrido corporal", categoria: "barrido", requierePermiso: false, fn: addActaI131Barrido },
+  { id: "dosis_barrido", label: "Dosis de barrido corporal", categoria: "diagnostico", requierePermiso: true, sinVinculoDosis: true, fn: addActaI131DosisBarrido },
   { id: "mibg", label: "MIBG", categoria: "mibg", requierePermiso: false, fn: null },
   { id: "captacion", label: "Captación", categoria: "diagnostico", requierePermiso: true, fn: addActaI131Captacion },
   { id: "centellograma", label: "Centellograma", categoria: "diagnostico", requierePermiso: true, fn: addActaI131Centellograma },
@@ -251,6 +260,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
   const [indicacion, setIndicacion] = useState("");
   const [dosisVinculada, setDosisVinculada] = useState("");
   const [dosisI131, setDosisI131] = useState([]);
+  const [dosisBarridoI131, setDosisBarridoI131] = useState([]);
   const [mibgI131, setMibgI131] = useState([]);
   const [mibgLotes, setMibgLotes] = useState([]);
   const [mibgLoteSeleccionado, setMibgLoteSeleccionado] = useState("");
@@ -260,17 +270,19 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
   useEffect(() => { if (sedeEfectiva) return listenAnulacionesActas(setAnulacionesRaw, { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
   // Un listener por tipo de I-131 (mismo criterio que dosis/barrido ya
   // tenían) -- dosisI131/ablativaI131 alimentan además el picker "Dosis
-  // relacionada" de los 3 diagnósticos (ver dosisParaVincular). Todos se
-  // mezclan en el listado principal -- el N° de Ficha es una secuencia
-  // correlativa propia de CADA SEDE (asignada por VM RIS -- ver
-  // helpers/fichaPaciente.js), así que "Registros del día" tiene que
-  // mostrar los 7 tipos intercalados por hora para no dejar saltos de
-  // ficha sin explicación visible dentro de la misma sede. La pestaña
-  // "Gestión I-131" (consulta) sigue siendo el filtro específico de estos
-  // mismos 7 tipos, sin cambios.
+  // relacionada" de los 3 diagnósticos originales (ver dosisParaVincular;
+  // dosisBarridoI131 NO alimenta ese picker -- Dosis de barrido corporal
+  // nunca vincula a una dosis previa, ver TIPOS_I131). Todos se mezclan en
+  // el listado principal -- el N° de Ficha es una secuencia correlativa
+  // propia de CADA SEDE (asignada por VM RIS -- ver helpers/fichaPaciente.js),
+  // así que "Registros del día" tiene que mostrar los 8 tipos intercalados
+  // por hora para no dejar saltos de ficha sin explicación visible dentro
+  // de la misma sede. La pestaña "Gestión I-131" (consulta) sigue siendo el
+  // filtro específico de estos mismos 8 tipos, sin cambios.
   useEffect(() => { if (sedeEfectiva) return listenActas("i131_ablativa", setAblativaI131, { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
   useEffect(() => { if (sedeEfectiva) return listenActas("i131_dosis", setDosisI131, { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
   useEffect(() => { if (sedeEfectiva) return listenActas("i131_barrido", setBarridosI131, { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
+  useEffect(() => { if (sedeEfectiva) return listenActas("i131_dosis_barrido", setDosisBarridoI131, { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
   useEffect(() => { if (sedeEfectiva) return listenActas("i131_mibg", setMibgI131, { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
   useEffect(() => { if (sedeEfectiva) return listenActas("i131_captacion", setCaptacionI131, { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
   useEffect(() => { if (sedeEfectiva) return listenActas("i131_centellograma", setCentellogramaI131, { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
@@ -407,9 +419,9 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
   // Cada colección ya viene ordenada desc por fecha desde el listener, así
   // que sólo hace falta mezclar y volver a ordenar, no reordenar cada una.
   const actasTodas = useMemo(
-    () => [...pacientesTodas, ...ablativaI131, ...dosisI131, ...barridosI131, ...mibgI131, ...captacionI131, ...centellogramaI131, ...captCentellogramaI131]
+    () => [...pacientesTodas, ...ablativaI131, ...dosisI131, ...barridosI131, ...dosisBarridoI131, ...mibgI131, ...captacionI131, ...centellogramaI131, ...captCentellogramaI131]
       .sort((a, b) => tsMillis(b.fecha) - tsMillis(a.fecha)),
-    [pacientesTodas, ablativaI131, dosisI131, barridosI131, mibgI131, captacionI131, centellogramaI131, captCentellogramaI131]
+    [pacientesTodas, ablativaI131, dosisI131, barridosI131, dosisBarridoI131, mibgI131, captacionI131, centellogramaI131, captCentellogramaI131]
   );
 
   // anulaId -> acta de anulación (motivo, fecha, quién) -- Map en vez de Set
@@ -605,7 +617,14 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
         onToast(`${tipoI131Actual.label} registrada — consultala en la pestaña Gestión I-131`);
       } else if (tipoI131Actual.categoria === "diagnostico") {
         if (!actividadAdministrada) return;
-        tipoI131Actual.fn({ ...base, actividadAdministrada: parseFloat(actividadAdministrada) || 0, unidadActividad: "uCi", dosisActaId: dosisVinculada || null })
+        tipoI131Actual.fn({
+          ...base, actividadAdministrada: parseFloat(actividadAdministrada) || 0, unidadActividad: "uCi",
+          // sinVinculoDosis (Dosis de barrido corporal): nunca manda
+          // dosisActaId, aunque haya quedado un valor de dosisVinculada
+          // cargado de un tipo diagnóstico anterior en la misma sesión del
+          // form -- no tiene sentido vincular una dosis a este tipo.
+          dosisActaId: tipoI131Actual.sinVinculoDosis ? null : (dosisVinculada || null),
+        })
           .then(() => { ultimaFichaGuardadaRef.current = { sedeId, numero: parseInt(fichaNormalizada, 10) }; })
           .catch((e) => onToast(e.message || "No se pudo guardar el registro", "error"));
         onToast(`${tipoI131Actual.label} registrado — consultalo en la pestaña Gestión I-131`);
@@ -784,7 +803,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
     if (a.tipo === "i131_captacion" || a.tipo === "i131_centellograma" || a.tipo === "i131_captacion_centellograma") {
       return { principal: a.dosisActaId ? "Vinculado a dosis" : "—", sub: null };
     }
-    if (a.tipo === "i131_barrido") return { principal: "—", sub: null };
+    if (a.tipo === "i131_barrido" || a.tipo === "i131_dosis_barrido") return { principal: "—", sub: null };
     if (a.tipo === "i131_mibg") return { principal: `Lote MIBG: ${a.numeroLote || "—"}`, sub: null };
     if (a.sinRadiofarmaco) return { principal: TEXTO_SIN_RADIOFARMACO, sub: null };
     return { principal: a.isotopoId === "lu177" ? null : (a.farmNombre || "—"), sub: a.lote || null };
@@ -978,7 +997,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
   // largo -- este es un getDocs aparte, sin ese límite, por rango de fechas.
   // Buscar y descargar son dos pasos separados a propósito: ver nota completa
   // en TabMarcacion.jsx#buscarRango.
-  // Trae los 8 tipos por separado (misma sede/rango, ocho consultas en
+  // Trae los 9 tipos por separado (misma sede/rango, nueve consultas en
   // paralelo) y los mezcla, igual que el listado en vivo -- una exportación
   // de rango tiene que reflejar la misma secuencia de fichas sin huecos.
   async function buscarRango() {
@@ -988,7 +1007,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
     setResultadoRango(null);
     try {
       const opts = { desde: rangoDesde, hasta: rangoHasta, sedeId: sedeEfectiva };
-      const tipos = ["paciente", "i131_ablativa", "i131_dosis", "i131_barrido", "i131_mibg", "i131_captacion", "i131_centellograma", "i131_captacion_centellograma"];
+      const tipos = ["paciente", "i131_ablativa", "i131_dosis", "i131_barrido", "i131_dosis_barrido", "i131_mibg", "i131_captacion", "i131_centellograma", "i131_captacion_centellograma"];
       const resultados = await conTimeout(
         Promise.all(tipos.map((t) => actasPorRango(t, opts))),
         TIMEOUT_BUSQUEDA_MS, MSJ_TIMEOUT_BUSQUEDA
@@ -1269,14 +1288,20 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
             {esI131 && tipoI131Actual.categoria === "diagnostico" && (
               <>
                 <Input label="Actividad administrada (µCi)" type="number" min={0} step={1} value={actividadAdministrada} onChange={(e) => setActividadAdministrada(e.target.value)} placeholder="90" />
-                <div className="sm:col-span-2">
-                  <Sel label="Dosis relacionada (opcional)" value={dosisVinculada} onChange={(e) => setDosisVinculada(e.target.value)}>
-                    <option value="">Sin vincular</option>
-                    {dosisParaVincular.map((d) => (
-                      <option key={d.id} value={d.id}>Ficha {d.pacienteFicha} · {d.pacienteNombre} · {fmtTs(d.fecha)}</option>
-                    ))}
-                  </Sel>
-                </div>
+                {/* Dosis de barrido corporal nunca vincula a una dosis
+                    anterior (no hay ninguna que vincular) -- único caso
+                    dentro de "diagnostico" que oculta este picker, ver
+                    sinVinculoDosis en TIPOS_I131. */}
+                {!tipoI131Actual.sinVinculoDosis && (
+                  <div className="sm:col-span-2">
+                    <Sel label="Dosis relacionada (opcional)" value={dosisVinculada} onChange={(e) => setDosisVinculada(e.target.value)}>
+                      <option value="">Sin vincular</option>
+                      {dosisParaVincular.map((d) => (
+                        <option key={d.id} value={d.id}>Ficha {d.pacienteFicha} · {d.pacienteNombre} · {fmtTs(d.fecha)}</option>
+                      ))}
+                    </Sel>
+                  </div>
+                )}
               </>
             )}
             {esI131 && tipoI131Actual.categoria === "mibg" && (

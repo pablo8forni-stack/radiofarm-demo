@@ -65,6 +65,7 @@ vi.mock("../../services/firestore/actas.js", () => ({
   addActaI131Ablativa: vi.fn(async () => {}),
   addActaI131Dosis: vi.fn(async () => {}),
   addActaI131Barrido: vi.fn(async () => {}),
+  addActaI131DosisBarrido: vi.fn(async () => {}),
   addActaI131Captacion: vi.fn(async () => {}),
   addActaI131Centellograma: vi.fn(async () => {}),
   addActaI131CaptacionCentellograma: vi.fn(async () => {}),
@@ -82,8 +83,17 @@ const catalogo = {
   stock: { central: { mibi: [] } },
   proveedores: [],
   estudios: [{ id: "ecografia", nombre: "Ecografía" }],
+  // lu177/i131 -- sin esto, isotoposCasoDistinto queda vacío y el link
+  // "¿Es un caso distinto a Tc-99m?" no aparece (mismo bug real diagnosticado
+  // en staging por un catálogo de radioisotopos vacío, no una regresión de
+  // código -- ver TIPOS_I131/isotoposCasoDistinto en TabPacientes.jsx).
+  radioisotopos: [{ id: "tc99m", nombre: "Tc-99m" }, { id: "lu177", nombre: "Lutecio-177" }, { id: "i131", nombre: "I-131" }],
 };
 const usuario = { nombre: "Técnica Test", email: "tecnica@test.local", sede: "central", accesoTerapiaI131: false };
+// Dosis de barrido corporal (como los otros 3 diagnósticos "reales") exige
+// accesoTerapiaI131 -- con el usuario de arriba (sin acceso) la opción
+// queda disabled en el <Sel>, sin poder seleccionarla.
+const usuarioConAccesoI131 = { ...usuario, accesoTerapiaI131: true };
 
 function labelInput(label) {
   return screen.getByText(label, { selector: "label" }).nextElementSibling;
@@ -218,5 +228,37 @@ describe("TabPacientes -- listado de Libro 2, peso/talla=0 no debe dejar un '0' 
     expect(container.textContent).not.toMatch(/Carlos0/);
     expect(container.textContent).not.toMatch(/78kg0/);
     expect(container.textContent).toContain("78kg · 0cm");
+  });
+});
+
+// Dosis de barrido corporal: 7° tipo diagnóstico -- mismos campos que
+// Captación/Centellograma/Captación y Centellograma (µCi), pero SIN el
+// picker "Dosis relacionada" (nunca hay una dosis previa que vincular, ver
+// sinVinculoDosis en TIPOS_I131). Regresión: confirma que partir el bloque
+// categoria==="diagnostico" en dos no le rompió el picker a los otros 3.
+describe("TabPacientes -- Gestión I-131, Dosis de barrido corporal no muestra 'Dosis relacionada'", () => {
+  async function abrirYElegirIsotopoI131(user) {
+    render(<TabPacientes catalogo={catalogo} usuario={usuarioConAccesoI131} esAdmin={false} onToast={vi.fn()} nav={null} />);
+    await user.click(await screen.findByText("+ Manual"));
+    await user.click(screen.getByText("¿Es un caso distinto a Tc-99m?"));
+    await user.selectOptions(labelInput("Isótopo"), "i131");
+  }
+
+  test("Dosis de barrido corporal: sin 'Dosis relacionada', con Actividad administrada (µCi)", async () => {
+    const user = userEvent.setup();
+    await abrirYElegirIsotopoI131(user);
+    await user.selectOptions(labelInput("Tipo de registro"), "dosis_barrido");
+
+    expect(screen.getByText("Actividad administrada (µCi)")).toBeTruthy();
+    expect(screen.queryByText("Dosis relacionada (opcional)")).toBeNull();
+  });
+
+  test("control positivo -- Captación SÍ sigue mostrando 'Dosis relacionada' (no se rompió con el split)", async () => {
+    const user = userEvent.setup();
+    await abrirYElegirIsotopoI131(user);
+    await user.selectOptions(labelInput("Tipo de registro"), "captacion");
+
+    expect(screen.getByText("Actividad administrada (µCi)")).toBeTruthy();
+    expect(screen.getByText("Dosis relacionada (opcional)")).toBeTruthy();
   });
 });

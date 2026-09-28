@@ -10,7 +10,7 @@ import { ImprimibleLibro2Pacientes } from "./ImprimibleLibro2Pacientes.jsx";
 import { ImprimibleLibro3Elucion } from "./ImprimibleLibro3Elucion.jsx";
 import { ImprimibleLibro4Lutecio } from "./ImprimibleLibro4Lutecio.jsx";
 
-const TIPOS_LIBRO2 = ["paciente", "i131_ablativa", "i131_dosis", "i131_barrido", "i131_mibg", "i131_captacion", "i131_centellograma", "i131_captacion_centellograma"];
+const TIPOS_LIBRO2 = ["paciente", "i131_ablativa", "i131_dosis", "i131_barrido", "i131_dosis_barrido", "i131_mibg", "i131_captacion", "i131_centellograma", "i131_captacion_centellograma"];
 
 const hoyISO = () => new Date().toISOString().slice(0, 7);
 

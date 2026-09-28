@@ -308,12 +308,12 @@ export function addActaMarcacion(data) {
   );
 }
 
-// Gestión I-131: 6 tipos planos (mismo criterio que transferencia_salida/
+// Gestión I-131: 7 tipos planos (mismo criterio que transferencia_salida/
 // transferencia_entrada en movimientos, no un campo "subtipo") -- cada uno
 // tiene su propio requisito de campos y de permiso en actaValida(). Dosis
-// ablativa/terapéutica y los 3 diagnósticos (Captación/Centellograma/
-// Captación y Centellograma) exigen accesoTerapiaI131 (o admin) del lado
-// servidor; Barrido corporal no.
+// terapéutica de hipertiroidismo/ablativa y los 4 diagnósticos (Captación/
+// Centellograma/Captación y Centellograma/Dosis de barrido corporal)
+// exigen accesoTerapiaI131 (o admin) del lado servidor; Barrido corporal no.
 function addActaI131(tipo, data) {
   return crearActaConFicha(tipo, data);
 }
@@ -325,6 +325,11 @@ function addActaI131(tipo, data) {
 export const addActaI131Ablativa = (data) => addActaI131("i131_ablativa", data);
 export const addActaI131Dosis = (data) => addActaI131("i131_dosis", data);
 export const addActaI131Barrido = (data) => addActaI131("i131_barrido", data);
+// Dosis de barrido corporal: registro simple de una sola vez (día de la
+// administración) -- mismos campos que un diagnóstico simple (ver
+// esTipoDiagnosticoI131 en firestore.rules), nunca dosisActaId (nunca hay
+// una dosis previa que vincular) ni seguimiento posterior.
+export const addActaI131DosisBarrido = (data) => addActaI131("i131_dosis_barrido", data);
 export const addActaI131Captacion = (data) => addActaI131("i131_captacion", data);
 export const addActaI131Centellograma = (data) => addActaI131("i131_centellograma", data);
 export const addActaI131CaptacionCentellograma = (data) => addActaI131("i131_captacion_centellograma", data);

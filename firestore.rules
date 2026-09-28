@@ -226,7 +226,7 @@ service cloud.firestore {
     function tiposActa() {
       return [
         'paciente', 'marcacion', 'elucion', 'anulacion',
-        'i131_ablativa', 'i131_dosis', 'i131_barrido', 'i131_mibg',
+        'i131_ablativa', 'i131_dosis', 'i131_barrido', 'i131_dosis_barrido', 'i131_mibg',
         'i131_captacion', 'i131_centellograma', 'i131_captacion_centellograma',
         'i131_vial', 'i131_extraccion', 'i131_captacion_resultado', 'i131_seguimiento_fin',
       ];
@@ -396,8 +396,19 @@ service cloud.firestore {
     function esTipoDosisI131(tipo) {
       return tipo == 'i131_dosis' || tipo == 'i131_ablativa';
     }
+    // i131_dosis_barrido ("Dosis de barrido corporal"): registro simple de
+    // una sola vez, el día de la administración -- el barrido en sí (2-3
+    // días después, cámara gamma) no genera ningún acta nueva, esta única
+    // fila lo cubre. Mismos campos exactos que los 3 diagnósticos de
+    // arriba (ficha, nombre, dni, actividadAdministrada en µCi) -- se
+    // agrupa acá para reusar la validación entera, sin lógica nueva.
+    // Nunca lleva dosisActaId (nunca hubo dosis previa que vincular) ni
+    // seguimiento (a diferencia de Captación/Centellograma) -- eso es
+    // sólo un chequeo del lado cliente (TabPacientes.jsx no muestra el
+    // picker "Dosis relacionada" para este tipo), el servidor no necesita
+    // saberlo porque dosisActaId siempre fue opcional para todo este grupo.
     function esTipoDiagnosticoI131(tipo) {
-      return tipo == 'i131_captacion' || tipo == 'i131_centellograma' || tipo == 'i131_captacion_centellograma';
+      return tipo == 'i131_captacion' || tipo == 'i131_centellograma' || tipo == 'i131_captacion_centellograma' || tipo == 'i131_dosis_barrido';
     }
 
     // Un vial anulado no puede recibir extracciones nuevas -- mismo id
