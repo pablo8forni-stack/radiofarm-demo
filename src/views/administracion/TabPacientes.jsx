@@ -85,7 +85,15 @@ const TIPOS_I131 = [
   { id: "ablativa", label: "Dosis ablativa", categoria: "dosis", requierePermiso: true, fn: addActaI131Ablativa },
   { id: "dosis", label: "Dosis terapéutica de hipertiroidismo", categoria: "dosis", requierePermiso: true, fn: addActaI131Dosis },
   { id: "barrido", label: "Barrido corporal", categoria: "barrido", requierePermiso: false, fn: addActaI131Barrido },
-  { id: "dosis_barrido", label: "Dosis de barrido corporal", categoria: "diagnostico", requierePermiso: true, sinVinculoDosis: true, fn: addActaI131DosisBarrido },
+  // unidadMci: true -- bug real encontrado por Pablo (Sosa Nancy, prod):
+  // al copiar la forma de Captación/Centellograma (categoria "diagnostico",
+  // µCi) para este tipo, la unidad quedó mal heredada también -- es una
+  // dosis de escala terapéutica (como Ablativa/Dosis terapéutica), no una
+  // lectura diagnóstica de trazador. Único tipo dentro de categoria
+  // "diagnostico" que va en mCi -- ver guardar()/el label condicional más
+  // abajo, y esTipoDosisI131/i131_dosis_barrido en firestore.rules (ramas
+  // separadas ahí también, ya no comparte esTipoDiagnosticoI131).
+  { id: "dosis_barrido", label: "Dosis de barrido corporal", categoria: "diagnostico", requierePermiso: true, sinVinculoDosis: true, unidadMci: true, fn: addActaI131DosisBarrido },
   { id: "mibg", label: "MIBG", categoria: "mibg", requierePermiso: false, fn: null },
   { id: "captacion", label: "Captación", categoria: "diagnostico", requierePermiso: true, fn: addActaI131Captacion },
   { id: "centellograma", label: "Centellograma", categoria: "diagnostico", requierePermiso: true, fn: addActaI131Centellograma },
@@ -642,7 +650,10 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
       } else if (tipoI131Actual.categoria === "diagnostico") {
         if (!actividadAdministrada) return;
         tipoI131Actual.fn({
-          ...base, actividadAdministrada: parseFloat(actividadAdministrada) || 0, unidadActividad: "uCi",
+          ...base, actividadAdministrada: parseFloat(actividadAdministrada) || 0,
+          // unidadMci (sólo Dosis de barrido corporal): mCi, no µCi -- ver
+          // nota en TIPOS_I131.
+          unidadActividad: tipoI131Actual.unidadMci ? "mCi" : "uCi",
           // sinVinculoDosis (Dosis de barrido corporal): nunca manda
           // dosisActaId, aunque haya quedado un valor de dosisVinculada
           // cargado de un tipo diagnóstico anterior en la misma sesión del
@@ -1324,7 +1335,14 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
             )}
             {esI131 && tipoI131Actual.categoria === "diagnostico" && (
               <>
-                <Input label="Actividad administrada (µCi)" type="number" min={0} step={1} value={actividadAdministrada} onChange={(e) => setActividadAdministrada(e.target.value)} placeholder="90" />
+                {/* unidadMci (sólo Dosis de barrido corporal): mCi, no
+                    µCi -- ver nota en TIPOS_I131/guardar(). */}
+                <Input
+                  label={tipoI131Actual.unidadMci ? "Actividad administrada (mCi)" : "Actividad administrada (µCi)"}
+                  type="number" min={0} step={tipoI131Actual.unidadMci ? 0.1 : 1} value={actividadAdministrada}
+                  onChange={(e) => setActividadAdministrada(e.target.value)}
+                  placeholder={tipoI131Actual.unidadMci ? "10" : "90"}
+                />
                 {/* Dosis de barrido corporal nunca vincula a una dosis
                     anterior (no hay ninguna que vincular) -- único caso
                     dentro de "diagnostico" que oculta este picker, ver

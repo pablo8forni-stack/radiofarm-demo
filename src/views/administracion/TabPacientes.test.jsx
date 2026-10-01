@@ -250,12 +250,13 @@ describe("TabPacientes -- Gestión I-131, Dosis de barrido corporal no muestra '
     await user.selectOptions(labelInput("Isótopo"), "i131");
   }
 
-  test("Dosis de barrido corporal: sin 'Dosis relacionada', con Actividad administrada (µCi)", async () => {
+  test("Dosis de barrido corporal: sin 'Dosis relacionada', con Actividad administrada en mCi (no µCi -- bug real corregido)", async () => {
     const user = userEvent.setup();
     await abrirYElegirIsotopoI131(user);
     await user.selectOptions(labelInput("Tipo de registro"), "dosis_barrido");
 
-    expect(screen.getByText("Actividad administrada (µCi)")).toBeTruthy();
+    expect(screen.getByText("Actividad administrada (mCi)")).toBeTruthy();
+    expect(screen.queryByText("Actividad administrada (µCi)")).toBeNull();
     expect(screen.queryByText("Dosis relacionada (opcional)")).toBeNull();
   });
 

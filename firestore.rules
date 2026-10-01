@@ -396,19 +396,12 @@ service cloud.firestore {
     function esTipoDosisI131(tipo) {
       return tipo == 'i131_dosis' || tipo == 'i131_ablativa';
     }
-    // i131_dosis_barrido ("Dosis de barrido corporal"): registro simple de
-    // una sola vez, el día de la administración -- el barrido en sí (2-3
-    // días después, cámara gamma) no genera ningún acta nueva, esta única
-    // fila lo cubre. Mismos campos exactos que los 3 diagnósticos de
-    // arriba (ficha, nombre, dni, actividadAdministrada en µCi) -- se
-    // agrupa acá para reusar la validación entera, sin lógica nueva.
-    // Nunca lleva dosisActaId (nunca hubo dosis previa que vincular) ni
-    // seguimiento (a diferencia de Captación/Centellograma) -- eso es
-    // sólo un chequeo del lado cliente (TabPacientes.jsx no muestra el
-    // picker "Dosis relacionada" para este tipo), el servidor no necesita
-    // saberlo porque dosisActaId siempre fue opcional para todo este grupo.
+    // Los 3 diagnósticos (Captación/Centellograma/Captación y
+    // Centellograma) comparten forma y permiso entre sí: llevan actividad
+    // en microcurie (µCi, no mCi) y vínculo opcional a la dosis que motivó
+    // el estudio, en vez de lote/cápsula propio.
     function esTipoDiagnosticoI131(tipo) {
-      return tipo == 'i131_captacion' || tipo == 'i131_centellograma' || tipo == 'i131_captacion_centellograma' || tipo == 'i131_dosis_barrido';
+      return tipo == 'i131_captacion' || tipo == 'i131_centellograma' || tipo == 'i131_captacion_centellograma';
     }
 
     // Un vial anulado no puede recibir extracciones nuevas -- mismo id
@@ -522,6 +515,31 @@ service cloud.firestore {
                  d.actividadAdministrada is number && d.actividadAdministrada > 0 &&
                  d.unidadActividad == 'mCi' &&
                  d.lote is string && d.lote.size() > 0)
+              // i131_dosis_barrido ("Dosis de barrido corporal"): registro
+              // simple de una sola vez, el día de la administración -- el
+              // barrido en sí (2-3 días después, cámara gamma) no genera
+              // ningún acta nueva, esta única fila lo cubre. Mismos campos
+              // que un diagnóstico simple (ficha, nombre, dni,
+              // actividadAdministrada), SIN lote (nunca tuvo) -- pero en
+              // mCi, no µCi: bug real encontrado por Pablo, al copiar el
+              // patrón de Captación/Centellograma (µCi) para la forma del
+              // registro, la unidad quedó mal heredada también -- es una
+              // dosis de escala terapéutica (como Ablativa/Dosis
+              // terapéutica), no una lectura diagnóstica de trazador. Por
+              // eso tiene su PROPIA rama acá (ya no vive dentro de
+              // esTipoDiagnosticoI131) en vez de compartir la de los 3
+              // diagnósticos reales. Nunca lleva dosisActaId (nunca hubo
+              // dosis previa que vincular) ni seguimiento -- eso es sólo un
+              // chequeo del lado cliente (TabPacientes.jsx no muestra el
+              // picker "Dosis relacionada" para este tipo), el servidor no
+              // necesita saberlo porque dosisActaId siempre fue opcional.
+              : d.tipo == 'i131_dosis_barrido'
+                ? (tieneAccesoI131() &&
+                   fichaValida(d.pacienteFicha) && d.fichaIntentoNro in ['1', '2', '3', '4', '5'] && fichaIntentoHabilitado(d.sedeId, d.pacienteFicha, d.fichaIntentoNro) &&
+                   d.pacienteNombre is string && d.pacienteNombre.size() > 0 &&
+                   d.pacienteDni is string && d.pacienteDni.size() > 0 &&
+                   d.actividadAdministrada is number && d.actividadAdministrada > 0 &&
+                   d.unidadActividad == 'mCi')
               : esTipoDiagnosticoI131(d.tipo)
                 ? (tieneAccesoI131() &&
                    fichaValida(d.pacienteFicha) && d.fichaIntentoNro in ['1', '2', '3', '4', '5'] && fichaIntentoHabilitado(d.sedeId, d.pacienteFicha, d.fichaIntentoNro) &&
