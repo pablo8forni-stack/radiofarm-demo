@@ -40,10 +40,13 @@ export function compararPorSedeYFicha(a, b) {
 
 // Misma agrupación por sede y mismo criterio de "ficha inválida al final"
 // que compararPorSedeYFicha, pero con la ficha en orden DESCENDENTE
-// (la más alta arriba) -- pantalla de Libro 2/Gestión I-131 (no el PDF de
-// impresión mensual, que sigue por fecha real, ver GenerarActasImpresion.jsx
-// -- nunca usó este comparador). Motivo: al cargar un paciente nuevo, se
-// quiere ver el último arriba de todo sin scrollear.
+// (la más alta arriba) -- pantalla de Libro 2/Gestión I-131. El PDF de
+// impresión mensual (GenerarActasImpresion.jsx) usa en cambio
+// compararPorSedeYFicha (ASCENDENTE, sin negar) -- pedido explícito de
+// Pablo, el orden real de un libro en papel va de la ficha más chica a la
+// más grande, al revés de la pantalla. Antes ordenaba por fecha de guardado
+// (bug real: una carga tardía con fecha de hoy pero ficha de un día
+// anterior imprimía fuera de lugar), corregido.
 // A propósito NO se hace invirtiendo los argumentos ni negando el
 // resultado completo de compararPorSedeYFicha -- un comparador correcto es
 // antisimétrico (compararPorSedeYFicha(b,a) === -compararPorSedeYFicha(a,b)

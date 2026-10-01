@@ -21,7 +21,7 @@ import { estadoMibgLote } from "../../helpers/mibgLote.js";
 // (ya excluye usos anulados, arma esto TabImpresionMensual.jsx).
 export function ImprimibleLibro4Lutecio({ lotes, anulaciones, usoPorLoteId, sedeNombre, mesTexto, nombreResponsable }) {
   return (
-    <div className="p-6 text-black text-[10px] font-sans">
+    <div className="p-6 text-black text-xs font-sans">
       <EncabezadoImpresion titulo="Libro 4 — Lutecio-177" sedeNombre={sedeNombre} mesTexto={mesTexto} />
       <table className="w-full border-collapse">
         <thead>

@@ -15,7 +15,7 @@ import { TEXTO_SIN_RADIOFARMACO } from "../../constants/sinRadiofarmaco.js";
 // para el lote vinculado), mejor legibilidad en papel.
 export function ImprimibleLibro2Pacientes({ actas, anulaciones, lotesPorId, sedeNombre, mesTexto, nombreResponsable, catalogo }) {
   return (
-    <div className="p-6 text-black text-[10px] font-sans">
+    <div className="p-6 text-black text-xs font-sans">
       <EncabezadoImpresion titulo="Libro 2 — Pacientes" sedeNombre={sedeNombre} mesTexto={mesTexto} />
       <table className="w-full border-collapse">
         <thead>

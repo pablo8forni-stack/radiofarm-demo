@@ -4,6 +4,7 @@ import { Btn } from "../ui/Btn.jsx";
 import { actasPorRango, anulacionesPorSede } from "../../services/firestore/actas.js";
 import { lotesPorSede } from "../../services/firestore/mibgLotes.js";
 import { primerYUltimoDiaMes, nombreMes } from "../../helpers/rangoMensual.js";
+import { compararPorSedeYFicha } from "../../helpers/fichaPaciente.js";
 import { PortalImpresion } from "./PortalImpresion.jsx";
 import { ImprimibleLibro1Marcacion } from "./ImprimibleLibro1Marcacion.jsx";
 import { ImprimibleLibro2Pacientes } from "./ImprimibleLibro2Pacientes.jsx";
@@ -51,7 +52,19 @@ export function GenerarActasImpresion({ catalogo, usuario, onToast }) {
       ]);
 
       const anulaciones = new Map(anulacionesRaw.map((a) => [a.anulaId, a]));
-      const actasLibro2 = porTipoLibro2.flat().sort((a, b) => (a.fecha?.toDate?.() ?? new Date(a.fecha)) - (b.fecha?.toDate?.() ?? new Date(b.fecha)));
+      // Por N° de Ficha ASCENDENTE (el orden real de VM RIS, el que lleva el
+      // libro de papel), NO por fecha de guardado -- bug real reportado por
+      // Pablo (imprimió septiembre y salió por hora de carga): una carga
+      // tardía (ver fechaRealAtencion/detección de atraso en
+      // TabPacientes.jsx) tiene fecha de HOY pero una ficha de un día
+      // anterior, así que ordenar por fecha la imprimía fuera de lugar. El
+      // defecto es anterior a esa función (este archivo nunca ordenó por
+      // ficha, ver commit de creación) pero recién se volvió visible cuando
+      // empezó a haber cargas tardías reales. compararPorSedeYFicha es
+      // ASCENDENTE a propósito -- pedido explícito de Pablo, headers de
+      // página en vez del descendente que ya usa la pantalla día a día
+      // (compararPorSedeYFichaDescendente, ver fichaPaciente.js).
+      const actasLibro2 = porTipoLibro2.flat().sort(compararPorSedeYFicha);
       const lotesPorId = new Map(lotesRaw.map((l) => [l.id, l]));
 
       // Libro 4: lotes de Lutecio-177 llegados este mes + su administración
