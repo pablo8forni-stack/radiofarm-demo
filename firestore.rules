@@ -386,6 +386,21 @@ service cloud.firestore {
       return exists(/databases/$(database)/documents/actas/$('fin_' + dosisActaId));
     }
 
+    // Caso real (Pablo): un paciente internado no pudo volver a las 48hs
+    // para la tercera lectura -- antes esto nunca bloqueaba nada (ver
+    // i131_seguimiento_fin más abajo, nunca exigió ningún momento en
+    // particular), sólo que el cliente no ofrecía el botón "Finalizar
+    // seguimiento" hasta guardar el de 48h. Ahora el botón está siempre
+    // disponible (ver TabResultadosCaptacion.jsx) -- mismos ids
+    // determinísticos que ya usa i131_captacion_resultado
+    // (captacion_${dosisActaId}_${momento}) para que el SERVIDOR (no sólo
+    // la UI) sepa objetivamente si las 3 lecturas están completas.
+    function seguimientoCompleto(dosisActaId) {
+      return exists(/databases/$(database)/documents/actas/$('captacion_' + dosisActaId + '_hora')) &&
+        exists(/databases/$(database)/documents/actas/$('captacion_' + dosisActaId + '_24h')) &&
+        exists(/databases/$(database)/documents/actas/$('captacion_' + dosisActaId + '_48h'));
+    }
+
     // 'i131_ablativa' (30-200 mCi, Ca. de tiroides) e 'i131_dosis' (5-15 mCi,
     // hipertiroidismo) comparten forma y permiso -- ambas son "dosis
     // terapéutica administrada", sólo cambia el rango clínico. Los 3
@@ -602,7 +617,16 @@ service cloud.firestore {
                              d.dosisActaId is string && d.dosisActaId.size() > 0 &&
                              d.pacienteDni is string && d.pacienteDni.size() > 0 &&
                              d.pacienteNombre is string && d.pacienteNombre.size() > 0 &&
-                             actaId == 'fin_' + d.dosisActaId)
+                             actaId == 'fin_' + d.dosisActaId &&
+                             // Finalizar con las 3 lecturas completas sigue
+                             // igual que siempre, sin motivo. Finalizar
+                             // incompleto (caso real: paciente que no pudo
+                             // volver a las 48hs) exige motivoFinalizacionIncompleta
+                             // explícito -- nunca un agujero silencioso,
+                             // mismo criterio que sinRadiofarmaco/
+                             // confirmoSinEgreso.
+                             (seguimientoCompleto(d.dosisActaId) ||
+                               (d.motivoFinalizacionIncompleta is string && d.motivoFinalizacionIncompleta.size() > 0)))
                           : (d.tipo == 'paciente'
                      ? (d.mciAdministrados is number && d.mciAdministrados > 0 &&
                         fichaValida(d.pacienteFicha) && d.fichaIntentoNro in ['1', '2', '3', '4', '5'] && fichaIntentoHabilitado(d.sedeId, d.pacienteFicha, d.fichaIntentoNro) &&

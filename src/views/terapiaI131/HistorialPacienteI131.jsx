@@ -44,7 +44,9 @@ function detalleFila(a) {
     return a.dosisActaId ? `${base} · Vinculado a dosis` : base;
   }
   if (a.tipo === "i131_captacion_resultado") return `${MOMENTO_LABEL[a.momento] || a.momento} · ${a.porcentajeCaptacion.toFixed(2)}%`;
-  if (a.tipo === "i131_seguimiento_fin") return "Seguimiento finalizado";
+  if (a.tipo === "i131_seguimiento_fin") {
+    return a.motivoFinalizacionIncompleta ? `Seguimiento finalizado incompleto -- ${a.motivoFinalizacionIncompleta}` : "Seguimiento finalizado";
+  }
   return "—";
 }
 

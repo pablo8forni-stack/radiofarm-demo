@@ -1553,7 +1553,11 @@ test("control positivo: admin SÍ puede finalizar el seguimiento de una dosis (i
   await loguearComo(PERSONAS.admin);
   const dosisActaId = `dosis-fin-ok-${Date.now()}`;
   const ref = doc(db, "actas", `fin_${dosisActaId}`);
-  await setDoc(ref, seguimientoFinBase({ usuarioEmail: PERSONAS.admin.email, dosisActaId }));
+  // Sin ninguna lectura cargada -- motivoFinalizacionIncompleta obligatorio
+  // (ver bloque "Finalizar seguimiento incompleto" más abajo para el caso
+  // real, hora+24h sin 48h). Esto es sólo el control de id determinístico,
+  // no del motivo en sí.
+  await setDoc(ref, seguimientoFinBase({ usuarioEmail: PERSONAS.admin.email, dosisActaId, motivoFinalizacionIncompleta: "Test" }));
   const snap = await getDoc(ref);
   assert.ok(snap.exists());
 });
@@ -1574,18 +1578,90 @@ test("finalizar el seguimiento dos veces para la misma dosis es rechazado (id de
   await loguearComo(PERSONAS.admin);
   const dosisActaId = `dosis-fin-dup-${Date.now()}`;
   const ref = doc(db, "actas", `fin_${dosisActaId}`);
-  await setDoc(ref, seguimientoFinBase({ usuarioEmail: PERSONAS.admin.email, dosisActaId }));
+  await setDoc(ref, seguimientoFinBase({ usuarioEmail: PERSONAS.admin.email, dosisActaId, motivoFinalizacionIncompleta: "Test" }));
   await assertPermissionDenied(() =>
-    setDoc(ref, seguimientoFinBase({ usuarioEmail: PERSONAS.admin.email, dosisActaId }))
+    setDoc(ref, seguimientoFinBase({ usuarioEmail: PERSONAS.admin.email, dosisActaId, motivoFinalizacionIncompleta: "Test" }))
   );
 });
 
 test("una vez finalizado el seguimiento de una dosis, no se puede cargar un nuevo resultado de %Captación para esa dosis", async () => {
   await loguearComo(PERSONAS.admin);
   const dosisActaId = `dosis-bloqueada-${Date.now()}`;
-  await setDoc(doc(db, "actas", `fin_${dosisActaId}`), seguimientoFinBase({ usuarioEmail: PERSONAS.admin.email, dosisActaId }));
+  await setDoc(doc(db, "actas", `fin_${dosisActaId}`), seguimientoFinBase({ usuarioEmail: PERSONAS.admin.email, dosisActaId, motivoFinalizacionIncompleta: "Test" }));
   await assertPermissionDenied(() =>
     addDoc(collection(db, "actas"), resultadoCaptacionBase({ usuarioEmail: PERSONAS.admin.email, dosisActaId, momento: "48h" }))
+  );
+});
+
+// --- Finalizar seguimiento incompleto (motivoFinalizacionIncompleta) ---
+// Caso real: un paciente internado no vuelve a las 48hs para la tercera
+// lectura. El botón "Finalizar seguimiento" está siempre visible en el
+// cliente, pero la regla exige un motivo no vacío cuando falta alguna de
+// las 3 lecturas (seguimientoCompleto() via los ids determinísticos
+// captacion_${dosisActaId}_${momento}) -- mismo patrón de transparencia que
+// confirmoSinEgreso/sinRadiofarmaco.
+test("control positivo: finalizar con las 3 lecturas completas NO requiere motivo", async () => {
+  await loguearComo(PERSONAS.admin);
+  const dosisActaId = `dosis-fin-completo-${Date.now()}`;
+  for (const momento of ["hora", "24h", "48h"]) {
+    await setDoc(
+      doc(db, "actas", `captacion_${dosisActaId}_${momento}`),
+      resultadoCaptacionBase({ usuarioEmail: PERSONAS.admin.email, dosisActaId, momento })
+    );
+  }
+  const ref = doc(db, "actas", `fin_${dosisActaId}`);
+  await setDoc(ref, seguimientoFinBase({ usuarioEmail: PERSONAS.admin.email, dosisActaId }));
+  const snap = await getDoc(ref);
+  assert.ok(snap.exists());
+});
+
+test("finalizar incompleto (falta la lectura de 48h) SIN motivo es rechazado", async () => {
+  await loguearComo(PERSONAS.admin);
+  const dosisActaId = `dosis-fin-incompleto-sin-motivo-${Date.now()}`;
+  for (const momento of ["hora", "24h"]) {
+    await setDoc(
+      doc(db, "actas", `captacion_${dosisActaId}_${momento}`),
+      resultadoCaptacionBase({ usuarioEmail: PERSONAS.admin.email, dosisActaId, momento })
+    );
+  }
+  await assertPermissionDenied(() =>
+    setDoc(doc(db, "actas", `fin_${dosisActaId}`), seguimientoFinBase({ usuarioEmail: PERSONAS.admin.email, dosisActaId }))
+  );
+});
+
+test("finalizar incompleto con motivoFinalizacionIncompleta vacío es rechazado", async () => {
+  await loguearComo(PERSONAS.admin);
+  const dosisActaId = `dosis-fin-motivo-vacio-${Date.now()}`;
+  await setDoc(
+    doc(db, "actas", `captacion_${dosisActaId}_hora`),
+    resultadoCaptacionBase({ usuarioEmail: PERSONAS.admin.email, dosisActaId, momento: "hora" })
+  );
+  await assertPermissionDenied(() =>
+    setDoc(doc(db, "actas", `fin_${dosisActaId}`), seguimientoFinBase({ usuarioEmail: PERSONAS.admin.email, dosisActaId, motivoFinalizacionIncompleta: "" }))
+  );
+});
+
+test("control positivo: finalizar incompleto (hora+24h, sin 48h) CON motivo es aceptado", async () => {
+  await loguearComo(PERSONAS.admin);
+  const dosisActaId = `dosis-fin-incompleto-con-motivo-${Date.now()}`;
+  for (const momento of ["hora", "24h"]) {
+    await setDoc(
+      doc(db, "actas", `captacion_${dosisActaId}_${momento}`),
+      resultadoCaptacionBase({ usuarioEmail: PERSONAS.admin.email, dosisActaId, momento })
+    );
+  }
+  const ref = doc(db, "actas", `fin_${dosisActaId}`);
+  await setDoc(ref, seguimientoFinBase({ usuarioEmail: PERSONAS.admin.email, dosisActaId, motivoFinalizacionIncompleta: "Paciente internado, no pudo volver a las 48hs" }));
+  const snap = await getDoc(ref);
+  assert.ok(snap.exists());
+  assert.strictEqual(snap.data().motivoFinalizacionIncompleta, "Paciente internado, no pudo volver a las 48hs");
+});
+
+test("finalizar sin ninguna lectura cargada (0 de 3) SIN motivo es rechazado", async () => {
+  await loguearComo(PERSONAS.admin);
+  const dosisActaId = `dosis-fin-sin-lecturas-${Date.now()}`;
+  await assertPermissionDenied(() =>
+    setDoc(doc(db, "actas", `fin_${dosisActaId}`), seguimientoFinBase({ usuarioEmail: PERSONAS.admin.email, dosisActaId }))
   );
 });
 

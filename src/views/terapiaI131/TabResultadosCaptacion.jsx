@@ -57,6 +57,7 @@ export function TabResultadosCaptacion({ catalogo, usuario, esAdmin, onToast }) 
   const [anulacionesRaw, setAnulacionesRaw] = useState([]);
   const [mAnular, setMAnular] = useState(null);
   const [mConfirmarFin, setMConfirmarFin] = useState(null);
+  const [motivoFin, setMotivoFin] = useState("");
   const [finalizando, setFinalizando] = useState(false);
   // Ver comentario largo equivalente en TabPacientes.jsx.
   const sedeEfectiva = esAdmin ? usuario.sedeAuditando : usuario.sede;
@@ -179,6 +180,24 @@ export function TabResultadosCaptacion({ catalogo, usuario, esAdmin, onToast }) 
     return MOMENTOS.filter((m) => !usados.has(m));
   }, [form.dosisActaId, momentosUsadosPorDosis]);
 
+  // Caso real (Pablo): un paciente internado no pudo volver a las 48hs --
+  // antes "Finalizar seguimiento" sólo se ofrecía automáticamente al
+  // guardar la lectura de 48h (ver guardar() más abajo), así que un caso
+  // incompleto nunca llegaba a finalizado (no bloqueaba nada -- la
+  // técnica confirmó que es sólo estético -- pero tampoco había forma de
+  // cerrarlo antes). Ahora el botón está siempre disponible (ver el
+  // listado más abajo) y este faltante decide si hace falta motivo.
+  const momentosFaltantesFin = useMemo(() => {
+    if (!mConfirmarFin) return [];
+    const usados = momentosUsadosPorDosis.get(mConfirmarFin.id) || new Set();
+    return MOMENTOS.filter((m) => !usados.has(m));
+  }, [mConfirmarFin, momentosUsadosPorDosis]);
+
+  function abrirFinalizar(registro) {
+    setMotivoFin("");
+    setMConfirmarFin(registro);
+  }
+
   const resultadoCalculado = useMemo(() => {
     const { cuentasPaciente, fondo, cuentasEstandar, volumenAdministrado } = form;
     if (!cuentasPaciente || !cuentasEstandar || !volumenAdministrado) return null;
@@ -210,9 +229,12 @@ export function TabResultadosCaptacion({ catalogo, usuario, esAdmin, onToast }) 
       });
       onToast("Resultado de %Captación registrado");
       setMostrarForm(false);
-      // "48h" es el último momento posible -- recién ahí tiene sentido
-      // ofrecer cerrar el seguimiento de esta dosis puntual.
-      if (form.momento === "48h") setMConfirmarFin(registro);
+      // "48h" es el último momento posible -- recién ahí el caso HABITUAL
+      // (las 3 lecturas completas) está listo para cerrar solo, sin pedir
+      // motivo. Sigue siendo sólo una sugerencia automática -- el botón
+      // "Finalizar seguimiento" del listado de abajo ya no depende de
+      // esto, está disponible en cualquier momento (ver abrirFinalizar).
+      if (form.momento === "48h") abrirFinalizar(registro);
       setForm(VACIO);
     } catch (e) {
       onToast(e.message || "No se pudo registrar el resultado", "error");
@@ -223,16 +245,25 @@ export function TabResultadosCaptacion({ catalogo, usuario, esAdmin, onToast }) 
 
   async function confirmarFinalizarSeguimiento() {
     if (!mConfirmarFin) return;
+    // Mismo freno que el botón (disabled más abajo) -- acá también, por si
+    // esta función se llegara a invocar de otra forma en el futuro.
+    if (momentosFaltantesFin.length > 0 && !motivoFin.trim()) return;
     setFinalizando(true);
     try {
       await addActaI131SeguimientoFin({
         sedeId: mConfirmarFin.sedeId, sedeNombre: mConfirmarFin.sedeNombre,
         dosisActaId: mConfirmarFin.id,
         pacienteDni: mConfirmarFin.pacienteDni, pacienteNombre: mConfirmarFin.pacienteNombre,
+        // motivoFinalizacionIncompleta: ausente cuando las 3 lecturas están
+        // completas (caso de siempre, sin cambios) -- exigido server-side
+        // cuando falta alguna (ver seguimientoCompleto en firestore.rules),
+        // nunca un agujero silencioso.
+        ...(momentosFaltantesFin.length > 0 ? { motivoFinalizacionIncompleta: motivoFin.trim() } : {}),
         usuarioNombre: usuario.nombre, usuarioEmail: usuario.email,
       });
       onToast("Seguimiento finalizado");
       setMConfirmarFin(null);
+      setMotivoFin("");
     } catch (e) {
       onToast(e.message || "No se pudo finalizar el seguimiento", "error");
     } finally {
@@ -352,8 +383,23 @@ export function TabResultadosCaptacion({ catalogo, usuario, esAdmin, onToast }) 
                       </span>
                     ))}
                     {finalizado && <Badge color="green">Finalizado</Badge>}
+                    {/* Siempre disponible -- ya no depende de haber guardado
+                        la lectura de 48h (ver abrirFinalizar/guardar()). Sin
+                        "registro" (acta diagnóstica no encontrada, caso
+                        raro) no se ofrece: el modal necesita sedeId/dni/
+                        nombre de ahí. */}
+                    {!finalizado && registro && (
+                      <Btn size="sm" variant="outline" onClick={() => abrirFinalizar(registro)}>
+                        Finalizar seguimiento
+                      </Btn>
+                    )}
                   </div>
                 </div>
+                {finalizado?.motivoFinalizacionIncompleta && (
+                  <div className="text-xs text-amber-600 italic">
+                    Finalizado incompleto -- {finalizado.motivoFinalizacionIncompleta}
+                  </div>
+                )}
 
                 <div className="flex flex-col gap-2">
                   {grupo.items.map((r) => {
@@ -407,12 +453,26 @@ export function TabResultadosCaptacion({ catalogo, usuario, esAdmin, onToast }) 
         {mConfirmarFin && (
           <div className="flex flex-col gap-4">
             <p className="text-sm text-gray-600">
-              Se cargó el resultado de <strong>48 h</strong> para <strong>{mConfirmarFin.pacienteNombre}</strong> (Ficha {mConfirmarFin.pacienteFicha || "—"}).
-              Finalizar el seguimiento bloquea la carga de más controles de %Captación para esta dosis puntual. Esta acción no se puede deshacer.
+              {momentosFaltantesFin.length === 0 ? (
+                <>Se cargaron las 3 lecturas (hora, 24h, 48h) para <strong>{mConfirmarFin.pacienteNombre}</strong> (Ficha {mConfirmarFin.pacienteFicha || "—"}).</>
+              ) : (
+                <>
+                  Vas a finalizar el seguimiento de <strong>{mConfirmarFin.pacienteNombre}</strong> (Ficha {mConfirmarFin.pacienteFicha || "—"}) sin completar
+                  las 3 lecturas -- falta <strong>{momentosFaltantesFin.map((m) => MOMENTO_LABEL[m]).join(", ")}</strong>.
+                </>
+              )}
+              {" "}Finalizar el seguimiento bloquea la carga de más controles de %Captación para esta dosis puntual. Esta acción no se puede deshacer.
             </p>
+            {momentosFaltantesFin.length > 0 && (
+              <Input
+                label="Motivo (obligatorio -- por qué se finaliza sin las 3 lecturas)"
+                value={motivoFin} onChange={(e) => setMotivoFin(e.target.value)}
+                placeholder="Ej: paciente de alta, no vuelve para el control de 48h"
+              />
+            )}
             <div className="flex gap-2 justify-end">
               <Btn variant="outline" onClick={() => setMConfirmarFin(null)} disabled={finalizando}>No finalizar</Btn>
-              <Btn onClick={confirmarFinalizarSeguimiento} disabled={finalizando}>
+              <Btn onClick={confirmarFinalizarSeguimiento} disabled={finalizando || (momentosFaltantesFin.length > 0 && !motivoFin.trim())}>
                 {finalizando ? "Finalizando..." : "Finalizar seguimiento"}
               </Btn>
             </div>
