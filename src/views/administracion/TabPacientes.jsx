@@ -82,8 +82,13 @@ function textoConformidad(lote) {
 // `sinVinculoDosis: true` le oculta el picker "Dosis relacionada" más abajo
 // (ver JSX, categoria === "diagnostico").
 const TIPOS_I131 = [
-  { id: "ablativa", label: "Dosis ablativa", categoria: "dosis", requierePermiso: true, fn: addActaI131Ablativa },
-  { id: "dosis", label: "Dosis terapéutica de hipertiroidismo", categoria: "dosis", requierePermiso: true, fn: addActaI131Dosis },
+  // requiereExtraccion: true -- estos 3 son los únicos que administran
+  // material físico de Parte A (vial/cápsula) a una escala terapéutica; ver
+  // extraccionesDisponibles/firestore.rules#vinculoExtraccionI131Valido.
+  // XOR obligatorio con sinExtraccionVial (cápsula sellada, sin pasar por
+  // Stock de viales) -- nunca ninguno de los dos, nunca los dos juntos.
+  { id: "ablativa", label: "Dosis ablativa", categoria: "dosis", requierePermiso: true, requiereExtraccion: true, fn: addActaI131Ablativa },
+  { id: "dosis", label: "Dosis terapéutica de hipertiroidismo", categoria: "dosis", requierePermiso: true, requiereExtraccion: true, fn: addActaI131Dosis },
   { id: "barrido", label: "Barrido corporal", categoria: "barrido", requierePermiso: false, fn: addActaI131Barrido },
   // unidadMci: true -- bug real encontrado por Pablo (Sosa Nancy, prod):
   // al copiar la forma de Captación/Centellograma (categoria "diagnostico",
@@ -93,7 +98,7 @@ const TIPOS_I131 = [
   // "diagnostico" que va en mCi -- ver guardar()/el label condicional más
   // abajo, y esTipoDosisI131/i131_dosis_barrido en firestore.rules (ramas
   // separadas ahí también, ya no comparte esTipoDiagnosticoI131).
-  { id: "dosis_barrido", label: "Dosis de barrido corporal", categoria: "diagnostico", requierePermiso: true, sinVinculoDosis: true, unidadMci: true, fn: addActaI131DosisBarrido },
+  { id: "dosis_barrido", label: "Dosis de barrido corporal", categoria: "diagnostico", requierePermiso: true, sinVinculoDosis: true, requiereExtraccion: true, unidadMci: true, fn: addActaI131DosisBarrido },
   { id: "mibg", label: "MIBG", categoria: "mibg", requierePermiso: false, fn: null },
   { id: "captacion", label: "Captación", categoria: "diagnostico", requierePermiso: true, fn: addActaI131Captacion },
   { id: "centellograma", label: "Centellograma", categoria: "diagnostico", requierePermiso: true, fn: addActaI131Centellograma },
@@ -269,6 +274,16 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
   const [dosisVinculada, setDosisVinculada] = useState("");
   const [dosisI131, setDosisI131] = useState([]);
   const [dosisBarridoI131, setDosisBarridoI131] = useState([]);
+  // Vínculo lote-paciente (Dosis ablativa/Dosis terapéutica/Dosis de
+  // barrido corporal, ver firestore.rules#vinculoExtraccionI131Valido):
+  // XOR obligatorio entre elegir una extracción real de Parte A o tildar
+  // "cápsula sellada" -- nunca los dos, nunca ninguno. extraccionesI131/
+  // vialesI131 alimentan el picker (necesita el lote de cada vial para
+  // mostrar algo legible, ver extraccionesParaVincular).
+  const [extraccionVinculada, setExtraccionVinculada] = useState("");
+  const [sinExtraccionVial, setSinExtraccionVial] = useState(false);
+  const [extraccionesI131, setExtraccionesI131] = useState([]);
+  const [vialesI131, setVialesI131] = useState([]);
   const [mibgI131, setMibgI131] = useState([]);
   const [mibgLotes, setMibgLotes] = useState([]);
   const [mibgLoteSeleccionado, setMibgLoteSeleccionado] = useState("");
@@ -295,6 +310,11 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
   useEffect(() => { if (sedeEfectiva) return listenActas("i131_captacion", setCaptacionI131, { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
   useEffect(() => { if (sedeEfectiva) return listenActas("i131_centellograma", setCentellogramaI131, { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
   useEffect(() => { if (sedeEfectiva) return listenActas("i131_captacion_centellograma", setCaptCentellogramaI131, { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
+  // Parte A (Stock de viales), sólo para alimentar el picker "Extracción
+  // relacionada" de abajo -- esta pantalla no es Gestión I-131 > Stock de
+  // viales, no se edita nada acá, sólo se lee para armar el vínculo.
+  useEffect(() => { if (sedeEfectiva) return listenActas("i131_extraccion", setExtraccionesI131, { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
+  useEffect(() => { if (sedeEfectiva) return listenActas("i131_vial", setVialesI131, { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
   // mibgLotes/mibgUsos no se mezclan en actasTodas (mibg_lote no es una
   // acta) -- alimentan sólo el picker "Lote disponible" de abajo, filtrado
   // en tiempo real: un lote usado por otra técnica desaparece para todos al
@@ -562,6 +582,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
     setFichaNro(""); setFichaTocada(false); setFichaEstado(null); setNombre(""); setDni(""); setPeso(""); setTalla(""); setEstudio(""); setEstudioOtro(""); setMci(""); setFarmId(""); setLote(""); setObs("");
     setMostrarIsotopo(false); setIsotopoId("tc99m"); setMedicoResponsable("");
     setTipoI131("barrido"); setActividadAdministrada(""); setIndicacion(""); setDosisVinculada(""); setMibgLoteSeleccionado(""); setLutecioLoteSeleccionado("");
+    setExtraccionVinculada(""); setSinExtraccionVial(false);
     setSedeId(usuario.sede); setVerTodoElStock(false); setConfirmoSinMarcacion(false); setSinRadiofarmaco(false);
     setAtrasoDetectado(false); setModoManual(false); setFechaRealAtencion(""); setFechaRealAtencionTocada(false);
   }
@@ -617,6 +638,32 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
     return (propias.length ? propias : todas).sort((a, b) => tsMillis(b.fecha) - tsMillis(a.fecha));
   }, [dosisI131, ablativaI131, dni]);
 
+  // Extracciones de Parte A disponibles para vincular (Dosis ablativa/Dosis
+  // terapéutica/Dosis de barrido corporal) -- a diferencia de
+  // dosisParaVincular (donde SÍ tiene sentido que varios diagnósticos
+  // aporten al mismo Ablativa), la relación acá es 1 extracción = 1
+  // administración: una extracción ya vinculada a OTRA acta de dosis (no
+  // anulada) desaparece del picker, para que dos técnicas no liguen la
+  // misma preparación real a dos pacientes distintos. Sin marcador
+  // determinístico server-side (confirmado con Pablo: las dosis se extraen
+  // y se entregan de inmediato, no hay vial "flotando" disponible días
+  // después) -- este filtro de cliente alcanza, mismo nivel de guardrail
+  // que el combinado de viales en VialDetalle.jsx.
+  const vialesI131PorId = useMemo(() => new Map(vialesI131.map((v) => [v.id, v])), [vialesI131]);
+  const extraccionesYaVinculadasIds = useMemo(() => {
+    const todas = [...ablativaI131, ...dosisI131, ...dosisBarridoI131];
+    return new Set(todas.filter((a) => a.extraccionId && !anulaciones.has(a.id)).map((a) => a.extraccionId));
+  }, [ablativaI131, dosisI131, dosisBarridoI131, anulaciones]);
+  const extraccionesDisponibles = useMemo(() => {
+    return extraccionesI131
+      .filter((e) => !anulaciones.has(e.id) && !extraccionesYaVinculadasIds.has(e.id))
+      .sort((a, b) => tsMillis(b.fecha) - tsMillis(a.fecha));
+  }, [extraccionesI131, anulaciones, extraccionesYaVinculadasIds]);
+  function etiquetaExtraccion(e) {
+    const lotes = (e.viales || []).map((p) => vialesI131PorId.get(p.vialId)?.lote || "?").join(", ");
+    return `${lotes} · ${e.actividadMedida.toFixed(2)} mCi medido · ${fmtTs(e.fecha)}`;
+  }
+
   function guardar() {
     const fichaNormalizada = normalizarFicha(fichaNro);
     if (!fichaNormalizada || !nombre.trim() || !dni.trim() || fichaEstado?.tipo !== "ok") return;
@@ -641,16 +688,23 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
         usuarioNombre: usuario.nombre, usuarioEmail: usuario.email, observacion: obs.trim(),
       };
       if (tipoI131Actual.requierePermiso && !puedeCargarDosisI131) return;
+      // XOR obligatorio: ni los dos juntos, ni ninguno -- mismo freno que
+      // el disabled de Guardar más abajo, acá también por si guardar() se
+      // llegara a invocar de otra forma en el futuro.
+      if (tipoI131Actual.requiereExtraccion && (!!extraccionVinculada === !!sinExtraccionVial)) return;
+      const vinculoExtraccion = tipoI131Actual.requiereExtraccion
+        ? (sinExtraccionVial ? { sinExtraccionVial: true } : { extraccionId: extraccionVinculada })
+        : {};
       if (tipoI131Actual.categoria === "dosis") {
         if (!actividadAdministrada || !lote.trim()) return;
-        tipoI131Actual.fn({ ...base, actividadAdministrada: parseFloat(actividadAdministrada) || 0, unidadActividad: "mCi", lote: lote.trim(), indicacion: indicacion.trim() })
+        tipoI131Actual.fn({ ...base, ...vinculoExtraccion, actividadAdministrada: parseFloat(actividadAdministrada) || 0, unidadActividad: "mCi", lote: lote.trim(), indicacion: indicacion.trim() })
           .then(() => { ultimaFichaGuardadaRef.current = { sedeId, numero: parseInt(fichaNormalizada, 10) }; })
           .catch((e) => onToast(e.message || "No se pudo guardar el registro", "error"));
         onToast(`${tipoI131Actual.label} registrada — consultala en la pestaña Gestión I-131`);
       } else if (tipoI131Actual.categoria === "diagnostico") {
         if (!actividadAdministrada) return;
         tipoI131Actual.fn({
-          ...base, actividadAdministrada: parseFloat(actividadAdministrada) || 0,
+          ...base, ...vinculoExtraccion, actividadAdministrada: parseFloat(actividadAdministrada) || 0,
           // unidadMci (sólo Dosis de barrido corporal): mCi, no µCi -- ver
           // nota en TIPOS_I131.
           unidadActividad: tipoI131Actual.unidadMci ? "mCi" : "uCi",
@@ -1359,6 +1413,31 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
                 )}
               </>
             )}
+            {/* Vínculo lote-paciente (Dosis ablativa/Dosis terapéutica/Dosis
+                de barrido corporal) -- XOR obligatorio entre elegir una
+                extracción real de Parte A o tildar "cápsula sellada", mismo
+                patrón de transparencia que "No requiere marcación de
+                radiofármaco" más abajo (sinRadiofarmaco). Ver
+                firestore.rules#vinculoExtraccionI131Valido. */}
+            {esI131 && tipoI131Actual.requiereExtraccion && (
+              <div className="sm:col-span-2 flex flex-col gap-2">
+                <Sel
+                  label="Extracción relacionada" value={extraccionVinculada}
+                  disabled={sinExtraccionVial}
+                  onChange={(e) => { setExtraccionVinculada(e.target.value); if (e.target.value) setSinExtraccionVial(false); }}
+                >
+                  <option value="">Seleccionar...</option>
+                  {extraccionesDisponibles.map((e) => (
+                    <option key={e.id} value={e.id}>{etiquetaExtraccion(e)}</option>
+                  ))}
+                </Sel>
+                <label className="flex items-start gap-2 text-sm text-gray-700">
+                  <input type="checkbox" className="w-4 h-4 accent-blue-600 mt-0.5" checked={sinExtraccionVial}
+                    onChange={(e) => { setSinExtraccionVial(e.target.checked); if (e.target.checked) setExtraccionVinculada(""); }} />
+                  <span>Es una cápsula sellada (sin extracción de vial)</span>
+                </label>
+              </div>
+            )}
             {esI131 && tipoI131Actual.categoria === "mibg" && (
               <div className="sm:col-span-2 flex flex-col gap-3">
                 <Sel label="Lote de MIBG disponible" value={mibgLoteSeleccionado} onChange={(e) => setMibgLoteSeleccionado(e.target.value)}>
@@ -1488,7 +1567,9 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
                 ? ((tipoI131Actual.requierePermiso && !puedeCargarDosisI131) ||
                    (tipoI131Actual.categoria !== "barrido" && !actividadAdministrada) ||
                    (tipoI131Actual.categoria === "dosis" && !lote.trim()) ||
-                   (tipoI131Actual.categoria === "mibg" && !mibgLoteSeleccionado))
+                   (tipoI131Actual.categoria === "mibg" && !mibgLoteSeleccionado) ||
+                   // XOR obligatorio: ni los dos, ni ninguno.
+                   (tipoI131Actual.requiereExtraccion && (!!extraccionVinculada === !!sinExtraccionVial)))
                 : esLutecio
                   ? (!medicoResponsable.trim() || !lutecioLoteSeleccionado || !actividadAdministrada)
                   : (!mci || !estudio || (estudio === "Otro" && !estudioOtro.trim()) ||

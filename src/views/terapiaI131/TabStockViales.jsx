@@ -23,6 +23,12 @@ export function TabStockViales({ catalogo, usuario, esAdmin, onToast }) {
   const [viales, setViales] = useState([]);
   const [extracciones, setExtracciones] = useState([]);
   const [anulacionesRaw, setAnulacionesRaw] = useState([]);
+  // Sólo para el índice inverso extraccionId -> acta de dosis (ver
+  // extraccionesVinculadas más abajo) -- este vínculo se guarda en Libro 2
+  // (TabPacientes.jsx), acá sólo se lee para mostrarlo del lado de Parte A.
+  const [ablativaI131, setAblativaI131] = useState([]);
+  const [dosisI131, setDosisI131] = useState([]);
+  const [dosisBarridoI131, setDosisBarridoI131] = useState([]);
   const [mAnular, setMAnular] = useState(null);
   // Ver comentario largo equivalente en TabPacientes.jsx.
   const sedeEfectiva = esAdmin ? usuario.sedeAuditando : usuario.sede;
@@ -34,9 +40,21 @@ export function TabStockViales({ catalogo, usuario, esAdmin, onToast }) {
 
   useEffect(() => { if (sedeEfectiva) return listenActas("i131_vial", setViales, { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
   useEffect(() => { if (sedeEfectiva) return listenActas("i131_extraccion", setExtracciones, { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
+  useEffect(() => { if (sedeEfectiva) return listenActas("i131_ablativa", setAblativaI131, { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
+  useEffect(() => { if (sedeEfectiva) return listenActas("i131_dosis", setDosisI131, { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
+  useEffect(() => { if (sedeEfectiva) return listenActas("i131_dosis_barrido", setDosisBarridoI131, { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
   useEffect(() => { if (sedeEfectiva) return listenAnulacionesActas(setAnulacionesRaw, { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
 
   const anulaciones = useMemo(() => new Map(anulacionesRaw.map((a) => [a.anulaId, a])), [anulacionesRaw]);
+  // Índice inverso extraccionId -> acta de dosis (Libro 2) -- el vínculo en
+  // sí vive del otro lado (dosisActa.extraccionId), acá sólo se arma el
+  // mapa para mostrarlo en "Extracciones de este vial". Una acta anulada no
+  // cuenta como vínculo vigente (ver mismo criterio en TabPacientes.jsx#
+  // extraccionesYaVinculadasIds).
+  const extraccionesVinculadas = useMemo(() => {
+    const todas = [...ablativaI131, ...dosisI131, ...dosisBarridoI131];
+    return new Map(todas.filter((a) => a.extraccionId && !anulaciones.has(a.id)).map((a) => [a.extraccionId, a]));
+  }, [ablativaI131, dosisI131, dosisBarridoI131, anulaciones]);
 
   const vialesFiltrados = useMemo(
     () => viales.filter((v) => (!sedeEfectiva || v.sedeId === sedeEfectiva) && (!filtroCategoria || categoriaVial(v) === filtroCategoria))
@@ -99,6 +117,7 @@ export function TabStockViales({ catalogo, usuario, esAdmin, onToast }) {
           anulacionVial={anulaciones.get(vialSeleccionado.id)}
           todosLosViales={viales.filter((v) => v.sedeId === vialSeleccionado.sedeId && !anulaciones.get(v.id))}
           extracciones={extracciones}
+          extraccionesVinculadas={extraccionesVinculadas}
           anulaciones={anulaciones}
           catalogo={catalogo}
           usuario={usuario}

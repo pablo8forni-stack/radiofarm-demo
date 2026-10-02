@@ -1058,7 +1058,7 @@ test("control positivo: técnico CON accesoTerapiaI131 SÍ puede crear una Dosis
 
   await loguearComo(PERSONAS.tecnicoA);
   const ref = await addDoc(collection(db, "actas"), i131Base("i131_dosis", {
-    usuarioEmail: PERSONAS.tecnicoA.email, actividadAdministrada: 10, unidadActividad: "mCi", lote: "I131-TEST",
+    usuarioEmail: PERSONAS.tecnicoA.email, actividadAdministrada: 10, unidadActividad: "mCi", lote: "I131-TEST", sinExtraccionVial: true,
   }));
   const snap = await getDoc(ref);
   assert.ok(snap.exists());
@@ -1075,7 +1075,7 @@ test("control positivo: admin SÍ puede crear una Dosis ablativa de I-131 sin el
   // sedeAuditando que sólo hace falta cuando la sede SÍ es parte de lo
   // que se prueba (ver los dos tests de "cualquier sede" más arriba).
   const ref = await addDoc(collection(db, "actas"), i131Base("i131_ablativa", {
-    sedeId: SEDE_A, usuarioEmail: PERSONAS.admin.email, actividadAdministrada: 150, unidadActividad: "mCi", lote: "I131-TEST", indicacion: "Ca. de tiroides",
+    sedeId: SEDE_A, usuarioEmail: PERSONAS.admin.email, actividadAdministrada: 150, unidadActividad: "mCi", lote: "I131-TEST", indicacion: "Ca. de tiroides", sinExtraccionVial: true,
   }));
   const snap = await getDoc(ref);
   assert.ok(snap.exists());
@@ -1123,7 +1123,7 @@ test("control positivo: técnico CON accesoTerapiaI131 SÍ puede crear una Dosis
 
   await loguearComo(PERSONAS.tecnicoA);
   const ref = await addDoc(collection(db, "actas"), i131Base("i131_dosis_barrido", {
-    usuarioEmail: PERSONAS.tecnicoA.email, actividadAdministrada: 10, unidadActividad: "mCi",
+    usuarioEmail: PERSONAS.tecnicoA.email, actividadAdministrada: 10, unidadActividad: "mCi", sinExtraccionVial: true,
   }));
   const snap = await getDoc(ref);
   assert.ok(snap.exists());
@@ -1136,16 +1136,124 @@ test("control positivo: técnico CON accesoTerapiaI131 SÍ puede crear una Dosis
 test("control positivo: admin SÍ puede crear una Dosis de barrido corporal sin el flag", async () => {
   await loguearComo(PERSONAS.admin);
   const ref = await addDoc(collection(db, "actas"), i131Base("i131_dosis_barrido", {
-    sedeId: SEDE_A, usuarioEmail: PERSONAS.admin.email, actividadAdministrada: 10, unidadActividad: "mCi",
+    sedeId: SEDE_A, usuarioEmail: PERSONAS.admin.email, actividadAdministrada: 10, unidadActividad: "mCi", sinExtraccionVial: true,
   }));
   const snap = await getDoc(ref);
   assert.ok(snap.exists());
 });
 
+// Vínculo lote-paciente (Dosis ablativa/Dosis terapéutica/Dosis de barrido
+// corporal, Pablo 1/10): hasta ahora la extracción real de Parte A
+// (i131_extraccion) y la dosis administrada en Libro 2 eran dos registros
+// sin ningún vínculo real -- sólo correlacionados a ojo por dos strings
+// libres sin validar. extraccionId vive en la acta de Libro 2 (create-only,
+// se crea DESPUÉS de la extracción real) y apunta hacia atrás a la
+// extracción ya existente. XOR obligatorio con sinExtraccionVial (cápsula
+// sellada, caso real que no pasa por Stock de viales) -- mismo criterio que
+// sinRadiofarmaco/confirmoSinEgreso: nunca los dos juntos, nunca ninguno.
+test("Dosis terapéutica de I-131 sin extraccionId ni sinExtraccionVial es rechazada (XOR obligatorio)", async () => {
+  await loguearComo(PERSONAS.admin);
+  await assertPermissionDenied(() =>
+    addDoc(collection(db, "actas"), i131Base("i131_dosis", {
+      usuarioEmail: PERSONAS.admin.email, actividadAdministrada: 10, unidadActividad: "mCi", lote: "I131-TEST",
+    }))
+  );
+});
+
+test("Dosis ablativa de I-131 sin extraccionId ni sinExtraccionVial es rechazada", async () => {
+  await loguearComo(PERSONAS.admin);
+  await assertPermissionDenied(() =>
+    addDoc(collection(db, "actas"), i131Base("i131_ablativa", {
+      usuarioEmail: PERSONAS.admin.email, actividadAdministrada: 150, unidadActividad: "mCi", lote: "I131-TEST",
+    }))
+  );
+});
+
+test("Dosis de barrido corporal sin extraccionId ni sinExtraccionVial es rechazada", async () => {
+  await loguearComo(PERSONAS.admin);
+  await assertPermissionDenied(() =>
+    addDoc(collection(db, "actas"), i131Base("i131_dosis_barrido", {
+      usuarioEmail: PERSONAS.admin.email, actividadAdministrada: 10, unidadActividad: "mCi",
+    }))
+  );
+});
+
+test("Dosis terapéutica de I-131 con extraccionId Y sinExtraccionVial juntos es rechazada", async () => {
+  await loguearComo(PERSONAS.admin);
+  const v = await addDoc(collection(db, "actas"), vialBase({ sedeId: SEDE_A, usuarioEmail: PERSONAS.admin.email, lote: "VINC-1" }));
+  const ext = await addDoc(collection(db, "actas"), extraccionBase(v.id, { sedeId: SEDE_A, usuarioEmail: PERSONAS.admin.email }));
+  await assertPermissionDenied(() =>
+    addDoc(collection(db, "actas"), i131Base("i131_dosis", {
+      usuarioEmail: PERSONAS.admin.email, actividadAdministrada: 10, unidadActividad: "mCi", lote: "I131-TEST",
+      extraccionId: ext.id, sinExtraccionVial: true,
+    }))
+  );
+});
+
+test("Dosis terapéutica de I-131 con extraccionId apuntando a un id inexistente es rechazada", async () => {
+  await loguearComo(PERSONAS.admin);
+  await assertPermissionDenied(() =>
+    addDoc(collection(db, "actas"), i131Base("i131_dosis", {
+      usuarioEmail: PERSONAS.admin.email, actividadAdministrada: 10, unidadActividad: "mCi", lote: "I131-TEST",
+      extraccionId: "no-existe-123",
+    }))
+  );
+});
+
+test("Dosis terapéutica de I-131 con extraccionId apuntando a un acta que NO es i131_extraccion es rechazada", async () => {
+  await loguearComo(PERSONAS.admin);
+  // Un vial (i131_vial) existe como documento real, pero no es una
+  // extracción -- vinculoExtraccionI131Valido tiene que distinguir "existe"
+  // de "es del tipo correcto" (get().data.tipo), no sólo exists().
+  const v = await addDoc(collection(db, "actas"), vialBase({ sedeId: SEDE_A, usuarioEmail: PERSONAS.admin.email, lote: "VINC-2" }));
+  await assertPermissionDenied(() =>
+    addDoc(collection(db, "actas"), i131Base("i131_dosis", {
+      usuarioEmail: PERSONAS.admin.email, actividadAdministrada: 10, unidadActividad: "mCi", lote: "I131-TEST",
+      extraccionId: v.id,
+    }))
+  );
+});
+
+test("control positivo: Dosis terapéutica de I-131 con extraccionId de una extracción real es aceptada", async () => {
+  await loguearComo(PERSONAS.admin);
+  const v = await addDoc(collection(db, "actas"), vialBase({ sedeId: SEDE_A, usuarioEmail: PERSONAS.admin.email, lote: "VINC-3" }));
+  const ext = await addDoc(collection(db, "actas"), extraccionBase(v.id, { sedeId: SEDE_A, usuarioEmail: PERSONAS.admin.email }));
+  const ref = await addDoc(collection(db, "actas"), i131Base("i131_dosis", {
+    sedeId: SEDE_A, usuarioEmail: PERSONAS.admin.email, actividadAdministrada: 10, unidadActividad: "mCi", lote: "I131-TEST",
+    extraccionId: ext.id,
+  }));
+  const snap = await getDoc(ref);
+  assert.equal(snap.data().extraccionId, ext.id);
+});
+
+test("control positivo: Dosis ablativa de I-131 con extraccionId de una extracción real es aceptada", async () => {
+  await loguearComo(PERSONAS.admin);
+  const v = await addDoc(collection(db, "actas"), vialBase({ sedeId: SEDE_A, usuarioEmail: PERSONAS.admin.email, lote: "VINC-4" }));
+  const ext = await addDoc(collection(db, "actas"), extraccionBase(v.id, { sedeId: SEDE_A, usuarioEmail: PERSONAS.admin.email }));
+  const ref = await addDoc(collection(db, "actas"), i131Base("i131_ablativa", {
+    sedeId: SEDE_A, usuarioEmail: PERSONAS.admin.email, actividadAdministrada: 150, unidadActividad: "mCi", lote: "I131-TEST",
+    extraccionId: ext.id,
+  }));
+  const snap = await getDoc(ref);
+  assert.equal(snap.data().extraccionId, ext.id);
+});
+
+test("control positivo: Dosis de barrido corporal con extraccionId de una extracción real es aceptada", async () => {
+  await loguearComo(PERSONAS.admin);
+  const v = await addDoc(collection(db, "actas"), vialBase({ sedeId: SEDE_A, usuarioEmail: PERSONAS.admin.email, lote: "VINC-5" }));
+  const ext = await addDoc(collection(db, "actas"), extraccionBase(v.id, { sedeId: SEDE_A, usuarioEmail: PERSONAS.admin.email }));
+  const ref = await addDoc(collection(db, "actas"), i131Base("i131_dosis_barrido", {
+    sedeId: SEDE_A, usuarioEmail: PERSONAS.admin.email, actividadAdministrada: 10, unidadActividad: "mCi",
+    extraccionId: ext.id,
+  }));
+  const snap = await getDoc(ref);
+  assert.equal(snap.data().extraccionId, ext.id);
+});
+
 test("control positivo: admin SÍ puede crear un Centellograma de I-131, vinculado a una dosis", async () => {
   await loguearComo(PERSONAS.admin);
   const dosisRef = await addDoc(collection(db, "actas"), i131Base("i131_dosis", {
-    sedeId: SEDE_A, usuarioEmail: PERSONAS.admin.email, actividadAdministrada: 10, unidadActividad: "mCi", lote: "I131-TEST",
+    sedeId: SEDE_A, usuarioEmail: PERSONAS.admin.email, actividadAdministrada: 10, unidadActividad: "mCi", lote: "I131-TEST", sinExtraccionVial: true,
   }));
   const ref = await addDoc(collection(db, "actas"), i131Base("i131_centellograma", {
     sedeId: SEDE_A, usuarioEmail: PERSONAS.admin.email, actividadAdministrada: 90, unidadActividad: "uCi", dosisActaId: dosisRef.id,

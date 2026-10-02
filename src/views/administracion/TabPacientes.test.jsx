@@ -270,6 +270,50 @@ describe("TabPacientes -- Gestión I-131, Dosis de barrido corporal no muestra '
   });
 });
 
+// Vínculo lote-paciente (extraccionId/sinExtraccionVial): XOR obligatorio
+// para Dosis ablativa/Dosis terapéutica/Dosis de barrido corporal -- nunca
+// los dos juntos, nunca ninguno (ver firestore.rules#vinculoExtraccionI131Valido).
+// Captación/Centellograma/Captación y Centellograma quedan FUERA de este
+// vínculo (ya tienen el suyo propio, dosisActaId).
+describe("TabPacientes -- Gestión I-131, vínculo a Extracción (Dosis ablativa/terapéutica/barrido corporal)", () => {
+  async function abrirYElegirIsotopoI131(user) {
+    render(<TabPacientes catalogo={catalogo} usuario={usuarioConAccesoI131} esAdmin={false} onToast={vi.fn()} nav={null} />);
+    await user.click(await screen.findByText("+ Manual"));
+    await user.click(screen.getByText("¿Es un caso distinto a Tc-99m?"));
+    await user.selectOptions(labelInput("Isótopo"), "i131");
+  }
+
+  test("Dosis de barrido corporal muestra 'Extracción relacionada' + 'cápsula sellada'", async () => {
+    const user = userEvent.setup();
+    await abrirYElegirIsotopoI131(user);
+    await user.selectOptions(labelInput("Tipo de registro"), "dosis_barrido");
+
+    expect(screen.getByText("Extracción relacionada")).toBeTruthy();
+    expect(screen.getByText("Es una cápsula sellada (sin extracción de vial)")).toBeTruthy();
+  });
+
+  test("control positivo -- Captación NO muestra el vínculo a Extracción (ya tiene el suyo propio, dosisActaId)", async () => {
+    const user = userEvent.setup();
+    await abrirYElegirIsotopoI131(user);
+    await user.selectOptions(labelInput("Tipo de registro"), "captacion");
+
+    expect(screen.queryByText("Extracción relacionada")).toBeNull();
+    expect(screen.queryByText("Es una cápsula sellada (sin extracción de vial)")).toBeNull();
+  });
+
+  test("tildar 'cápsula sellada' limpia y deshabilita el Sel de Extracción relacionada", async () => {
+    const user = userEvent.setup();
+    await abrirYElegirIsotopoI131(user);
+    await user.selectOptions(labelInput("Tipo de registro"), "dosis_barrido");
+
+    const checkbox = screen.getByText("Es una cápsula sellada (sin extracción de vial)").previousElementSibling;
+    await user.click(checkbox);
+
+    expect(labelInput("Extracción relacionada").value).toBe("");
+    expect(labelInput("Extracción relacionada").disabled).toBe(true);
+  });
+});
+
 function haceDias(n) {
   return { toDate: () => new Date(Date.now() - n * 24 * 60 * 60 * 1000) };
 }

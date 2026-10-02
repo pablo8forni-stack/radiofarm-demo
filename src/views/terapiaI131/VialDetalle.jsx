@@ -8,7 +8,7 @@ import { addActaI131Extraccion } from "../../services/firestore/actas.js";
 import { diasTranscurridos, actividadRestante, volumenExtraidoDe, calcularDesglosePorVial } from "../../helpers/decaimientoI131.js";
 import { DesgloseCalculo, AvisoGuiaNoOficial } from "./DesgloseCalculo.jsx";
 import { CurvaDecaimiento } from "./CurvaDecaimiento.jsx";
-import { CATEGORIA_VIAL_LABEL, categoriaVial } from "../../constants/tipoI131.js";
+import { CATEGORIA_VIAL_LABEL, categoriaVial, TIPO_LABEL_I131 } from "../../constants/tipoI131.js";
 
 const LINEA_VACIA = () => ({ vialId: "", ml: "" });
 
@@ -18,7 +18,7 @@ const LINEA_VACIA = () => ({ vialId: "", ml: "" });
 // "completan 150 mCi con lote 241"). El aviso de "guía, no reemplaza al
 // activímetro" va siempre visible acá, no en un modal que se cierra y se
 // olvida.
-export function VialDetalle({ vial, anulacionVial, todosLosViales, extracciones, anulaciones, catalogo, usuario, esAdmin, onToast, onVolver, onAnular }) {
+export function VialDetalle({ vial, anulacionVial, todosLosViales, extracciones, extraccionesVinculadas, anulaciones, catalogo, usuario, esAdmin, onToast, onVolver, onAnular }) {
   const [mostrarForm, setMostrarForm] = useState(false);
   const [lineas, setLineas] = useState([{ vialId: vial.id, ml: "" }]);
   const [actividadMedida, setActividadMedida] = useState("");
@@ -266,6 +266,17 @@ export function VialDetalle({ vial, anulacionVial, todosLosViales, extracciones,
                   )}
                 </div>
                 {e.pacienteFicha && <div className="text-xs text-gray-600">Ficha: <span className="font-mono">{e.pacienteFicha}</span></div>}
+                {/* Vínculo real (Libro 2, extraccionId) -- a diferencia de
+                    pacienteFicha arriba (texto libre, sin validar, nunca
+                    confiable), esto viene de una acta real create-only. */}
+                {extraccionesVinculadas?.get(e.id) && (() => {
+                  const vinc = extraccionesVinculadas.get(e.id);
+                  return (
+                    <div className="text-xs text-blue-700 bg-blue-50 border border-blue-100 rounded-lg px-2 py-1 w-fit">
+                      → Administrada a {vinc.pacienteNombre} (Ficha {vinc.pacienteFicha || "—"}) · {TIPO_LABEL_I131[vinc.tipo]?.label || vinc.tipo}
+                    </div>
+                  );
+                })()}
                 {e.viales.length > 1 && (
                   <div className="text-xs text-gray-500">Combinada con {e.viales.length - 1} vial{e.viales.length - 1 !== 1 ? "es" : ""} más: {e.viales.filter((v) => v.vialId !== vial.id).map((v) => todosLosViales.find((tv) => tv.id === v.vialId)?.lote || v.vialId).join(", ")}</div>
                 )}

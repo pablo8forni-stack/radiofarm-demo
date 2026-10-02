@@ -430,6 +430,31 @@ service cloud.firestore {
     function vialAnuladoI131(vialId) {
       return exists(/databases/$(database)/documents/actas/$('anula_' + vialId));
     }
+    // Vínculo lote-paciente (Dosis ablativa/Dosis terapéutica/Dosis de
+    // barrido corporal -- caso real: hoy una extracción de Parte A y la
+    // dosis administrada en Libro 2 son dos registros sin ningún vínculo
+    // real, sólo correlacionados a ojo por dos strings libres sin validar.
+    // El campo vive en la acta de Libro 2 (create-only, se crea DESPUÉS de
+    // la extracción real -- la extracción ya exige "actividad medida con
+    // activímetro", así que necesariamente ocurre antes de administrar) y
+    // apunta hacia atrás a la extracción ya existente -- mismo sentido que
+    // dosisActaId en i131_captacion_resultado. get() además del exists()
+    // para rechazar un id que exista pero sea de otro tipo de acta.
+    function extraccionI131Valida(extraccionId) {
+      return exists(/databases/$(database)/documents/actas/$(extraccionId)) &&
+        get(/databases/$(database)/documents/actas/$(extraccionId)).data.tipo == 'i131_extraccion';
+    }
+    // XOR estricto, mismo criterio que sinRadiofarmaco/confirmoSinEgreso:
+    // nunca los dos juntos, nunca ninguno -- la cápsula sellada (sin pasar
+    // por Stock de viales) es un caso real, así que sinExtraccionVial no es
+    // sólo un escape de UI, el servidor también lo exige explícito.
+    function vinculoExtraccionI131Valido(d) {
+      return 'extraccionId' in d
+        ? (!('sinExtraccionVial' in d) &&
+           d.extraccionId is string && d.extraccionId.size() > 0 &&
+           extraccionI131Valida(d.extraccionId))
+        : (d.sinExtraccionVial == true && !('extraccionId' in d));
+    }
     function vialesI131NoAnulados(viales) {
       return viales.size() <= 4 &&
         !vialAnuladoI131(viales[0].vialId) &&
@@ -473,7 +498,10 @@ service cloud.firestore {
     // formulario -- sigue siendo válido leerlo en actas viejas que lo tengan,
     // simplemente ya no es requisito para crear una nueva).
     //   - i131_ablativa / i131_dosis (dosis administrada, mCi): exigen
-    //     tieneAccesoI131() y unidadActividad=='mCi'.
+    //     tieneAccesoI131() y unidadActividad=='mCi', más el vínculo
+    //     obligatorio a Parte A (extraccionId XOR sinExtraccionVial --
+    //     ver vinculoExtraccionI131Valido). Mismo vínculo para
+    //     i131_dosis_barrido más abajo.
     //   - i131_captacion / i131_centellograma / i131_captacion_centellograma
     //     (diagnóstico, µCi): exigen tieneAccesoI131() y
     //     unidadActividad=='uCi'; dosisActaId es opcional (vínculo a la dosis
@@ -529,7 +557,8 @@ service cloud.firestore {
                  d.pacienteDni is string && d.pacienteDni.size() > 0 &&
                  d.actividadAdministrada is number && d.actividadAdministrada > 0 &&
                  d.unidadActividad == 'mCi' &&
-                 d.lote is string && d.lote.size() > 0)
+                 d.lote is string && d.lote.size() > 0 &&
+                 vinculoExtraccionI131Valido(d))
               // i131_dosis_barrido ("Dosis de barrido corporal"): registro
               // simple de una sola vez, el día de la administración -- el
               // barrido en sí (2-3 días después, cámara gamma) no genera
@@ -548,13 +577,17 @@ service cloud.firestore {
               // chequeo del lado cliente (TabPacientes.jsx no muestra el
               // picker "Dosis relacionada" para este tipo), el servidor no
               // necesita saberlo porque dosisActaId siempre fue opcional.
+              // Sí exige (como Ablativa/Dosis terapéutica) el vínculo a
+              // Parte A -- es una dosis de escala terapéutica, mismo
+              // material físico que esos dos tipos.
               : d.tipo == 'i131_dosis_barrido'
                 ? (tieneAccesoI131() &&
                    fichaValida(d.pacienteFicha) && d.fichaIntentoNro in ['1', '2', '3', '4', '5'] && fichaIntentoHabilitado(d.sedeId, d.pacienteFicha, d.fichaIntentoNro) &&
                    d.pacienteNombre is string && d.pacienteNombre.size() > 0 &&
                    d.pacienteDni is string && d.pacienteDni.size() > 0 &&
                    d.actividadAdministrada is number && d.actividadAdministrada > 0 &&
-                   d.unidadActividad == 'mCi')
+                   d.unidadActividad == 'mCi' &&
+                   vinculoExtraccionI131Valido(d))
               : esTipoDiagnosticoI131(d.tipo)
                 ? (tieneAccesoI131() &&
                    fichaValida(d.pacienteFicha) && d.fichaIntentoNro in ['1', '2', '3', '4', '5'] && fichaIntentoHabilitado(d.sedeId, d.pacienteFicha, d.fichaIntentoNro) &&
