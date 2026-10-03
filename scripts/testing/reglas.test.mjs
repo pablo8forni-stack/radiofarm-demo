@@ -899,9 +899,44 @@ test("elución de un lote nuevo SIN actividadCalibrada es rechazada", async () =
   await assertPermissionDenied(() => addDoc(collection(db, "actas"), elucionBase()));
 });
 
-test("control positivo: elución de un lote nuevo CON actividadCalibrada se acepta", async () => {
+// Fecha de calibración/Fecha de vencimiento/Número de generador: 3 campos
+// nuevos (Pablo, 2/10), mismo gate que actividadCalibrada -- sólo
+// obligatorios en la primera elución de cada lote/serie, nunca una clave de
+// detección propia (siguen dependiendo 100% de que loteGenerador sea
+// nuevo). numeroGenerador es un dato DISTINTO de loteGenerador -- la
+// etiqueta física trae los dos números por separado.
+const DATOS_GENERADOR_PRIMERA_VEZ = {
+  actividadCalibrada: 1850, fechaCalibracion: "2026-10-01", fechaVencimiento: "2026-10-08", numeroGenerador: "240017992",
+};
+
+test("elución de un lote nuevo CON actividadCalibrada pero SIN fechaCalibracion es rechazada", async () => {
   await loguearComo(PERSONAS.tecnicoA);
-  await addDoc(collection(db, "actas"), elucionBase({ actividadCalibrada: 1850 }));
+  await assertPermissionDenied(() =>
+    addDoc(collection(db, "actas"), elucionBase({ actividadCalibrada: 1850, fechaVencimiento: "2026-10-08", numeroGenerador: "240017992" }))
+  );
+});
+
+test("elución de un lote nuevo CON actividadCalibrada pero SIN fechaVencimiento es rechazada", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  await assertPermissionDenied(() =>
+    addDoc(collection(db, "actas"), elucionBase({ actividadCalibrada: 1850, fechaCalibracion: "2026-10-01", numeroGenerador: "240017992" }))
+  );
+});
+
+test("elución de un lote nuevo CON actividadCalibrada pero SIN numeroGenerador es rechazada", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  await assertPermissionDenied(() =>
+    addDoc(collection(db, "actas"), elucionBase({ actividadCalibrada: 1850, fechaCalibracion: "2026-10-01", fechaVencimiento: "2026-10-08" }))
+  );
+});
+
+test("control positivo: elución de un lote nuevo CON los 4 datos (actividad, fechas, número de generador) se acepta", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  const ref = await addDoc(collection(db, "actas"), elucionBase(DATOS_GENERADOR_PRIMERA_VEZ));
+  const snap = await getDoc(ref);
+  assert.equal(snap.data().fechaCalibracion, "2026-10-01");
+  assert.equal(snap.data().fechaVencimiento, "2026-10-08");
+  assert.equal(snap.data().numeroGenerador, "240017992");
 });
 
 // Auditoría de seguridad, hallazgo #6a: el toggle "Elución habilitada" de
@@ -914,16 +949,16 @@ test("elución en una sede que no eluye (eluye=false) es rechazada, aunque sea a
   await loguearComo(PERSONAS.admin);
   await assertPermissionDenied(() =>
     addDoc(collection(db, "actas"), elucionBase({
-      sedeId: SEDE_B, actividadCalibrada: 1850, usuarioEmail: PERSONAS.admin.email,
+      sedeId: SEDE_B, ...DATOS_GENERADOR_PRIMERA_VEZ, usuarioEmail: PERSONAS.admin.email,
     }))
   );
 });
 
-test("control positivo: elución de un lote YA visto no necesita actividadCalibrada", async () => {
+test("control positivo: elución de un lote YA visto no necesita actividadCalibrada ni los 3 campos nuevos", async () => {
   await loguearComo(PERSONAS.admin);
   const lote = `GEN-${loteDePrueba()}`;
   await setDoc(doc(db, "generadoresVistos", `${SEDE_A}_${lote.toUpperCase()}`), {
-    sedeId: SEDE_A, loteGenerador: lote, usuarioEmail: PERSONAS.admin.email, actividadCalibrada: 1850,
+    sedeId: SEDE_A, loteGenerador: lote, usuarioEmail: PERSONAS.admin.email, ...DATOS_GENERADOR_PRIMERA_VEZ,
   });
 
   await loguearComo(PERSONAS.tecnicoA);
@@ -939,7 +974,7 @@ test("control positivo: elución de un lote ya visto con otra capitalización ta
   await loguearComo(PERSONAS.admin);
   const lote = `Gen${loteDePrueba()}`;
   await setDoc(doc(db, "generadoresVistos", `${SEDE_A}_${lote.toUpperCase()}`), {
-    sedeId: SEDE_A, loteGenerador: lote, usuarioEmail: PERSONAS.admin.email, actividadCalibrada: 1850,
+    sedeId: SEDE_A, loteGenerador: lote, usuarioEmail: PERSONAS.admin.email, ...DATOS_GENERADOR_PRIMERA_VEZ,
   });
 
   await loguearComo(PERSONAS.tecnicoA);
@@ -971,6 +1006,29 @@ test("marcador generadoresVistos sin actividadCalibrada es rechazado, aunque sea
       sedeId: SEDE_A, loteGenerador: lote, usuarioEmail: PERSONAS.admin.email,
     })
   );
+});
+
+test("marcador generadoresVistos con actividadCalibrada pero sin fechaCalibracion/fechaVencimiento/numeroGenerador es rechazado", async () => {
+  await loguearComo(PERSONAS.admin);
+  const lote = `GEN-${loteDePrueba()}`;
+  await assertPermissionDenied(() =>
+    setDoc(doc(db, "generadoresVistos", `${SEDE_A}_${lote.toUpperCase()}`), {
+      sedeId: SEDE_A, loteGenerador: lote, usuarioEmail: PERSONAS.admin.email, actividadCalibrada: 1850,
+    })
+  );
+});
+
+test("control positivo: marcador generadoresVistos con los 3 campos nuevos denormalizados se acepta", async () => {
+  await loguearComo(PERSONAS.admin);
+  const lote = `GEN-${loteDePrueba()}`;
+  const ref = doc(db, "generadoresVistos", `${SEDE_A}_${lote.toUpperCase()}`);
+  await setDoc(ref, {
+    sedeId: SEDE_A, loteGenerador: lote, usuarioEmail: PERSONAS.admin.email, ...DATOS_GENERADOR_PRIMERA_VEZ,
+  });
+  const snap = await getDoc(ref);
+  assert.equal(snap.data().fechaCalibracion, "2026-10-01");
+  assert.equal(snap.data().fechaVencimiento, "2026-10-08");
+  assert.equal(snap.data().numeroGenerador, "240017992");
 });
 
 test("marcador generadoresVistos con id que no matchea sedeId_LOTE es rechazado", async () => {

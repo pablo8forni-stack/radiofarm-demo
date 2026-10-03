@@ -424,6 +424,11 @@ export function addActaElucion(data, esPrimeraVez) {
     batch.set(generadorRef(data.sedeId, data.loteGenerador), {
       sedeId: data.sedeId, loteGenerador: data.loteGenerador, primeraFecha: serverTimestamp(), usuarioEmail: data.usuarioEmail,
       actividadCalibrada: data.actividadCalibrada,
+      // fechaCalibracion/fechaVencimiento/numeroGenerador: mismo criterio de
+      // denormalización que actividadCalibrada ya tenía (ver firestore.rules
+      // #generadorValido) -- numeroGenerador es el dato IMPRESO en la
+      // etiqueta física, distinto de loteGenerador, puramente informativo.
+      fechaCalibracion: data.fechaCalibracion, fechaVencimiento: data.fechaVencimiento, numeroGenerador: data.numeroGenerador,
     });
   }
   return batch.commit();

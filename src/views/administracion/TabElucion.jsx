@@ -47,6 +47,15 @@ export function TabElucion({ catalogo, usuario, esAdmin, onToast }) {
   const [esPrimeraVez, setEsPrimeraVez] = useState(false);
   const [verificandoLote, setVerificandoLote] = useState(false);
   const [actividadCalibrada, setActividadCalibrada] = useState("");
+  // Sólo se piden en la primera elución de este lote/serie (mismo gate que
+  // actividadCalibrada, ver useEffect de esPrimeraVez más abajo). Strings
+  // "YYYY-MM-DD" tal cual (sin Date()) -- no entran en ningún cálculo de
+  // decaimiento acá, mismo criterio que mibg_lote.fechaVencimiento.
+  // numeroGenerador: dato IMPRESO en la etiqueta física del generador,
+  // distinto de loteGenerador (que ya existía) -- puramente informativo.
+  const [fechaCalibracionGen, setFechaCalibracionGen] = useState("");
+  const [fechaVencimientoGen, setFechaVencimientoGen] = useState("");
+  const [numeroGenerador, setNumeroGenerador] = useState("");
   const [actividadEluida, setActividadEluida] = useState("");
   const [volumen, setVolumen] = useState("");
   const [obs, setObs] = useState("");
@@ -92,7 +101,8 @@ export function TabElucion({ catalogo, usuario, esAdmin, onToast }) {
 
   function limpiarForm() {
     setLoteGenerador(""); setLoteVerificado(""); setEsPrimeraVez(false);
-    setActividadCalibrada(""); setActividadEluida(""); setVolumen(""); setObs("");
+    setActividadCalibrada(""); setFechaCalibracionGen(""); setFechaVencimientoGen(""); setNumeroGenerador("");
+    setActividadEluida(""); setVolumen(""); setObs("");
   }
 
   async function confirmarAnulacion(acta, motivo) {
@@ -105,6 +115,7 @@ export function TabElucion({ catalogo, usuario, esAdmin, onToast }) {
       // correr sola (useEffect de arriba) apenas se precarga el lote.
       setSedeId(acta.sedeId); setLoteGenerador(acta.loteGenerador); setLoteVerificado(acta.loteGenerador);
       setActividadCalibrada(acta.actividadCalibrada != null ? String(acta.actividadCalibrada) : "");
+      setFechaCalibracionGen(acta.fechaCalibracion || ""); setFechaVencimientoGen(acta.fechaVencimiento || ""); setNumeroGenerador(acta.numeroGenerador || "");
       setActividadEluida(String(acta.actividadEluida ?? "")); setVolumen(String(acta.volumen ?? "")); setObs(acta.observacion || "");
       setMostrarForm(true);
     } catch (e) {
@@ -123,7 +134,7 @@ export function TabElucion({ catalogo, usuario, esAdmin, onToast }) {
   // (no se limpia ni se cierra) para reintentar -- mismo criterio que ya
   // usamos en egreso/transferencia/anulación.
   async function guardar() {
-    if (!loteGenerador.trim() || !actividadEluida || !volumen || (esPrimeraVez && !actividadCalibrada)) return;
+    if (!loteGenerador.trim() || !actividadEluida || !volumen || (esPrimeraVez && (!actividadCalibrada || !fechaCalibracionGen || !fechaVencimientoGen || !numeroGenerador.trim()))) return;
     if (!catalogo.sedes[sedeId]?.eluye) return;
     const datos = {
       sedeId, sedeNombre: catalogo.sedes[sedeId]?.nombre,
@@ -136,7 +147,10 @@ export function TabElucion({ catalogo, usuario, esAdmin, onToast }) {
       volumen: parseFloat(volumen) || 0,
       usuarioNombre: usuario.nombre, usuarioEmail: usuario.email, observacion: obs.trim(),
     };
-    if (esPrimeraVez) datos.actividadCalibrada = parseFloat(actividadCalibrada) || 0;
+    if (esPrimeraVez) {
+      datos.actividadCalibrada = parseFloat(actividadCalibrada) || 0;
+      datos.fechaCalibracion = fechaCalibracionGen; datos.fechaVencimiento = fechaVencimientoGen; datos.numeroGenerador = numeroGenerador.trim();
+    }
     setGuardando(true);
     try {
       await addActaElucion(datos, esPrimeraVez);
@@ -373,9 +387,16 @@ export function TabElucion({ catalogo, usuario, esAdmin, onToast }) {
             {!verificandoLote && esPrimeraVez && (
               <>
                 <div className="sm:col-span-2 bg-blue-50 border border-blue-100 rounded-xl px-3 py-2 text-xs text-blue-700">
-                  Primera elución registrada de este lote/serie en esta sede — hace falta la actividad calibrada.
+                  Primera elución registrada de este lote/serie en esta sede — hacen falta estos 4 datos (no se vuelven a pedir en las próximas eluciones del mismo generador).
                 </div>
                 <Input label="Actividad de Mo-99 calibrada (mCi)" type="number" min={0} step={0.1} value={actividadCalibrada} onChange={(e) => setActividadCalibrada(e.target.value)} placeholder="1850" />
+                <Input label="Fecha de calibración" type="date" value={fechaCalibracionGen} onChange={(e) => setFechaCalibracionGen(e.target.value)} />
+                <Input label="Fecha de vencimiento" type="date" value={fechaVencimientoGen} onChange={(e) => setFechaVencimientoGen(e.target.value)} />
+                {/* Dato DISTINTO de "Lote/serie del generador" de arriba --
+                    la etiqueta física trae los dos números por separado
+                    (confirmado con Pablo). Nunca se usa como clave de
+                    detección de primera vez, sólo informativo. */}
+                <Input label="Número de generador" value={numeroGenerador} onChange={(e) => setNumeroGenerador(e.target.value)} placeholder="Ej: 240017992" />
               </>
             )}
             <Input label="Actividad de Tc-99m eluida (mCi)" type="number" min={0} step={0.1} value={actividadEluida} onChange={(e) => setActividadEluida(e.target.value)} placeholder="740" />
@@ -384,7 +405,7 @@ export function TabElucion({ catalogo, usuario, esAdmin, onToast }) {
           </div>
           <div className="flex gap-2 justify-end mt-4">
             <Btn variant="outline" onClick={() => { setMostrarForm(false); limpiarForm(); }} disabled={guardando}>Cancelar</Btn>
-            <Btn onClick={guardar} disabled={!sedeEluye || !loteGenerador.trim() || !actividadEluida || !volumen || (esPrimeraVez && !actividadCalibrada) || verificandoLote || guardando}>
+            <Btn onClick={guardar} disabled={!sedeEluye || !loteGenerador.trim() || !actividadEluida || !volumen || (esPrimeraVez && (!actividadCalibrada || !fechaCalibracionGen || !fechaVencimientoGen || !numeroGenerador.trim())) || verificandoLote || guardando}>
               {guardando ? "Guardando..." : "Guardar elución"}
             </Btn>
           </div>

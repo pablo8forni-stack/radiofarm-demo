@@ -548,8 +548,20 @@ service cloud.firestore {
                // Toggle de sede (config > Sedes activas) respaldado del lado
                // servidor -- antes sólo lo chequeaba la UI (auditoría, #6a).
                get(/databases/$(database)/documents/sedes/$(d.sedeId)).data.eluye == true &&
+               // Primera elución de este lote/serie: además de
+               // actividadCalibrada, exige fechaCalibracion/fechaVencimiento
+               // (strings "YYYY-MM-DD", sin cálculo de decaimiento acá --
+               // mismo criterio que mibg_lote.fechaVencimiento, no
+               // Timestamp) y numeroGenerador (dato impreso en la etiqueta
+               // física, DISTINTO de loteGenerador -- puramente informativo,
+               // nunca se usa como clave de detección). Eluciones
+               // siguientes del mismo lote no vuelven a pedir ninguno de
+               // los 4 -- mismo gate que ya tenía actividadCalibrada.
                (loteGeneradorVisto(d.sedeId, d.loteGenerador) ||
-                 (d.actividadCalibrada is number && d.actividadCalibrada > 0)))
+                 (d.actividadCalibrada is number && d.actividadCalibrada > 0 &&
+                  d.fechaCalibracion is string && d.fechaCalibracion.size() > 0 &&
+                  d.fechaVencimiento is string && d.fechaVencimiento.size() > 0 &&
+                  d.numeroGenerador is string && d.numeroGenerador.size() > 0)))
             : esTipoDosisI131(d.tipo)
               ? (tieneAccesoI131() &&
                  fichaValida(d.pacienteFicha) && d.fichaIntentoNro in ['1', '2', '3', '4', '5'] && fichaIntentoHabilitado(d.sedeId, d.pacienteFicha, d.fichaIntentoNro) &&
@@ -810,6 +822,11 @@ service cloud.firestore {
         d.loteGenerador is string && d.loteGenerador.size() > 0 &&
         (isAdmin() || miRol().sede == d.sedeId) &&
         d.actividadCalibrada is number && d.actividadCalibrada > 0 &&
+        // Mismos 3 campos que actaValida() exige en la elución misma --
+        // denormalizados acá también (ver nota de arriba, hallazgo #5).
+        d.fechaCalibracion is string && d.fechaCalibracion.size() > 0 &&
+        d.fechaVencimiento is string && d.fechaVencimiento.size() > 0 &&
+        d.numeroGenerador is string && d.numeroGenerador.size() > 0 &&
         generadorId == d.sedeId + '_' + d.loteGenerador.upper();
     }
 
