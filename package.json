@@ -11,7 +11,7 @@
     "lint": "oxlint",
     "preview": "vite preview",
     "seed": "node scripts/seed.mjs",
-    "test:unit": "node --test scripts/testing/guardSecuencia.test.mjs",
+    "test:unit": "node --test scripts/testing/guardSecuencia.test.mjs scripts/testing/huecosFicha.test.mjs",
     "test:react": "vitest run",
     "test:staging": "node --env-file=.env.staging --test --test-concurrency=1 --test-timeout=30000 scripts/testing/reglas.test.mjs scripts/testing/transacciones.test.mjs scripts/testing/anulacion.test.mjs scripts/testing/solicitudes.test.mjs",
     "test:emulator": "firebase emulators:exec --only firestore,auth --project radiofarm-fuesmen-staging \"node --env-file=.env.emulator --test --test-concurrency=1 --test-timeout=30000 scripts/testing/reglas.test.mjs scripts/testing/transacciones.test.mjs scripts/testing/anulacion.test.mjs scripts/testing/solicitudes.test.mjs\"",

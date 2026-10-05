@@ -5,13 +5,14 @@
 // restrictiva de lo debido.
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { collection, addDoc, doc, getDoc, setDoc, updateDoc, deleteDoc, serverTimestamp, writeBatch } from "firebase/firestore";
+import { collection, addDoc, doc, getDoc, getDocs, query, where, orderBy, limit, setDoc, updateDoc, deleteDoc, serverTimestamp, writeBatch } from "firebase/firestore";
 import {
   PERSONAS, SEDE_A, SEDE_B, FARM_ID, db, loguearComo, prepararFixturesGlobales, loteDePrueba, fichaDePrueba, cerrarConexiones,
   crearLoteDirecto, borrarLote,
 } from "./fixtures.mjs";
 import { addActaI131Vial, addActaI131Extraccion } from "../../src/services/firestore/actas.js";
 import { setSedeAuditando } from "../../src/services/auth.js";
+import { LIMITE_FICHAS_USADAS } from "../../src/services/firestore/fichasDescartadas.js";
 
 before(async () => { await prepararFixturesGlobales(); });
 after(cerrarConexiones);
@@ -1039,6 +1040,181 @@ test("marcador generadoresVistos con id que no matchea sedeId_LOTE es rechazado"
       sedeId: SEDE_A, loteGenerador: lote, usuarioEmail: PERSONAS.admin.email, actividadCalibrada: 1850,
     })
   );
+});
+
+// Cartel de fichas faltantes (Libro 2, Pablo 4/10): descartar una ficha
+// como "salteada por VM RIS" vive FUERA de actas (mismo criterio que
+// generadoresVistos) -- nunca toca fichasUsadas. Sólo admin, motivo
+// obligatorio, mismo esquema de intentoNro (1..5) que fichasUsadas/MIBG
+// para poder deshacer y volver a descartar sin quedar bloqueado para
+// siempre por el id determinístico create-only.
+function descarteBase(overrides = {}) {
+  return {
+    sedeId: SEDE_A, numero: fichaDePrueba(), intentoNro: "1",
+    motivo: "VM RIS saltea números por error, confirmado con guardia", usuarioEmail: PERSONAS.admin.email,
+    ...overrides,
+  };
+}
+
+test("técnico (no admin) NO puede crear un descarte de ficha", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  const numero = fichaDePrueba();
+  await assertPermissionDenied(() =>
+    setDoc(doc(db, "fichasDescartadas", `${SEDE_A}_${numero}_1`), descarteBase({ numero, usuarioEmail: PERSONAS.tecnicoA.email }))
+  );
+});
+
+test("control positivo: admin SÍ puede crear un descarte de ficha", async () => {
+  await loguearComo(PERSONAS.admin);
+  const numero = fichaDePrueba();
+  const ref = doc(db, "fichasDescartadas", `${SEDE_A}_${numero}_1`);
+  await setDoc(ref, descarteBase({ numero }));
+  const snap = await getDoc(ref);
+  assert.ok(snap.exists());
+  assert.equal(snap.data().motivo, "VM RIS saltea números por error, confirmado con guardia");
+});
+
+test("descarte sin motivo es rechazado, aunque sea admin", async () => {
+  await loguearComo(PERSONAS.admin);
+  const numero = fichaDePrueba();
+  await assertPermissionDenied(() =>
+    setDoc(doc(db, "fichasDescartadas", `${SEDE_A}_${numero}_1`), descarteBase({ numero, motivo: "" }))
+  );
+});
+
+test("descarte con numero no numérico (texto libre) es rechazado", async () => {
+  await loguearComo(PERSONAS.admin);
+  await assertPermissionDenied(() =>
+    setDoc(doc(db, "fichasDescartadas", `${SEDE_A}_abc_1`), descarteBase({ numero: "abc" }))
+  );
+});
+
+test("descarte con id que no matchea sedeId_numero_intentoNro es rechazado", async () => {
+  await loguearComo(PERSONAS.admin);
+  const numero = fichaDePrueba();
+  await assertPermissionDenied(() =>
+    setDoc(doc(db, "fichasDescartadas", `${SEDE_A}_no-matchea`), descarteBase({ numero }))
+  );
+});
+
+test("descarte con intentoNro '2' sin que el intento '1' esté anulado es rechazado", async () => {
+  await loguearComo(PERSONAS.admin);
+  const numero = fichaDePrueba();
+  await setDoc(doc(db, "fichasDescartadas", `${SEDE_A}_${numero}_1`), descarteBase({ numero }));
+  await assertPermissionDenied(() =>
+    setDoc(doc(db, "fichasDescartadas", `${SEDE_A}_${numero}_2`), descarteBase({ numero, intentoNro: "2" }))
+  );
+});
+
+test("fichasDescartadas no admite update ni delete (create-only)", async () => {
+  await loguearComo(PERSONAS.admin);
+  const numero = fichaDePrueba();
+  const ref = doc(db, "fichasDescartadas", `${SEDE_A}_${numero}_1`);
+  await setDoc(ref, descarteBase({ numero }));
+  await assertPermissionDenied(() => setDoc(ref, descarteBase({ numero, motivo: "Otro motivo" })));
+  await assertPermissionDenied(() => deleteDoc(ref));
+});
+
+test("técnico sin rol especial SÍ puede LEER fichasDescartadas de su sede (visible para cualquier usuario)", async () => {
+  await loguearComo(PERSONAS.admin);
+  const numero = fichaDePrueba();
+  const ref = doc(db, "fichasDescartadas", `${SEDE_A}_${numero}_1`);
+  await setDoc(ref, descarteBase({ numero }));
+
+  await loguearComo(PERSONAS.tecnicoA); // sede central == SEDE_A
+  const snap = await getDoc(ref);
+  assert.ok(snap.exists());
+});
+
+// Deshacer un descarte reutiliza 100% anularActaTransaction (actas.js) --
+// crea actas/anula_descarte_${sedeId}_${numero}_${intentoNro}. Confirmado
+// mirando firestore.rules#actaValida: la rama 'anulacion' NO exige que
+// anulaId corresponda a una acta existente, así que un anulaId
+// "descarte_..." (nunca es el id de ninguna acta real) se acepta.
+test("técnico (no admin) NO puede deshacer un descarte (admin-only, misma regla que cualquier anulación)", async () => {
+  await loguearComo(PERSONAS.admin);
+  const numero = fichaDePrueba();
+  await setDoc(doc(db, "fichasDescartadas", `${SEDE_A}_${numero}_1`), descarteBase({ numero }));
+
+  await loguearComo(PERSONAS.tecnicoA);
+  await assertPermissionDenied(() =>
+    addDoc(collection(db, "actas"), {
+      tipo: "anulacion", anulaId: `descarte_${SEDE_A}_${numero}_1`, sedeId: SEDE_A,
+      fecha: serverTimestamp(), motivo: "Fue un error", usuarioEmail: PERSONAS.tecnicoA.email,
+    })
+  );
+});
+
+test("control positivo: admin SÍ puede deshacer un descarte, y después puede volver a descartar la misma ficha (intentoNro 2)", async () => {
+  await loguearComo(PERSONAS.admin);
+  const numero = fichaDePrueba();
+  await setDoc(doc(db, "fichasDescartadas", `${SEDE_A}_${numero}_1`), descarteBase({ numero }));
+
+  // Deshacer -- mismo id determinístico 'anula_' + anulaId que usa el resto
+  // del sistema para anulaciones.
+  await setDoc(doc(db, "actas", `anula_descarte_${SEDE_A}_${numero}_1`), {
+    tipo: "anulacion", anulaId: `descarte_${SEDE_A}_${numero}_1`, sedeId: SEDE_A,
+    fecha: serverTimestamp(), motivo: "Fue un error, el paciente nunca se cargó", usuarioEmail: PERSONAS.admin.email,
+  });
+
+  // Sin esto, el id determinístico del intento 1 (create-only) dejaría la
+  // ficha bloqueada para siempre -- nunca se podría volver a descartar.
+  const ref2 = doc(db, "fichasDescartadas", `${SEDE_A}_${numero}_2`);
+  await setDoc(ref2, descarteBase({ numero, intentoNro: "2" }));
+  const snap = await getDoc(ref2);
+  assert.ok(snap.exists());
+});
+
+// Confirmación empírica contra staging real (Pablo, punto 2, 6/10) -- no es
+// un test de reglas de permisos, es una característica de la QUERY que usa
+// el cartel en vivo (listenFichasUsadasRecientes): limit(LIMITE_FICHAS_USADAS)
+// ordenado por pacienteFichaNum DESCENDENTE. Una ficha con dígitos de MENOS
+// (número bajo) cae al fondo de ese orden y queda afuera de la ventana --
+// confirmado acá corriendo la MISMA query real (no sólo razonado en teoría),
+// sembrando más entradas de las que entran en la ventana. Brecha aceptada:
+// el aviso al tipear (TabPacientes.jsx, mismo umbral) la cubre en origen,
+// el cartel en vivo no la ve.
+test("una ficha con dígitos de menos (número bajo) queda FUERA de la ventana real del listener -- brecha aceptada, cubierta por el aviso al tipear", async () => {
+  await loguearComo(PERSONAS.admin);
+  // fichaDePrueba() devuelve STRING (bug real encontrado acá mismo: sin el
+  // parseInt, `base + i` más abajo concatenaba texto en vez de sumar) --
+  // parseInt es seguro, son ~16 dígitos (Date.now() + sufijo), bien por
+  // debajo de Number.MAX_SAFE_INTEGER (~9e15).
+  const base = parseInt(fichaDePrueba(), 10); // número alto (epoch-like), consistente con datos reales
+  // Aleatorio (no un literal fijo como "7") para no chocar con un doc ya
+  // existente de una corrida anterior de este mismo test -- create-only
+  // rechazaría el batch entero si el id ya existiera.
+  const numeroBajo = String(1000 + Math.floor(Math.random() * 8999)); // "dígitos de menos" -- claramente aislado y chico frente a base
+
+  // writeBatch (un solo round-trip) en vez de LIMITE_FICHAS_USADAS+1
+  // setDoc secuenciales -- lo mismo semánticamente, mucho más rápido.
+  const batch = writeBatch(db);
+  batch.set(doc(db, "fichasUsadas", `${SEDE_A}_${numeroBajo}_1`), {
+    sedeId: SEDE_A, pacienteFicha: numeroBajo, pacienteFichaNum: parseInt(numeroBajo, 10),
+    fichaIntentoNro: "1", pacienteNombre: "Test Digitos De Menos", actaId: "test-digitos-menos", tipo: "paciente", fecha: serverTimestamp(),
+  });
+  // Más entradas ALTAS que LIMITE_FICHAS_USADAS, para garantizar que la
+  // ventana de verdad se llena con números por encima del bajo, sin
+  // depender de cuánta data real ya exista en staging al momento de correr.
+  for (let i = 0; i < LIMITE_FICHAS_USADAS + 5; i++) {
+    const n = base + i;
+    batch.set(doc(db, "fichasUsadas", `${SEDE_A}_${n}_1`), {
+      sedeId: SEDE_A, pacienteFicha: String(n), pacienteFichaNum: n,
+      fichaIntentoNro: "1", pacienteNombre: "Test Digitos De Menos Alto", actaId: `test-alto-${i}`, tipo: "paciente", fecha: serverTimestamp(),
+    });
+  }
+  await batch.commit();
+
+  // Misma query EXACTA que listenFichasUsadasRecientes (services/firestore/fichasDescartadas.js).
+  const snap = await getDocs(query(
+    collection(db, "fichasUsadas"),
+    where("sedeId", "==", SEDE_A),
+    orderBy("pacienteFichaNum", "desc"),
+    limit(LIMITE_FICHAS_USADAS)
+  ));
+  const numerosEnVentana = snap.docs.map((d) => d.data().pacienteFichaNum);
+  assert.ok(!numerosEnVentana.includes(parseInt(numeroBajo, 10)), "el número bajo (dígitos de menos) NO debe aparecer en la ventana real del listener");
+  assert.ok(numerosEnVentana.includes(base + LIMITE_FICHAS_USADAS + 4), "los números altos recién sembrados SÍ deben estar en la ventana");
 });
 
 // Gestión I-131: 6 tipos planos, no un campo "subtipo" -- ver nota larga en

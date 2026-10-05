@@ -836,6 +836,52 @@ service cloud.firestore {
       allow update, delete: if false;
     }
 
+    // Cartel de fichas faltantes (Libro 2, Pablo 4/10): "descartar" una
+    // ficha como salteada por VM RIS es un hecho sobre un NÚMERO, no un
+    // evento de atención -- vive fuera de `actas`, mismo criterio que
+    // generadoresVistos. Nunca toca fichasUsadas (confirmado con Pablo): si
+    // el paciente aparece después, se carga normal.
+    //
+    // intentoNro (1..5, mismo esquema que fichasUsadas/mibg_${id}_${n}):
+    // sin esto, deshacer un descarte por error dejaría el id determinístico
+    // (create-only) bloqueado para siempre -- nunca se podría volver a
+    // descartar la misma ficha más adelante por un motivo real.
+    function descarteAnulado(sedeId, numero, n) {
+      return exists(/databases/$(database)/documents/fichasDescartadas/$(sedeId + '_' + numero + '_' + n)) &&
+        exists(/databases/$(database)/documents/actas/$('anula_descarte_' + sedeId + '_' + numero + '_' + n));
+    }
+    function descarteIntentoLibre(sedeId, numero, n) {
+      return !exists(/databases/$(database)/documents/fichasDescartadas/$(sedeId + '_' + numero + '_' + n));
+    }
+    function descarteIntentoHabilitado(sedeId, numero, intentoNro) {
+      return descarteIntentoLibre(sedeId, numero, intentoNro) &&
+        (intentoNro == '1'
+          ? true
+          : intentoNro == '2' ? descarteAnulado(sedeId, numero, '1')
+          : intentoNro == '3' ? descarteAnulado(sedeId, numero, '2')
+          : intentoNro == '4' ? descarteAnulado(sedeId, numero, '3')
+          : descarteAnulado(sedeId, numero, '4'));
+    }
+    // Sólo admin puede descartar -- reforzado acá, no sólo en la UI. numero
+    // reusa fichaValida() (mismo formato "sólo dígitos" que pacienteFicha)
+    // -- nunca el number crudo, para poder concatenar el id como string.
+    function fichaDescartadaValida(id) {
+      let d = request.resource.data;
+      return isAdmin() &&
+        d.sedeId is string && d.sedeId.size() > 0 &&
+        fichaValida(d.numero) &&
+        d.intentoNro in ['1', '2', '3', '4', '5'] &&
+        descarteIntentoHabilitado(d.sedeId, d.numero, d.intentoNro) &&
+        d.motivo is string && d.motivo.size() > 0 &&
+        d.usuarioEmail == request.auth.token.email &&
+        id == d.sedeId + '_' + d.numero + '_' + d.intentoNro;
+    }
+    match /fichasDescartadas/{id} {
+      allow read: if tieneAcceso();
+      allow create: if tieneAcceso() && fichaDescartadaValida(id);
+      allow update, delete: if false;
+    }
+
     // N° de Ficha (Libro 2): secuencia correlativa asignada por VM RIS --
     // CORRECCIÓN de diseño (confirmado con el usuario real, esto NO es una
     // secuencia global): cada sede lleva su propio libro de Actas, con su

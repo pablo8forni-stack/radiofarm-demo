@@ -5,6 +5,7 @@ import { actasPorRango, anulacionesPorSede } from "../../services/firestore/acta
 import { lotesPorSede } from "../../services/firestore/mibgLotes.js";
 import { primerYUltimoDiaMes, nombreMes } from "../../helpers/rangoMensual.js";
 import { compararPorSedeYFicha } from "../../helpers/fichaPaciente.js";
+import { calcularFichasSospechosasDelMes, formatearListaFichas } from "../../helpers/huecosFicha.js";
 import { PortalImpresion } from "./PortalImpresion.jsx";
 import { ImprimibleLibro1Marcacion } from "./ImprimibleLibro1Marcacion.jsx";
 import { ImprimibleLibro2Pacientes } from "./ImprimibleLibro2Pacientes.jsx";
@@ -31,6 +32,14 @@ export function GenerarActasImpresion({ catalogo, usuario, onToast }) {
   const [mes, setMes] = useState(hoyISO());
   const [generando, setGenerando] = useState(false);
   const [datos, setDatos] = useState(null); // { libro1, libro2, libro3, libro4 } | null
+  // Control previo a la impresión (Pablo, 6/10): fichas sospechosas DEL MES
+  // ya cargado para armar el PDF -- ningún fetch nuevo, mismo
+  // calcularFichasSospechosasDelMes que ya usa el cálculo puro de
+  // helpers/huecosFicha.js, sin ventana de tiempo (acá no importa "hace
+  // cuánto" se cargó, es un control de una sola vez antes de imprimir).
+  // Cubre justo lo que el cartel en vivo no ve (ej. dígitos de menos, fuera
+  // del limit(120) por número del listener). No bloquea -- sólo avisa.
+  const [sospechosasMes, setSospechosasMes] = useState([]);
   const [imprimiendo, setImprimiendo] = useState(null); // "libro1" | "libro2" | "libro3" | "libro4" | null
 
   const sedeId = usuario.sedeAuditando;
@@ -66,6 +75,7 @@ export function GenerarActasImpresion({ catalogo, usuario, onToast }) {
       // (compararPorSedeYFichaDescendente, ver fichaPaciente.js).
       const actasLibro2 = porTipoLibro2.flat().sort(compararPorSedeYFicha);
       const lotesPorId = new Map(lotesRaw.map((l) => [l.id, l]));
+      setSospechosasMes(calcularFichasSospechosasDelMes(actasLibro2, anulaciones));
 
       // Libro 4: lotes de Lutecio-177 llegados este mes + su administración
       // si también quedó dentro del mismo mes (ver comentario en
@@ -117,10 +127,19 @@ export function GenerarActasImpresion({ catalogo, usuario, onToast }) {
         </p>
       </div>
       <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
-        <input type="month" value={mes} max={hoyISO()} onChange={(e) => { setMes(e.target.value); setDatos(null); }}
+        <input type="month" value={mes} max={hoyISO()} onChange={(e) => { setMes(e.target.value); setDatos(null); setSospechosasMes([]); }}
           className="border border-gray-200 rounded-lg px-3 py-2 text-sm min-h-11 md:min-h-0" />
         <Btn size="sm" onClick={generar} disabled={generando || !sedeId}>{generando ? "Generando..." : "Generar"}</Btn>
       </div>
+      {/* No bloquea la generación ni la impresión -- sólo avisa antes de
+          imprimir. Mismo umbral/criterio que el cartel en vivo de Libro 2
+          (helpers/huecosFicha.js), pero sin ventana de 48hs: acá se evalúa
+          el mes entero de una sola vez, no "vence" con el tiempo. */}
+      {sospechosasMes.length > 0 && (
+        <div className="bg-red-50 border border-red-200 rounded-xl px-3 py-2 text-xs text-red-700">
+          {sospechosasMes.length > 1 ? "Hay fichas que parecen mal tipeadas" : "Hay una ficha que parece mal tipeada"} en este mes: {formatearListaFichas(sospechosasMes)}. Revisá antes de archivar el PDF.
+        </div>
+      )}
       {datos && (
         <div className="flex flex-col gap-1.5 mt-1">
           {LIBROS.map((l) => (

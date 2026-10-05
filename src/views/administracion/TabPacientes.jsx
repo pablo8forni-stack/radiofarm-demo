@@ -7,6 +7,7 @@ import { ListaSeleccionable } from "../../components/ui/ListaSeleccionable.jsx";
 import { dedupeLotesPorFarm } from "../../helpers/dedupeLotesPorFarm.js";
 import { QRScanner } from "../../components/scanner/QRScanner.jsx";
 import { ModalAnularActa } from "../../components/actas/ModalAnularActa.jsx";
+import { CartelFichasFaltantes } from "../../components/actas/CartelFichasFaltantes.jsx";
 import { fmtF, fmtTs, fmtHora, fmtFechaISO, hoy, capitalizarPalabras, agruparPorFecha } from "../../helpers/formato.js";
 import { descargarArchivo } from "../../helpers/descargarArchivo.js";
 import { parseQR } from "../../helpers/qr.js";
@@ -15,6 +16,7 @@ import { sedesActivas, farmsDeSede } from "../../helpers/stock.js";
 import { normalizarFicha, compararPorSedeYFichaDescendente } from "../../helpers/fichaPaciente.js";
 import { crearGuardDeSecuencia } from "../../helpers/guardSecuencia.js";
 import { TIPO_LABEL_I131 } from "../../constants/tipoI131.js";
+import { UMBRAL_SOSPECHA } from "../../helpers/huecosFicha.js";
 import { TEXTO_SIN_RADIOFARMACO } from "../../constants/sinRadiofarmaco.js";
 import {
   listenActas, addActaPaciente, actasPorRango, anularActaTransaction, listenAnulacionesActas,
@@ -627,6 +629,21 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
     return candidatos.reduce((masReciente, a) => (!masReciente || tsMillis(a.fecha) > tsMillis(masReciente.fecha) ? a : masReciente), null);
   }, [dni, actasTodas, anulaciones]);
 
+  // Aviso al tipear la ficha (Pablo, 6/10 -- "ataja el error de origen"):
+  // si el número se aleja más que UMBRAL_SOSPECHA del último conocido de
+  // esta sede, avisa -- nunca bloquea Guardar (hay cargas tardías
+  // legítimas con fichas más bajas, y VM RIS puede saltear números). CERO
+  // consultas nuevas: reutiliza ultimaFicha, que precargarSugerenciaFicha
+  // ya resuelve una vez al abrir el form/cambiar de sede para el
+  // placeholder -- mismo dato, sin pedir nada más. Mismo umbral que el
+  // cartel de fichas sospechosas (helpers/huecosFicha.js), importado, no
+  // duplicado.
+  const fichaLejana = useMemo(() => {
+    if (ultimaFicha == null) return false;
+    const n = parseInt(normalizarFicha(fichaNro), 10);
+    return Number.isFinite(n) && Math.abs(n - ultimaFicha) > UMBRAL_SOSPECHA;
+  }, [fichaNro, ultimaFicha]);
+
   // Dosis/Ablativas recientes ya cargadas en memoria (mismo límite/sede que
   // el resto de esta pantalla) para vincular un diagnóstico (Captación/
   // Centellograma/Captación y Centellograma) al registro de dosis que lo
@@ -1130,6 +1147,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
 
   return (
     <div className="flex flex-col gap-4">
+      <CartelFichasFaltantes sedeId={sedeEfectiva} esAdmin={esAdmin} usuario={usuario} anulacionesRaw={anulacionesRaw} onToast={onToast} />
       <div className="flex flex-col md:flex-row gap-3 md:items-center md:justify-between">
         {/* Mobile: fecha+"Ver todos" en una fila, selector de sede en la suya a
             ancho completo -- en vez de los 3 comprimidos como en desktop. */}
@@ -1266,6 +1284,13 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
                   : fichaEstado.tipo === "agotado"
                     ? "Este N° de Ficha ya tuvo demasiadas correcciones (5) -- contactá a soporte."
                     : `Este N° de Ficha ya fue usado el ${fmtTs(fichaEstado.data.fecha)} para el paciente ${fichaEstado.data.pacienteNombre}.`}
+              </div>
+            )}
+            {/* No bloquea Guardar -- hay cargas tardías legítimas (ficha
+                más baja) y VM RIS puede saltear números. Sólo un aviso. */}
+            {fichaLejana && (
+              <div key="ficha-lejana" className="sm:col-span-2 -mt-2 text-xs text-amber-700">
+                La última ficha de esta sede fue {ultimaFicha}: ¿es correcta la N° {normalizarFicha(fichaNro)}?
               </div>
             )}
             {!mostrarFechaReal && (
