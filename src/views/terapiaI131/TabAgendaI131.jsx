@@ -261,7 +261,7 @@ export function TabAgendaI131({ catalogo, usuario, esAdmin, onToast }) {
               {TIPOS_TURNO.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
             </Sel>
             <Input label="Paciente" value={form.pacienteNombre} onChange={(e) => setForm((f) => ({ ...f, pacienteNombre: capitalizarPalabras(e.target.value) }))} placeholder="García Juan" />
-            <Input label="DNI" value={form.pacienteDni} onChange={(e) => setForm((f) => ({ ...f, pacienteDni: e.target.value }))} placeholder="28456789" />
+            <Input label="DNI" value={form.pacienteDni} onChange={(e) => setForm((f) => ({ ...f, pacienteDni: e.target.value }))} placeholder="28456789" inputMode="numeric" />
             <Input label="Teléfono" value={form.telefono} onChange={(e) => setForm((f) => ({ ...f, telefono: e.target.value }))} placeholder="261..." />
             {unidadForm && (
               <Input label={`Actividad prevista (${unidadForm === "mCi" ? "mCi" : "µCi"})`} type="number" min={0} step={unidadForm === "mCi" ? 0.1 : 1}

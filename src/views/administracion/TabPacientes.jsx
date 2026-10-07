@@ -1273,6 +1273,13 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
               // escribir encima lo reemplaza al instante sin borrar primero.
               onFocus={(e) => e.target.select()}
               placeholder={ultimaFicha != null ? String(ultimaFicha + 1) : "4521"}
+              // inputMode (no type="number"): sólo pide el teclado numérico
+              // del sistema -- el valor sigue siendo string, sin tocar
+              // normalizarFicha ni fichaValida (que ya exigen sólo dígitos
+              // del lado cliente/servidor). Ficha SIEMPRE es numérica --
+              // nunca hubo ni hay ningún caso con letras (normalizarFicha
+              // descarta cualquier otra cosa).
+              inputMode="numeric"
             />
             {fichaEstado === "verificando" && (
               <div key="ficha-verificando" className="sm:col-span-2 -mt-2 text-xs text-gray-400">Verificando N° de Ficha...</div>
@@ -1322,7 +1329,12 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
               </div>
             )}
             <Input label="Apellido y nombre" value={nombre} onChange={(e) => setNombre(capitalizarPalabras(e.target.value))} placeholder="García Juan" />
-            <Input label="DNI" value={dni} onChange={(e) => setDni(e.target.value)} placeholder="28456789" />
+            {/* inputMode="numeric": confirmado con datos reales (601
+                actas revisadas, todos los tipos) -- 100% numérico, ningún
+                caso con letras hasta hoy. No es una restricción dura (el
+                campo sigue aceptando cualquier texto si hiciera falta,
+                sólo cambia qué teclado ofrece el sistema por default). */}
+            <Input label="DNI" value={dni} onChange={(e) => setDni(e.target.value)} placeholder="28456789" inputMode="numeric" />
             {/* Puramente informativo -- nunca auto-completa nada, la técnica
                 decide qué hacer con el dato. Ver avisoI131Previo más arriba. */}
             {avisoI131Previo && (
