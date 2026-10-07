@@ -190,6 +190,22 @@ describe("TabPacientes -- reconciliación de campos Ficha/Nombre/DNI/Peso/Talla"
 // en el JSX. El fix compara explícitamente `!= null` en vez de la
 // truthiness del número.
 describe("TabPacientes -- listado de Libro 2, peso/talla=0 no debe dejar un '0' suelto pegado a Nombre/DNI", () => {
+  // Reloj fijo en vez de la hora real: con la hora real, cuando el test corre
+  // entre 00:00 y 09:59, tarjetaPaciente (mobile) pega el nombre directo a la
+  // hora ("Perez Carlos00:05...") sin separador -- "Carlos0" seguido de un
+  // dígito y ":" (hora tipo HH:MM) es ese caso, no el bug de peso/talla=0, y
+  // los regex de abajo ya lo excluyen. 00:05 es justamente la hora que antes
+  // rompía el test; queda fijada para que actúe como guarda de regresión.
+  beforeEach(() => {
+    // Sólo Date, no los timers reales (setTimeout/setInterval) -- si no,
+    // findAllByText/waitFor (que usan setTimeout por dentro) se cuelgan.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(2026, 9, 7, 0, 5, 0));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   function actaDePrueba(overrides) {
     return {
       id: "acta-test", tipo: "paciente", sedeId: "central", pacienteFicha: "1",
@@ -218,20 +234,20 @@ describe("TabPacientes -- listado de Libro 2, peso/talla=0 no debe dejar un '0' 
   // nombre porque el <div> contenedor ni siquiera llegó a existir.
   test("peso=0 y talla=0 juntos: no queda ningún '0' pegado al nombre, y '0kg · 0cm' se muestra como dato real", async () => {
     const { container } = await renderConActa(actaDePrueba({ peso: 0, talla: 0 }));
-    expect(container.textContent).not.toMatch(/Carlos0(?!kg)/);
+    expect(container.textContent).not.toMatch(/Carlos0(?!kg)(?!\d:)/);
     expect(container.textContent).toContain("0kg · 0cm");
   });
 
   test("peso=0 con talla real (176): no queda un '0' suelto antes de ' · 176cm'", async () => {
     const { container } = await renderConActa(actaDePrueba({ peso: 0, talla: 176 }));
-    expect(container.textContent).not.toMatch(/Carlos0(?!kg)/);
+    expect(container.textContent).not.toMatch(/Carlos0(?!kg)(?!\d:)/);
     expect(container.textContent).not.toMatch(/[^0-9]0 · 176cm/); // "0" suelto (sin "kg") antes del separador
     expect(container.textContent).toContain("0kg · 176cm");
   });
 
   test("peso real (78) con talla=0: no queda un '0' suelto pegado después de '78kg'", async () => {
     const { container } = await renderConActa(actaDePrueba({ peso: 78, talla: 0 }));
-    expect(container.textContent).not.toMatch(/Carlos0/);
+    expect(container.textContent).not.toMatch(/Carlos0(?!\d:)/);
     expect(container.textContent).not.toMatch(/78kg0/);
     expect(container.textContent).toContain("78kg · 0cm");
   });
