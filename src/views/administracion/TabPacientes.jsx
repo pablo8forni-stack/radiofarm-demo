@@ -1334,7 +1334,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
               }}>
                 {sedesActivas(catalogo).map((s) => <option key={s.id} value={s.id}>{s.short}</option>)}
               </Sel>
-              <p className="text-xs text-amber-700">Este registro se guarda acá, sin importar el filtro "Ver registros de" de arriba.</p>
+              <p className="text-sm text-amber-700">Este registro se guarda acá, sin importar el filtro "Ver registros de" de arriba.</p>
             </div>
           )}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -1362,7 +1362,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
               <div key="ficha-verificando" className="sm:col-span-2 -mt-2 text-xs text-gray-400">Verificando N° de Ficha...</div>
             )}
             {fichaEstado && fichaEstado !== "verificando" && fichaEstado.tipo !== "ok" && (
-              <div key="ficha-error" className="sm:col-span-2 -mt-2 text-xs text-red-600">
+              <div key="ficha-error" className="sm:col-span-2 -mt-2 text-sm text-red-600">
                 {fichaEstado.tipo === "formato"
                   ? "El N° de Ficha debe ser sólo números."
                   : fichaEstado.tipo === "agotado"
@@ -1373,7 +1373,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
             {/* No bloquea Guardar -- hay cargas tardías legítimas (ficha
                 más baja) y VM RIS puede saltear números. Sólo un aviso. */}
             {fichaLejana && (
-              <div key="ficha-lejana" className="sm:col-span-2 -mt-2 text-xs text-amber-700">
+              <div key="ficha-lejana" className="sm:col-span-2 -mt-2 text-sm text-amber-700">
                 La última ficha de esta sede fue {ultimaFicha}: ¿es correcta la N° {normalizarFicha(fichaNro)}?
               </div>
             )}
@@ -1386,7 +1386,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
             )}
             {mostrarFechaReal && (
               <div key="fecha-real" className="sm:col-span-2">
-                <div className="-mt-1 mb-1 text-xs text-amber-600">
+                <div className="-mt-1 mb-1 text-sm text-amber-600">
                   {atrasoDetectado
                     ? "La ficha siguiente ya fue cargada con fecha anterior a hoy -- si este paciente fue atendido otro día, indicalo acá."
                     : "Indicá la fecha y hora reales en que se atendió a este paciente."}
@@ -1415,7 +1415,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
             {/* Puramente informativo -- nunca auto-completa nada, la técnica
                 decide qué hacer con el dato. Ver avisoI131Previo más arriba. */}
             {avisoI131Previo && (
-              <div className="sm:col-span-2 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 text-xs text-amber-700">
+              <div className="sm:col-span-2 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 text-sm text-amber-700">
                 Este DNI tiene un registro de I-131 del {fmtTs(avisoI131Previo.fecha)} — {TIPO_LABEL_I131[avisoI131Previo.tipo]?.label || avisoI131Previo.tipo}.
               </div>
             )}
@@ -1548,7 +1548,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
                 <CasilleroExcepcion
                   className="mt-1 pt-3 border-t border-gray-200"
                   inputClassName="w-4 h-4 accent-blue-600 mt-0.5"
-                  textClassName="text-sm text-gray-700"
+                  textClassName="text-base text-gray-700"
                   checked={sinExtraccionVial} onChange={toggleSinExtraccionVial}
                   etiqueta="Es una cápsula sellada (sin extracción de vial)"
                   mensajeActivo="Se guardará como cápsula sellada, sin extracción de vial."
@@ -1564,7 +1564,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
                   ))}
                 </Sel>
                 {lotesMibgDisponibles.length === 0 && (
-                  <p className="text-xs text-orange-500 -mt-2">No hay lotes de MIBG disponibles en esta sede -- registrá uno nuevo en la pestaña "MIBG" de Gestión I-131.</p>
+                  <p className="text-sm text-orange-500 -mt-2">No hay lotes de MIBG disponibles en esta sede -- registrá uno nuevo en la pestaña "MIBG" de Gestión I-131.</p>
                 )}
                 {/* Distinto de la actividad de llegada del lote (arriba) --
                     casi siempre difiere por decaimiento entre la llegada y el
@@ -1586,7 +1586,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
                   ))}
                 </Sel>
                 {lotesLutecioDisponibles.length === 0 && (
-                  <p className="text-xs text-orange-500 -mt-2">No hay lotes de Lutecio-177 disponibles en esta sede -- registrá uno nuevo en "Libro 4 — Lutecio-177" (Actas ARN).</p>
+                  <p className="text-sm text-orange-500 -mt-2">No hay lotes de Lutecio-177 disponibles en esta sede -- registrá uno nuevo en "Libro 4 — Lutecio-177" (Actas ARN).</p>
                 )}
                 <Input label="Dosis administrada (mCi)" type="number" min={0} step={0.1} value={actividadAdministrada} onChange={(e) => setActividadAdministrada(e.target.value)} placeholder="Ej: 1.5 (suele ser menor a la actividad de llegada)" />
               </div>
@@ -1602,7 +1602,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
                 <CasilleroExcepcion
                   className="sm:col-span-2 mb-3 pb-3 border-b border-gray-200"
                   inputClassName="w-4 h-4 accent-blue-600 mt-0.5"
-                  textClassName="text-sm text-gray-700"
+                  textClassName="text-base text-gray-700"
                   checked={sinRadiofarmaco} onChange={toggleSinRadiofarmaco}
                   etiqueta="No requiere marcación de radiofármaco (Tc-99m puro)"
                   mensajeActivo="Se guardará SIN marcación de radiofármaco."
@@ -1653,14 +1653,14 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
                       className="mt-3 pt-3 border-t border-gray-200"
                       wrapClassName="flex items-center gap-1.5"
                       inputClassName="w-3.5 h-3.5 accent-blue-600"
-                      textClassName="text-xs text-gray-500"
+                      textClassName="text-base text-gray-500"
                       checked={verTodoElStock} onChange={toggleVerTodoElStock}
                       etiqueta="Ver todos los lotes en stock (excepcional)"
                       mensajeActivo="Estás eligiendo un lote que no figura como marcado hoy."
                     />
                   )}
                   {!mostrarFechaReal && !verTodoElStock && farmId && lotesMarcadosHoy.length === 0 && (
-                    <p className="text-xs text-amber-600">Ningún lote de este radiofármaco fue marcado hoy en esta sede.</p>
+                    <p className="text-sm text-amber-600">Ningún lote de este radiofármaco fue marcado hoy en esta sede.</p>
                   )}
                   {/* Freno real (mismo patrón que TabMarcacion.jsx, no sólo
                       texto): con "Ver todos los lotes en stock" activo y un
@@ -1671,7 +1671,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
                       className="mt-1 bg-red-50 border border-red-200 rounded-xl px-3 py-2"
                       wrapClassName="flex items-start gap-2"
                       inputClassName="w-3.5 h-3.5 accent-red-600 mt-0.5"
-                      textClassName="text-xs text-red-700"
+                      textClassName="text-base text-red-700"
                       checked={confirmoSinMarcacion} onChange={setConfirmoSinMarcacion}
                       etiqueta="Confirmo que este lote NO fue marcado hoy en Libro 1 -- voy a corregir el registro de Marcación por separado."
                     />

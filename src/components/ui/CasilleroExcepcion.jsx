@@ -8,7 +8,7 @@
 export function CasilleroExcepcion({
   checked, onChange, etiqueta, mensajeActivo,
   inputClassName, textClassName, wrapClassName = "flex items-start gap-2",
-  mensajeClassName = "mt-1.5 text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1.5",
+  mensajeClassName = "mt-1.5 text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1.5",
   className,
 }) {
   return (

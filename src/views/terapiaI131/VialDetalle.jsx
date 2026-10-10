@@ -194,7 +194,7 @@ export function VialDetalle({ vial, anulacionVial, todosLosViales, extracciones,
                 {previa?.valido && (
                   <>
                     {previa.excedeVolumen && (
-                      <div className="text-xs text-red-600 font-semibold bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+                      <div className="text-sm text-red-600 font-semibold bg-red-50 border border-red-200 rounded-lg px-3 py-2">
                         Pediste {l.ml} mL pero el cálculo indica sólo {previa.volDisponible.toFixed(1)} mL disponibles en este vial. Revisá antes de guardar.
                       </div>
                     )}
@@ -230,7 +230,7 @@ export function VialDetalle({ vial, anulacionVial, todosLosViales, extracciones,
             <Input label="N° de Ficha (opcional)" value={pacienteFicha} onChange={(e) => setPacienteFicha(e.target.value)} placeholder="4521" />
           </div>
           {hayLineaValida && actividadMedida && Math.abs(parseFloat(actividadMedida) - actividadCalculadaTotal) > actividadCalculadaTotal * 0.15 && (
-            <div className="text-xs text-amber-700 font-semibold bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+            <div className="text-sm text-amber-700 font-semibold bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
               La actividad medida difiere del cálculo en más de un 15% ({actividadMedida} mCi medido vs. {actividadCalculadaTotal.toFixed(2)} mCi calculado). Se guarda igual, sin ocultar la diferencia.
             </div>
           )}

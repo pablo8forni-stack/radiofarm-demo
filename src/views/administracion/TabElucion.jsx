@@ -362,7 +362,7 @@ export function TabElucion({ catalogo, usuario, esAdmin, onToast }) {
               </Sel>
             )}
             {!sedeEluye && (
-              <div className="sm:col-span-2 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 text-xs text-amber-700">
+              <div className="sm:col-span-2 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 text-sm text-amber-700">
                 Esta sede no tiene elución habilitada — activala en Configuración → Sedes activas.
               </div>
             )}

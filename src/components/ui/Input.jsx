@@ -1,7 +1,7 @@
 export function Input({ label, hint, type, ...p }) {
   return (
     <div className="flex flex-col gap-1">
-      {label && <label className="text-xs font-semibold text-gray-600">{label}</label>}
+      {label && <label className="text-base font-semibold text-gray-600">{label}</label>}
       <input
         type={type}
         // Los number empiezan con un valor por defecto (ej. "1" de cantidad)

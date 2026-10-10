@@ -276,7 +276,7 @@ export function TabAgendaI131({ catalogo, usuario, esAdmin, onToast }) {
           <Input label="Notas (opcional)" value={form.notas} onChange={(e) => setForm((f) => ({ ...f, notas: e.target.value }))} placeholder='Ej: "dado por celu", "cort antes"' />
 
           {unidadForm === "mCi" && (
-            <div className={`text-xs font-semibold rounded-xl px-4 py-3 border ${previaSuperaTope ? "bg-red-50 border-red-200 text-red-700" : "bg-gray-50 border-gray-200 text-gray-600"}`}>
+            <div className={`text-sm font-semibold rounded-xl px-4 py-3 border ${previaSuperaTope ? "bg-red-50 border-red-200 text-red-700" : "bg-gray-50 border-gray-200 text-gray-600"}`}>
               {previaSemana.cargando
                 ? "Calculando comprometido de esa semana..."
                 : `Comprometido esa semana (sin este turno): ${previaSemana.total.toFixed(1)} mCi. Con este turno: ${previaConEsteTurno.toFixed(1)} / ${TOPE_SEMANAL_MCI} mCi${previaSuperaTope ? " — supera el tope semanal del proveedor" : ""}.`}

@@ -242,14 +242,14 @@ export function TabLoteDosisUnica({ catalogo, usuario, esAdmin, onToast, isotopo
                 </div>
               )}
               {difierenMucho && (
-                <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-1.5">
+                <div className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-1.5">
                   Los datos no cierran entre sí -- revisá lo tipeado.
                 </div>
               )}
             </div>
           )}
           <div>
-            <label className="text-xs font-semibold text-gray-600 mb-1.5 block">¿Lo recibido coincide con lo pedido?</label>
+            <label className="text-base font-semibold text-gray-600 mb-1.5 block">¿Lo recibido coincide con lo pedido?</label>
             <div className="flex gap-2">
               <Btn size="sm" variant={form.conformidad === true ? "primary" : "outline"} onClick={() => setForm((f) => ({ ...f, conformidad: true }))}>Sí, conforme</Btn>
               <Btn size="sm" variant={form.conformidad === false ? "danger" : "outline"} onClick={() => setForm((f) => ({ ...f, conformidad: false }))}>No conforme</Btn>

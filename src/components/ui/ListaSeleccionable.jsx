@@ -78,11 +78,11 @@ export function ListaSeleccionable({ label, value, onChange, options, placeholde
 
   return (
     <div className="flex flex-col gap-1" ref={raizRef}>
-      {label && <label className="text-xs font-semibold text-gray-600" id={`${idBase}-label`}>{label}</label>}
+      {label && <label className="text-base font-semibold text-gray-600" id={`${idBase}-label`}>{label}</label>}
       <div className="relative">
         <button
           type="button" ref={botonRef} disabled={disabled}
-          className="w-full text-left border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 bg-white min-h-11 md:min-h-0 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-between gap-2"
+          className="w-full text-left border border-gray-200 rounded-xl px-3 py-2 text-base focus:outline-none focus:ring-2 focus:ring-blue-400 bg-white min-h-11 md:min-h-0 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-between gap-2"
           role="combobox" aria-haspopup="listbox" aria-expanded={open} aria-controls={`${idBase}-listbox`}
           aria-activedescendant={open && activeValue != null ? `${idBase}-opt-${activeValue}` : undefined}
           aria-labelledby={label ? `${idBase}-label` : undefined}
@@ -96,7 +96,7 @@ export function ListaSeleccionable({ label, value, onChange, options, placeholde
           <ul
             id={`${idBase}-listbox`} role="listbox" tabIndex={-1}
             aria-labelledby={label ? `${idBase}-label` : undefined}
-            className="absolute z-20 mt-1 w-full max-h-56 overflow-auto rounded-xl border border-gray-200 bg-white shadow-lg py-1 text-sm"
+            className="absolute z-20 mt-1 w-full max-h-56 overflow-auto rounded-xl border border-gray-200 bg-white shadow-lg py-1 text-base"
           >
             {options.map((o) => {
               const resaltada = o.value === activeValue;
@@ -125,7 +125,7 @@ export function ListaSeleccionable({ label, value, onChange, options, placeholde
                           staging: el motivo entre paréntesis quedaba tachado
                           junto con el lote). */}
                       <span className="text-gray-400 line-through">{o.label}</span>
-                      {o.disabledHint && <span className="text-xs text-amber-600">{o.disabledHint}</span>}
+                      {o.disabledHint && <span className="text-sm text-amber-600">{o.disabledHint}</span>}
                     </>
                   ) : o.label}
                 </li>

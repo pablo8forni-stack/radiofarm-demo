@@ -393,20 +393,20 @@ export function TabMarcacion({ catalogo, usuario, esAdmin, onToast }) {
                 className="mt-3 pt-3 border-t border-gray-200"
                 wrapClassName="flex items-center gap-1.5"
                 inputClassName="w-3.5 h-3.5 accent-blue-600"
-                textClassName="text-xs text-gray-500"
+                textClassName="text-base text-gray-500"
                 checked={verTodoElStock} onChange={toggleVerTodoElStock}
                 etiqueta="Ver todo el stock (excepcional)"
                 mensajeActivo="Esta marcación se guardará SIN un egreso que la respalde."
               />
               {!verTodoElStock && farmId && egresosDisponibles.length === 0 && (
-                <p className="text-xs text-amber-600">Ningún lote de este radiofármaco fue egresado hoy en esta sede.</p>
+                <p className="text-sm text-amber-600">Ningún lote de este radiofármaco fue egresado hoy en esta sede.</p>
               )}
               {/* Visibilidad que habría evitado el bug real (Pablo): antes
                   esto se veía IGUAL que "ningún egreso hoy" -- no había
                   forma de distinguir "nunca egresé nada" de "ya usé todo lo
                   que egresé". */}
               {!verTodoElStock && farmId && egresosDisponibles.length > 0 && !hayEgresoDisponible && (
-                <p className="text-xs text-amber-600">Todos los egresos de hoy para este radiofármaco ya fueron usados en una marcación.</p>
+                <p className="text-sm text-amber-600">Todos los egresos de hoy para este radiofármaco ya fueron usados en una marcación.</p>
               )}
             </div>
             <Input label="mCi utilizados en marcación" type="number" min={0} step={0.1} value={mciMarcacion} onChange={(e) => setMciMarcacion(e.target.value)} placeholder="20" />
