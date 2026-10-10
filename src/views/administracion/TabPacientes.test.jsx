@@ -50,11 +50,44 @@ let actasParaListado = [];
 // avisoI131Previo) la reasigna antes de montar.
 let actasI131PorTipo = {};
 let anulacionesParaTest = [];
+// Marcaciones de Libro 1 "de hoy" para el selector de Lote de Tc-99m (Libro
+// 2) -- [] por defecto (ningún lote marcado), cada test de "Ver todos los
+// lotes en stock"/"No requiere marcación" la reasigna antes de montar.
+let marcacionesHoyParaTest = [];
+// A diferencia de los otros listeners de este mock (una sola llamada,
+// "foto" fija), este guarda el callback para poder simular un cambio EN
+// VIVO (como el listener real de Firestore) -- necesario para probar que
+// la restauración al destildar la excepción se omite si el lote dejó de
+// figurar como marcado MIENTRAS la excepción estaba activa.
+let marcacionesHoyCallbacks = [];
+function dispararMarcacionesHoy(datos) {
+  marcacionesHoyParaTest = datos;
+  marcacionesHoyCallbacks.forEach((cb) => cb(datos));
+}
+// Mismo motivo que marcacionesHoyCallbacks de arriba, generalizado por tipo
+// -- necesario para probar que la restauración de "cápsula sellada" se
+// omite si la extracción se vincula a OTRA dosis mientras la excepción
+// está activa (extraccionesYaVinculadasIds depende de ablativaI131/
+// dosisI131/dosisBarridoI131, todos alimentados por listenActas).
+let actasI131Callbacks = {};
+function dispararActasI131(tipo, datos) {
+  actasI131PorTipo[tipo] = datos;
+  (actasI131Callbacks[tipo] || []).forEach((cb) => cb(datos));
+}
 
 vi.mock("../../services/firestore/actas.js", () => ({
-  listenActas: (tipo, cb) => listenerCon(cb, tipo === "paciente" ? actasParaListado : (actasI131PorTipo[tipo] || [])),
+  listenActas: (tipo, cb) => {
+    if (tipo === "paciente") return listenerCon(cb, actasParaListado);
+    (actasI131Callbacks[tipo] ||= []).push(cb);
+    cb(actasI131PorTipo[tipo] || []);
+    return () => { actasI131Callbacks[tipo] = (actasI131Callbacks[tipo] || []).filter((c) => c !== cb); };
+  },
   listenAnulacionesActas: (cb) => listenerCon(cb, anulacionesParaTest),
-  listenActasMarcacionHoy: (_sedeId, cb) => listenerCon(cb),
+  listenActasMarcacionHoy: (_sedeId, cb) => {
+    marcacionesHoyCallbacks.push(cb);
+    cb(marcacionesHoyParaTest);
+    return () => { marcacionesHoyCallbacks = marcacionesHoyCallbacks.filter((c) => c !== cb); };
+  },
   obtenerUltimaFicha: vi.fn(async () => null),
   // El eje de la prueba: NO resuelve hasta que el test llame a .resolver()
   // -- deja fichaEstado en "verificando" el tiempo que el test necesite.
@@ -330,6 +363,91 @@ describe("TabPacientes -- Gestión I-131, vínculo a Extracción (Dosis ablativa
   });
 });
 
+// Mismo patrón de CasilleroExcepcion (sólo el input interactivo, texto sin
+// interacción, no se pierde la extracción ya vinculada) aplicado acá.
+describe("TabPacientes -- 'Es una cápsula sellada' (CasilleroExcepcion): sólo el cuadradito activa la excepción", () => {
+  beforeEach(() => {
+    actasI131PorTipo.i131_extraccion = [{ id: "ex1", tipo: "i131_extraccion", fecha: new Date(), actividadMedida: 10, viales: [] }];
+    actasI131PorTipo.i131_vial = [];
+  });
+  afterEach(() => {
+    actasI131PorTipo = {};
+    actasI131Callbacks = {};
+    anulacionesParaTest = [];
+  });
+
+  async function abrirYVincularExtraccion(user) {
+    render(<TabPacientes catalogo={catalogo} usuario={usuarioConAccesoI131} esAdmin={false} onToast={vi.fn()} nav={null} />);
+    await user.click(await screen.findByText("+ Manual"));
+    await user.click(screen.getByText("¿Es un caso distinto a Tc-99m?"));
+    await user.selectOptions(labelInput("Isótopo"), "i131");
+    await user.selectOptions(labelInput("Tipo de registro"), "dosis_barrido");
+    await user.selectOptions(labelInput("Extracción relacionada"), "ex1");
+  }
+
+  test("tocar el texto 'Es una cápsula sellada' NO activa la excepción", async () => {
+    const user = userEvent.setup();
+    await abrirYVincularExtraccion(user);
+
+    await user.click(screen.getByText("Es una cápsula sellada (sin extracción de vial)"));
+
+    expect(labelInput("Extracción relacionada").value).toBe("ex1");
+    expect(screen.queryByText("Se guardará como cápsula sellada, sin extracción de vial.")).toBeNull();
+  });
+
+  test("tocar el cuadradito SÍ activa la excepción, y muestra el aviso", async () => {
+    const user = userEvent.setup();
+    await abrirYVincularExtraccion(user);
+
+    const checkbox = screen.getByLabelText("Es una cápsula sellada (sin extracción de vial)");
+    await user.click(checkbox);
+
+    expect(labelInput("Extracción relacionada").value).toBe("");
+    expect(labelInput("Extracción relacionada").disabled).toBe(true);
+    expect(screen.getByText("Se guardará como cápsula sellada, sin extracción de vial.")).toBeTruthy();
+  });
+
+  test("Espacio con foco en el cuadradito también activa la excepción", async () => {
+    const user = userEvent.setup();
+    await abrirYVincularExtraccion(user);
+
+    const checkbox = screen.getByLabelText("Es una cápsula sellada (sin extracción de vial)");
+    checkbox.focus();
+    await user.keyboard(" ");
+
+    expect(screen.getByText("Se guardará como cápsula sellada, sin extracción de vial.")).toBeTruthy();
+  });
+
+  test("restauración válida: tildar y destildar sin cambiar nada más devuelve la extracción vinculada", async () => {
+    const user = userEvent.setup();
+    await abrirYVincularExtraccion(user);
+
+    const checkbox = screen.getByLabelText("Es una cápsula sellada (sin extracción de vial)");
+    await user.click(checkbox);
+    await user.click(checkbox);
+
+    expect(labelInput("Extracción relacionada").value).toBe("ex1");
+  });
+
+  test("restauración omitida: si la extracción se vincula a otra dosis mientras la excepción estaba activa, el campo queda vacío", async () => {
+    const user = userEvent.setup();
+    await abrirYVincularExtraccion(user);
+
+    const checkbox = screen.getByLabelText("Es una cápsula sellada (sin extracción de vial)");
+    await user.click(checkbox);
+    // Mientras la excepción está activa, otra carga vincula esa misma
+    // extracción a otra dosis -- extraccionesYaVinculadasIds (derivado de
+    // ablativaI131/dosisI131/dosisBarridoI131) pasa a excluirla de
+    // extraccionesDisponibles.
+    await act(async () => {
+      dispararActasI131("i131_dosis_barrido", [{ id: "otra", tipo: "i131_dosis_barrido", extraccionId: "ex1", fecha: new Date() }]);
+    });
+    await user.click(checkbox);
+
+    expect(labelInput("Extracción relacionada").value).toBe("");
+  });
+});
+
 function haceDias(n) {
   return { toDate: () => new Date(Date.now() - n * 24 * 60 * 60 * 1000) };
 }
@@ -398,5 +516,209 @@ describe("TabPacientes -- Peso/Talla ausentes para I-131, presentes para Tc-99m"
 
     expect(screen.queryByText("Peso (kg)")).toBeNull();
     expect(screen.queryByText("Talla (cm)")).toBeNull();
+  });
+});
+
+// Bug real reportado por Pablo: el texto al lado del casillero estaba
+// DENTRO del <label> que envuelve el <input> -- tocar el texto, o un poco
+// por debajo del selector de Lote (pegado por un gap de 4px), tildaba la
+// excepción sin querer. CasilleroExcepcion.jsx separa el texto a un <span>
+// sin interacción; estos tests cubren los 3 casos reales -- texto, input,
+// teclado -- más que el estado elegido (farmId/lote) no se pierda.
+//
+// El selector de Lote es ListaSeleccionable (un combobox armado a mano, no
+// un <select>) -- labelInput("Lote") no sirve acá (apunta al <div> que
+// envuelve el botón, no a un elemento con .value). Se lee/elige por rol.
+function botonLote() {
+  return screen.getByRole("combobox", { name: "Lote" });
+}
+async function elegirLotePorTexto(user, textoInicial) {
+  await user.click(botonLote());
+  await user.click(await screen.findByRole("option", { name: new RegExp("^" + textoInicial) }));
+}
+
+describe("TabPacientes -- 'No requiere marcación de radiofármaco' (CasilleroExcepcion): sólo el cuadradito activa la excepción", () => {
+  beforeEach(() => {
+    catalogo.stock.central.mibi = [{ lote: "LOTE1", cantidad: 10, vencimiento: "2026-12-31" }];
+    marcacionesHoyParaTest = [{ id: "m1", farmId: "mibi", lote: "LOTE1", fecha: new Date() }];
+  });
+  afterEach(() => {
+    catalogo.stock.central.mibi = [];
+    catalogo.sedes.central.farmIds = ["mibi"];
+    marcacionesHoyParaTest = [];
+    marcacionesHoyCallbacks = [];
+  });
+
+  async function abrirFormularioYElegirLote(user) {
+    render(<TabPacientes catalogo={catalogo} usuario={usuario} esAdmin={false} onToast={vi.fn()} nav={null} />);
+    await user.click(await screen.findByText("+ Manual"));
+    await user.selectOptions(labelInput("Radiofármaco utilizado"), "mibi");
+    await elegirLotePorTexto(user, "LOTE1");
+  }
+
+  test("tocar el texto 'No requiere marcación...' NO activa la excepción", async () => {
+    const user = userEvent.setup();
+    render(<TabPacientes catalogo={catalogo} usuario={usuario} esAdmin={false} onToast={vi.fn()} nav={null} />);
+    await user.click(await screen.findByText("+ Manual"));
+
+    await user.click(screen.getByText("No requiere marcación de radiofármaco (Tc-99m puro)"));
+
+    // Si se hubiera activado, el Sel "Radiofármaco utilizado" desaparecería.
+    expect(screen.getByText("Radiofármaco utilizado")).toBeTruthy();
+    expect(screen.queryByText("Se guardará SIN marcación de radiofármaco.")).toBeNull();
+  });
+
+  test("tocar el cuadradito SÍ activa la excepción, y muestra el aviso", async () => {
+    const user = userEvent.setup();
+    render(<TabPacientes catalogo={catalogo} usuario={usuario} esAdmin={false} onToast={vi.fn()} nav={null} />);
+    await user.click(await screen.findByText("+ Manual"));
+
+    const checkbox = screen.getByLabelText("No requiere marcación de radiofármaco (Tc-99m puro)");
+    await user.click(checkbox);
+
+    expect(screen.queryByText("Radiofármaco utilizado")).toBeNull();
+    expect(screen.getByText("Se guardará SIN marcación de radiofármaco.")).toBeTruthy();
+  });
+
+  test("Espacio con foco en el cuadradito también activa la excepción", async () => {
+    const user = userEvent.setup();
+    render(<TabPacientes catalogo={catalogo} usuario={usuario} esAdmin={false} onToast={vi.fn()} nav={null} />);
+    await user.click(await screen.findByText("+ Manual"));
+
+    const checkbox = screen.getByLabelText("No requiere marcación de radiofármaco (Tc-99m puro)");
+    checkbox.focus();
+    await user.keyboard(" ");
+
+    expect(screen.getByText("Se guardará SIN marcación de radiofármaco.")).toBeTruthy();
+  });
+
+  test("restauración válida: tildar y destildar sin cambiar nada más devuelve el radiofármaco y el lote elegidos", async () => {
+    const user = userEvent.setup();
+    await abrirFormularioYElegirLote(user);
+    expect(labelInput("Radiofármaco utilizado").value).toBe("mibi");
+    expect(botonLote().textContent).toMatch(/^LOTE1/);
+
+    const checkbox = screen.getByLabelText("No requiere marcación de radiofármaco (Tc-99m puro)");
+    await user.click(checkbox);
+    await user.click(checkbox);
+
+    expect(labelInput("Radiofármaco utilizado").value).toBe("mibi");
+    expect(botonLote().textContent).toMatch(/^LOTE1/);
+  });
+
+  test("restauración omitida: si el lote dejó de figurar como marcado mientras la excepción estaba activa, el campo queda vacío", async () => {
+    const user = userEvent.setup();
+    await abrirFormularioYElegirLote(user);
+
+    const checkbox = screen.getByLabelText("No requiere marcación de radiofármaco (Tc-99m puro)");
+    await user.click(checkbox);
+    // Mientras la excepción está activa, Libro 1 deja de tener marcaciones
+    // de hoy para este lote (p. ej. alguien deshizo esa marcación) -- el
+    // listener real dispara con el array actualizado.
+    await act(async () => { dispararMarcacionesHoy([]); });
+    await user.click(checkbox);
+
+    expect(labelInput("Radiofármaco utilizado").value).toBe("mibi");
+    expect(botonLote().textContent).toContain("Seleccionar lote...");
+  });
+
+  test("restauración omitida: si el radiofármaco dejó de estar habilitado en la sede mientras la excepción estaba activa, ni el radiofármaco ni el lote se restauran", async () => {
+    const user = userEvent.setup();
+    await abrirFormularioYElegirLote(user);
+
+    const checkbox = screen.getByLabelText("No requiere marcación de radiofármaco (Tc-99m puro)");
+    await user.click(checkbox);
+    // Mientras la excepción está activa, alguien desactiva "mibi" para
+    // esta sede desde Configuración -- farmsDeSede ya no lo ofrece, así
+    // que ni el radiofármaco ni (por lo tanto) el lote pueden restaurarse,
+    // aunque ese lote siga figurando como marcado.
+    catalogo.sedes.central.farmIds = [];
+    await user.click(checkbox);
+
+    expect(labelInput("Radiofármaco utilizado").value).toBe("");
+    expect(botonLote().textContent).toContain("Seleccionar lote...");
+  });
+});
+
+describe("TabPacientes -- 'Ver todos los lotes en stock' (CasilleroExcepcion): sólo el cuadradito activa la excepción", () => {
+  beforeEach(() => {
+    catalogo.stock.central.mibi = [
+      { lote: "LOTE1", cantidad: 10, vencimiento: "2026-12-31" },
+      { lote: "LOTE2", cantidad: 5, vencimiento: "2026-12-31" },
+    ];
+    marcacionesHoyParaTest = [{ id: "m1", farmId: "mibi", lote: "LOTE1", fecha: new Date() }];
+  });
+  afterEach(() => {
+    catalogo.stock.central.mibi = [];
+    marcacionesHoyParaTest = [];
+    marcacionesHoyCallbacks = [];
+  });
+
+  async function abrirYElegirLote1(user) {
+    render(<TabPacientes catalogo={catalogo} usuario={usuario} esAdmin={false} onToast={vi.fn()} nav={null} />);
+    await user.click(await screen.findByText("+ Manual"));
+    await user.selectOptions(labelInput("Radiofármaco utilizado"), "mibi");
+    await elegirLotePorTexto(user, "LOTE1");
+  }
+
+  test("tocar el texto 'Ver todos los lotes en stock' NO activa la excepción", async () => {
+    const user = userEvent.setup();
+    await abrirYElegirLote1(user);
+
+    await user.click(screen.getByText("Ver todos los lotes en stock (excepcional)"));
+
+    expect(screen.queryByText("Estás eligiendo un lote que no figura como marcado hoy.")).toBeNull();
+    expect(botonLote().textContent).toMatch(/^LOTE1/);
+  });
+
+  test("tocar el cuadradito SÍ activa la excepción y muestra el aviso", async () => {
+    const user = userEvent.setup();
+    await abrirYElegirLote1(user);
+
+    const checkbox = screen.getByLabelText("Ver todos los lotes en stock (excepcional)");
+    await user.click(checkbox);
+
+    expect(screen.getByText("Estás eligiendo un lote que no figura como marcado hoy.")).toBeTruthy();
+    // Al tildar se limpia el lote (cambia la fuente de opciones) -- LOTE2
+    // (nunca marcado) ahora es elegible.
+    await user.click(botonLote());
+    expect(await screen.findByRole("option", { name: /^LOTE2/ })).toBeTruthy();
+  });
+
+  test("Espacio con foco en el cuadradito también activa la excepción", async () => {
+    const user = userEvent.setup();
+    await abrirYElegirLote1(user);
+
+    const checkbox = screen.getByLabelText("Ver todos los lotes en stock (excepcional)");
+    checkbox.focus();
+    await user.keyboard(" ");
+
+    expect(screen.getByText("Estás eligiendo un lote que no figura como marcado hoy.")).toBeTruthy();
+  });
+
+  test("restauración válida: tildar y destildar sin elegir otro lote devuelve LOTE1", async () => {
+    const user = userEvent.setup();
+    await abrirYElegirLote1(user);
+
+    const checkbox = screen.getByLabelText("Ver todos los lotes en stock (excepcional)");
+    await user.click(checkbox);
+    await user.click(checkbox);
+
+    expect(botonLote().textContent).toMatch(/^LOTE1/);
+  });
+
+  test("restauración omitida: si LOTE1 dejó de figurar como marcado mientras la excepción estaba activa, destildar deja el campo vacío", async () => {
+    const user = userEvent.setup();
+    await abrirYElegirLote1(user);
+
+    const checkbox = screen.getByLabelText("Ver todos los lotes en stock (excepcional)");
+    await user.click(checkbox);
+    // El respaldo se toma al tildar (LOTE1) -- si mientras la excepción
+    // está activa Libro 1 deja de tener esa marcación (p. ej. se deshizo),
+    // LOTE1 ya no es válido para restaurar al destildar.
+    await act(async () => { dispararMarcacionesHoy([]); });
+    await user.click(checkbox);
+
+    expect(botonLote().textContent).toContain("Seleccionar lote...");
   });
 });

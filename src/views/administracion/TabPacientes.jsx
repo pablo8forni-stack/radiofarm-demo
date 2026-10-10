@@ -4,6 +4,7 @@ import { Btn } from "../../components/ui/Btn.jsx";
 import { Input } from "../../components/ui/Input.jsx";
 import { Sel } from "../../components/ui/Sel.jsx";
 import { ListaSeleccionable } from "../../components/ui/ListaSeleccionable.jsx";
+import { CasilleroExcepcion } from "../../components/ui/CasilleroExcepcion.jsx";
 import { dedupeLotesPorFarm } from "../../helpers/dedupeLotesPorFarm.js";
 import { QRScanner } from "../../components/scanner/QRScanner.jsx";
 import { ModalAnularActa } from "../../components/actas/ModalAnularActa.jsx";
@@ -236,6 +237,11 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
   // error, lote marcado ayer, etc.) -- apagada por defecto a propósito,
   // para no competir con el flujo normal.
   const [verTodoElStock, setVerTodoElStock] = useState(false);
+  // Respaldo del lote elegido antes de borrarlo al tildar "Ver todos los
+  // lotes en stock" -- se restaura al destildar SOLO si ese lote sigue
+  // figurando como marcado (hoy, o en la fecha real si está ese modo
+  // activo). Ref, no state: no debe re-renderizar.
+  const backupLoteVerTodoElStock = useRef(null);
   const [marcadosHoyRaw, setMarcadosHoyRaw] = useState([]);
   useEffect(() => { if (sedeId) return listenActasMarcacionHoy(sedeId, setMarcadosHoyRaw); }, [sedeId]);
   // Carga tardía (mostrarFechaReal): mismos lotes marcados, pero de la
@@ -266,6 +272,11 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
   // sólo que no se marcó hoy). Se guarda como sinRadiofarmaco: true en el
   // acta, sin farmId/farmNombre/lote (ver firestore.rules#actaValida).
   const [sinRadiofarmaco, setSinRadiofarmaco] = useState(false);
+  // Respaldo de farmId/lote antes de borrarlos al tildar "No requiere
+  // marcación de radiofármaco" -- se restauran al destildar SOLO si siguen
+  // siendo válidos en ese momento (el radiofármaco sigue existiendo en la
+  // sede, el lote sigue figurando como marcado). Ref, no state.
+  const backupSinRadiofarmaco = useRef(null);
   // Sólo para isotopoId === "i131" -- ver esI131/guardar() más abajo. El N°
   // de Ficha, nombre, DNI, médico responsable y lote ya están arriba
   // (compartidos con Tc-99m/Lutecio, mismo campo/misma numeración diaria
@@ -284,6 +295,11 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
   // mostrar algo legible, ver extraccionesParaVincular).
   const [extraccionVinculada, setExtraccionVinculada] = useState("");
   const [sinExtraccionVial, setSinExtraccionVial] = useState(false);
+  // Respaldo de la extracción elegida antes de borrarla al tildar "cápsula
+  // sellada" -- se restaura al destildar SOLO si sigue disponible (nadie la
+  // vinculó a otra dosis mientras tanto). Ref, no state: no debe
+  // re-renderizar ni sobrevivir más que el ciclo tildar/destildar.
+  const backupExtraccionVinculada = useRef(null);
   const [extraccionesI131, setExtraccionesI131] = useState([]);
   const [vialesI131, setVialesI131] = useState([]);
   const [mibgI131, setMibgI131] = useState([]);
@@ -681,6 +697,22 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
     return `${lotes} · ${e.actividadMedida.toFixed(2)} mCi medido · ${fmtTs(e.fecha)}`;
   }
 
+  // Al tildar "cápsula sellada": respalda la extracción vinculada antes de
+  // borrarla. Al destildar: la restaura SOLO si sigue disponible (nadie la
+  // vinculó a otra dosis mientras tanto) -- si no, el campo queda vacío.
+  function toggleSinExtraccionVial(checked) {
+    if (checked) {
+      backupExtraccionVinculada.current = extraccionVinculada;
+      setSinExtraccionVial(true);
+      setExtraccionVinculada("");
+    } else {
+      setSinExtraccionVial(false);
+      const backup = backupExtraccionVinculada.current;
+      backupExtraccionVinculada.current = null;
+      if (backup && extraccionesDisponibles.some((e) => e.id === backup)) setExtraccionVinculada(backup);
+    }
+  }
+
   function guardar() {
     const fichaNormalizada = normalizarFicha(fichaNro);
     if (!fichaNormalizada || !nombre.trim() || !dni.trim() || fichaEstado?.tipo !== "ok") return;
@@ -881,6 +913,51 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
   // Administración). Sólo puede dispararse fuera de modo fecha real (ver
   // arriba), pero compara contra lotesRelevantes por si el modo cambia.
   const loteSinMarcacion = verTodoElStock && !!lote && !lotesRelevantes.some((l) => l.lote === lote);
+
+  // Al tildar "Ver todos los lotes en stock": respalda el lote antes de
+  // borrarlo. Al destildar: lo restaura SOLO si sigue figurando como
+  // marcado (lotesRelevantes, que vuelve a ser la lista activa apenas se
+  // destilda) -- si no, el campo queda vacío en vez de reaparecer con un
+  // dato que ya no corresponde.
+  function toggleVerTodoElStock(checked) {
+    if (checked) {
+      backupLoteVerTodoElStock.current = lote;
+      setVerTodoElStock(true);
+      setLote(""); setConfirmoSinMarcacion(false);
+    } else {
+      setVerTodoElStock(false);
+      const backup = backupLoteVerTodoElStock.current;
+      backupLoteVerTodoElStock.current = null;
+      if (backup && lotesRelevantes.some((l) => l.lote === backup)) setLote(backup);
+    }
+  }
+
+  // Al tildar "No requiere marcación de radiofármaco": respalda
+  // farmId/lote antes de borrarlos. Al destildar: los restaura SOLO si
+  // siguen siendo válidos en ESE momento -- el radiofármaco sigue
+  // existiendo en la sede, y el lote sigue figurando como marcado para ese
+  // radiofármaco (recalculado a mano acá porque lotesEnStock/lotesRelevantes
+  // todavía reflejan el farmId actual, que en este punto sigue vacío).
+  function toggleSinRadiofarmaco(checked) {
+    if (checked) {
+      backupSinRadiofarmaco.current = { farmId, lote };
+      setSinRadiofarmaco(true);
+      setFarmId(""); setLote(""); setVerTodoElStock(false); setConfirmoSinMarcacion(false);
+    } else {
+      setSinRadiofarmaco(false);
+      const backup = backupSinRadiofarmaco.current;
+      backupSinRadiofarmaco.current = null;
+      if (backup?.farmId && farmsDeSede(catalogo, sedeId).some((f) => f.id === backup.farmId)) {
+        setFarmId(backup.farmId);
+        if (backup.lote) {
+          const lotesEnStockBackup = (catalogo.stock[sedeId]?.[backup.farmId] || []).filter((l) => l.cantidad > 0);
+          const marcadosRawBackup = mostrarFechaReal ? marcadosFechaRaw : marcadosHoyRaw;
+          const lotesRelevantesBackup = dedupeLotesPorFarm(marcadosRawBackup, backup.farmId, lotesEnStockBackup);
+          if (lotesRelevantesBackup.some((l) => l.lote === backup.lote)) setLote(backup.lote);
+        }
+      }
+    }
+  }
 
   // "tc99m" (o ausente, actas viejas anteriores a este cambio) no se marca
   // con nada -- es el caso de siempre. Sólo Lutecio-177 se distingue en el
@@ -1468,11 +1545,14 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
                     <option key={e.id} value={e.id}>{etiquetaExtraccion(e)}</option>
                   ))}
                 </Sel>
-                <label className="flex items-start gap-2 text-sm text-gray-700">
-                  <input type="checkbox" className="w-4 h-4 accent-blue-600 mt-0.5" checked={sinExtraccionVial}
-                    onChange={(e) => { setSinExtraccionVial(e.target.checked); if (e.target.checked) setExtraccionVinculada(""); }} />
-                  <span>Es una cápsula sellada (sin extracción de vial)</span>
-                </label>
+                <CasilleroExcepcion
+                  className="mt-1 pt-3 border-t border-gray-200"
+                  inputClassName="w-4 h-4 accent-blue-600 mt-0.5"
+                  textClassName="text-sm text-gray-700"
+                  checked={sinExtraccionVial} onChange={toggleSinExtraccionVial}
+                  etiqueta="Es una cápsula sellada (sin extracción de vial)"
+                  mensajeActivo="Se guardará como cápsula sellada, sin extracción de vial."
+                />
               </div>
             )}
             {esI131 && tipoI131Actual.categoria === "mibg" && (
@@ -1519,14 +1599,14 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
                     Radiofármaco/Lote y se limpia lo que hubiera elegido. No
                     se registra de qué elución salió el Tc-99m -- el único
                     rastro sigue siendo Libro 3. */}
-                <label className="sm:col-span-2 flex items-start gap-2 text-sm text-gray-700">
-                  <input type="checkbox" className="w-4 h-4 accent-blue-600 mt-0.5" checked={sinRadiofarmaco}
-                    onChange={(e) => {
-                      setSinRadiofarmaco(e.target.checked);
-                      setFarmId(""); setLote(""); setVerTodoElStock(false); setConfirmoSinMarcacion(false);
-                    }} />
-                  <span>No requiere marcación de radiofármaco (Tc-99m puro)</span>
-                </label>
+                <CasilleroExcepcion
+                  className="sm:col-span-2 mb-3 pb-3 border-b border-gray-200"
+                  inputClassName="w-4 h-4 accent-blue-600 mt-0.5"
+                  textClassName="text-sm text-gray-700"
+                  checked={sinRadiofarmaco} onChange={toggleSinRadiofarmaco}
+                  etiqueta="No requiere marcación de radiofármaco (Tc-99m puro)"
+                  mensajeActivo="Se guardará SIN marcación de radiofármaco."
+                />
                 {!sinRadiofarmaco && (<>
                 <Sel label="Radiofármaco utilizado" value={farmId} onChange={(e) => { setFarmId(e.target.value); setLote(""); }}>
                   <option value="">Seleccionar...</option>
@@ -1569,11 +1649,15 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
                       opciones en ese modo son los lotes de la fecha real, o
                       el texto libre de arriba si no hay ninguno. */}
                   {!mostrarFechaReal && (
-                    <label className="flex items-center gap-1.5 text-xs text-gray-500">
-                      <input type="checkbox" className="w-3.5 h-3.5 accent-blue-600" checked={verTodoElStock}
-                        onChange={(e) => { setVerTodoElStock(e.target.checked); setLote(""); setConfirmoSinMarcacion(false); }} />
-                      Ver todos los lotes en stock (excepcional)
-                    </label>
+                    <CasilleroExcepcion
+                      className="mt-3 pt-3 border-t border-gray-200"
+                      wrapClassName="flex items-center gap-1.5"
+                      inputClassName="w-3.5 h-3.5 accent-blue-600"
+                      textClassName="text-xs text-gray-500"
+                      checked={verTodoElStock} onChange={toggleVerTodoElStock}
+                      etiqueta="Ver todos los lotes en stock (excepcional)"
+                      mensajeActivo="Estás eligiendo un lote que no figura como marcado hoy."
+                    />
                   )}
                   {!mostrarFechaReal && !verTodoElStock && farmId && lotesMarcadosHoy.length === 0 && (
                     <p className="text-xs text-amber-600">Ningún lote de este radiofármaco fue marcado hoy en esta sede.</p>
@@ -1583,11 +1667,14 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
                       lote que NO fue marcado (hoy, o la fecha real), esta
                       confirmación es obligatoria para poder guardar. */}
                   {loteSinMarcacion && (
-                    <label className="flex items-start gap-2 text-xs text-red-700 bg-red-50 border border-red-200 rounded-xl px-3 py-2 mt-1">
-                      <input type="checkbox" className="w-3.5 h-3.5 accent-red-600 mt-0.5" checked={confirmoSinMarcacion}
-                        onChange={(e) => setConfirmoSinMarcacion(e.target.checked)} />
-                      <span>Confirmo que este lote NO fue marcado hoy en Libro 1 -- voy a corregir el registro de Marcación por separado.</span>
-                    </label>
+                    <CasilleroExcepcion
+                      className="mt-1 bg-red-50 border border-red-200 rounded-xl px-3 py-2"
+                      wrapClassName="flex items-start gap-2"
+                      inputClassName="w-3.5 h-3.5 accent-red-600 mt-0.5"
+                      textClassName="text-xs text-red-700"
+                      checked={confirmoSinMarcacion} onChange={setConfirmoSinMarcacion}
+                      etiqueta="Confirmo que este lote NO fue marcado hoy en Libro 1 -- voy a corregir el registro de Marcación por separado."
+                    />
                   )}
                 </div>
                 </>)}

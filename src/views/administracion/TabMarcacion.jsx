@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Badge } from "../../components/ui/Badge.jsx";
 import { Btn } from "../../components/ui/Btn.jsx";
 import { Input } from "../../components/ui/Input.jsx";
 import { Sel } from "../../components/ui/Sel.jsx";
 import { ListaSeleccionable } from "../../components/ui/ListaSeleccionable.jsx";
+import { CasilleroExcepcion } from "../../components/ui/CasilleroExcepcion.jsx";
 import { ModalAnularActa } from "../../components/actas/ModalAnularActa.jsx";
 import { fmtF, fmtTs, fmtHora, fmtFechaISO, hoy, agruparPorFecha } from "../../helpers/formato.js";
 import { descargarArchivo } from "../../helpers/descargarArchivo.js";
@@ -67,6 +68,12 @@ export function TabMarcacion({ catalogo, usuario, esAdmin, onToast }) {
   // Libro 2 (tildarlo YA implica confirmoSinEgreso: true al guardar, sin
   // un segundo paso de confirmación aparte).
   const [verTodoElStock, setVerTodoElStock] = useState(false);
+  // Respaldo de lo que se borra al tildar "Ver todo el stock", para poder
+  // restaurarlo si se destilda sin querer (o se destilda a propósito) y el
+  // egreso elegido antes sigue vigente -- ver toggleVerTodoElStock. Ref, no
+  // state: no debe disparar un re-render ni sobrevivir a nada más que el
+  // ciclo tildar/destildar.
+  const backupVerTodoElStock = useRef(null);
   const [egresadosHoyRaw, setEgresadosHoyRaw] = useState([]);
   useEffect(() => { if (sedeId) return listenMovimientosEgresoHoy(sedeId, setEgresadosHoyRaw); }, [sedeId]);
 
@@ -111,6 +118,26 @@ export function TabMarcacion({ catalogo, usuario, esAdmin, onToast }) {
   );
   const lotesDisp = verTodoElStock ? lotesEnStock : egresosDisponibles;
   const hayEgresoDisponible = egresosDisponibles.some((l) => l.seleccionable);
+
+  // Al tildar: respalda lote/egresoMovimientoId antes de borrarlos (no se
+  // pierden si fue un toque sin querer). Al destildar: los restaura SOLO si
+  // ese egreso sigue disponible y no fue consumido entretanto -- si no, el
+  // campo queda vacío en vez de reaparecer con un dato que ya no es válido.
+  function toggleVerTodoElStock(checked) {
+    if (checked) {
+      backupVerTodoElStock.current = { lote, egresoMovimientoId };
+      setVerTodoElStock(true);
+      setLote(""); setEgresoMovimientoId("");
+    } else {
+      setVerTodoElStock(false);
+      const backup = backupVerTodoElStock.current;
+      backupVerTodoElStock.current = null;
+      const fila = backup?.egresoMovimientoId
+        ? egresosDisponibles.find((l) => l.id === backup.egresoMovimientoId && l.seleccionable !== false)
+        : null;
+      if (fila) { setLote(fila.lote); setEgresoMovimientoId(fila.id); }
+    }
+  }
 
   function guardar() {
     if (!farmId || !lote || !mciMarcacion) return;
@@ -362,11 +389,15 @@ export function TabMarcacion({ catalogo, usuario, esAdmin, onToast }) {
                   checkbox -- tildarlo ya manda confirmoSinEgreso: true al
                   guardar (ver guardar()), mismo criterio que sinRadiofarmaco
                   en Libro 2, sin un segundo paso de confirmación aparte. */}
-              <label className="flex items-center gap-1.5 text-xs text-gray-500">
-                <input type="checkbox" className="w-3.5 h-3.5 accent-blue-600" checked={verTodoElStock}
-                  onChange={(e) => { setVerTodoElStock(e.target.checked); setLote(""); setEgresoMovimientoId(""); }} />
-                Ver todo el stock (excepcional)
-              </label>
+              <CasilleroExcepcion
+                className="mt-3 pt-3 border-t border-gray-200"
+                wrapClassName="flex items-center gap-1.5"
+                inputClassName="w-3.5 h-3.5 accent-blue-600"
+                textClassName="text-xs text-gray-500"
+                checked={verTodoElStock} onChange={toggleVerTodoElStock}
+                etiqueta="Ver todo el stock (excepcional)"
+                mensajeActivo="Esta marcación se guardará SIN un egreso que la respalde."
+              />
               {!verTodoElStock && farmId && egresosDisponibles.length === 0 && (
                 <p className="text-xs text-amber-600">Ningún lote de este radiofármaco fue egresado hoy en esta sede.</p>
               )}
