@@ -5,6 +5,7 @@ import { Modal } from "../../components/ui/Modal.jsx";
 import { fmtTs, fmtHora } from "../../helpers/formato.js";
 import { descargarArchivo } from "../../helpers/descargarArchivo.js";
 import { actasPorPacienteDni } from "../../services/firestore/actas.js";
+import { esErrorDePermiso, esErrorSinConexion } from "../../helpers/erroresRed.js";
 import { TIPO_LABEL_I131, MOMENTO_LABEL } from "../../constants/tipoI131.js";
 
 // Historial completo de I-131 por paciente (Parte C, para auditorías ARN) --
@@ -21,12 +22,22 @@ const TIPOS_HISTORIAL_I131 = [
   "i131_captacion_resultado", "i131_seguimiento_fin",
 ];
 
+// Por consulta individual, no por el conjunto -- ver nota larga en el
+// useEffect de abajo sobre por qué (bug real: antes envolvía el Promise.all
+// entero, así que UNA consulta colgada tiraba todo el historial, las otras
+// 9 incluidas).
 const TIMEOUT_MS = 20000;
-const MSJ_TIMEOUT = "La consulta tardó demasiado, puede haber un problema de conexión -- intentá cerrar las otras pestañas de RadioFarm que tengas abiertas y reintentá.";
+const MSJ_TIMEOUT = "La consulta tardó demasiado, puede haber un problema de conexión.";
 
 function conTimeout(promesa, ms, mensaje) {
   let idTimeout;
-  const timeout = new Promise((_, reject) => { idTimeout = setTimeout(() => reject(new Error(mensaje)), ms); });
+  const timeout = new Promise((_, reject) => {
+    idTimeout = setTimeout(() => {
+      const e = new Error(mensaje);
+      e.esTimeoutPropio = true;
+      reject(e);
+    }, ms);
+  });
   return Promise.race([promesa, timeout]).finally(() => clearTimeout(idTimeout));
 }
 
@@ -34,6 +45,20 @@ function tsMillis(fecha) {
   if (!fecha) return 0;
   const d = typeof fecha?.toDate === "function" ? fecha.toDate() : new Date(fecha);
   return Number.isNaN(d.getTime()) ? 0 : d.getTime();
+}
+
+// Sólo para cuando las 10 consultas fallaron -- no hay nada que mostrar,
+// así que vale la pena traducir el motivo (a diferencia del aviso de
+// incompleto, que lista TIPOS que fallaron sin necesitar explicar por qué).
+// Se clasifica por el primer rechazo -- si las 10 fallaron por la misma
+// causa real (permiso o sin conexión), alcanza; si fuera una mezcla de
+// causas distintas, el mensaje genérico de abajo sigue siendo correcto
+// aunque menos específico.
+function mensajeErrorTotal(error) {
+  if (esErrorDePermiso(error)) return "No se pudo leer el historial: tu usuario no tiene permiso para uno o más tipos de registro.";
+  if (esErrorSinConexion(error)) return "No se pudo leer el historial: sin conexión.";
+  if (error?.esTimeoutPropio) return "No se pudo leer el historial: la consulta tardó demasiado.";
+  return "No se pudo leer el historial.";
 }
 
 function detalleFila(a) {
@@ -63,8 +88,14 @@ function filaCSV(a) {
   ];
 }
 
-function descargarCSV(lista, nombreArchivo) {
+// avisos: líneas de advertencia (incompleto/caché) que van COMO FILAS reales
+// arriba del encabezado -- no sólo en el toast -- porque el archivo puede
+// circular (mail, pendrive) sin el toast que lo acompañó al descargarlo. Una
+// sola celda por fila (no 17 columnas vacías) para que salte a la vista
+// apenas se abre en Excel/Sheets, sin poder confundirse con una fila de dato.
+function descargarCSV(lista, nombreArchivo, avisos) {
   const filas = [
+    ...avisos.map((a) => [a]),
     ["Fecha", "Hora", "Sede", "Tipo", "N° Ficha", "Paciente", "DNI", "Médico responsable", "Actividad administrada", "Unidad", "Lote", "Indicación", "Dosis vinculada (id)", "Momento", "%Captación", "Técnico", "Observación"],
     ...lista.map(filaCSV),
   ];
@@ -78,26 +109,73 @@ function descargarCSV(lista, nombreArchivo) {
 export function HistorialPacienteI131({ open, dni, sedeId, esAdmin, onClose, onToast }) {
   const [actas, setActas] = useState([]);
   const [cargando, setCargando] = useState(false);
-  const [error, setError] = useState(null);
+  // Tipos que no se pudieron leer (permiso, timeout propio, red, lo que
+  // sea) -- cada uno con su error real, para poder traducir el caso "las
+  // 10 fallaron" sin perder esa información.
+  const [tiposFallidos, setTiposFallidos] = useState([]);
+  // Firestore con persistencia offline no tira error sin conexión -- sirve
+  // en silencio lo último guardado en este dispositivo (ver nota en
+  // actasPorPacienteDni). Sin este aviso, un historial desactualizado se ve
+  // idéntico a uno fresco y completo.
+  const [huboCache, setHuboCache] = useState(false);
 
   useEffect(() => {
     if (!open || !dni) return;
     setCargando(true);
-    setError(null);
     setActas([]);
-    conTimeout(
-      Promise.all(TIPOS_HISTORIAL_I131.map((t) => actasPorPacienteDni(t, { dni, sedeId, esAdmin }))),
-      TIMEOUT_MS, MSJ_TIMEOUT
-    )
-      .then((resultados) => setActas(resultados.flat().sort((a, b) => tsMillis(b.fecha) - tsMillis(a.fecha))))
-      .catch((e) => setError(e.message || "No se pudo cargar el historial."))
-      .finally(() => setCargando(false));
+    setTiposFallidos([]);
+    setHuboCache(false);
+    // Bug real (encontrado y corregido en esta misma revisión): antes
+    // conTimeout envolvía el Promise.all ENTERO -- una sola consulta
+    // colgada (nunca resuelve, nunca rechaza) hacía que el timeout global
+    // reventara TODO el historial a los 20s, perdiendo los resultados de
+    // las 9 consultas que sí habían respondido. Ahora cada una tiene su
+    // propio timeout: una colgada cuenta como "ese tipo falló" (ver
+    // tiposFallidos) sin tocar a las demás. Promise.allSettled (no
+    // Promise.all) por el mismo motivo -- un permission-denied real en
+    // captacion_resultado/seguimiento_fin (el único caso hoy: ver
+    // firestore.rules#esTipoStockI131, exige accesoTerapiaI131 sólo para
+    // esos 2 tipos) no debe tirar los otros 8.
+    Promise.allSettled(
+      TIPOS_HISTORIAL_I131.map((t) => conTimeout(actasPorPacienteDni(t, { dni, sedeId, esAdmin }), TIMEOUT_MS, MSJ_TIMEOUT))
+    ).then((resultados) => {
+      const actasOk = [];
+      const fallidos = [];
+      let cache = false;
+      resultados.forEach((r, i) => {
+        if (r.status === "fulfilled") {
+          actasOk.push(...r.value.docs);
+          if (r.value.fromCache) cache = true;
+        } else {
+          fallidos.push({ tipo: TIPOS_HISTORIAL_I131[i], error: r.reason });
+        }
+      });
+      setActas(actasOk.sort((a, b) => tsMillis(b.fecha) - tsMillis(a.fecha)));
+      setTiposFallidos(fallidos);
+      setHuboCache(cache);
+    }).finally(() => setCargando(false));
   }, [open, dni, sedeId, esAdmin]);
+
+  const todosFallaron = tiposFallidos.length > 0 && tiposFallidos.length === TIPOS_HISTORIAL_I131.length;
+  const etiquetasFallidas = tiposFallidos.map(({ tipo }) => TIPO_LABEL_I131[tipo]?.label || tipo);
+
+  function avisosParaArchivo() {
+    const avisos = [];
+    if (tiposFallidos.length > 0) {
+      avisos.push(`AVISO: HISTORIAL INCOMPLETO -- no se pudieron leer ${tiposFallidos.length} de ${TIPOS_HISTORIAL_I131.length} tipos de registro: ${etiquetasFallidas.join(", ")}.`);
+    }
+    if (huboCache) {
+      avisos.push("AVISO: parte de estos datos viene del caché de este dispositivo (sin conexión al servidor en el momento de la consulta) -- puede no reflejar cargas recientes.");
+    }
+    return avisos;
+  }
 
   function descargar() {
     if (!actas.length) return;
-    descargarCSV(actas, `historial_i131_dni_${dni}.csv`);
-    onToast?.(`Historial exportado: ${actas.length} registro${actas.length !== 1 ? "s" : ""}`);
+    const avisos = avisosParaArchivo();
+    descargarCSV(actas, `historial_i131_dni_${dni}.csv`, avisos);
+    const sufijoIncompleto = avisos.length > 0 ? " -- INCOMPLETO, ver primera(s) fila(s) del archivo" : "";
+    onToast?.(`Historial exportado: ${actas.length} registro${actas.length !== 1 ? "s" : ""}${sufijoIncompleto}`);
   }
 
   const paciente = actas[0];
@@ -113,12 +191,27 @@ export function HistorialPacienteI131({ open, dni, sedeId, esAdmin, onClose, onT
         )}
         {!paciente && !cargando && <div className="text-sm text-gray-600">DNI {dni}</div>}
 
-        {error && <div className="bg-red-50 border border-red-200 text-red-700 text-xs rounded-xl px-3 py-2">{error}</div>}
-
         {cargando ? (
           <div className="text-center py-12 text-gray-400 text-sm">Buscando...</div>
+        ) : todosFallaron ? (
+          <div className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-xl px-3 py-2">
+            {mensajeErrorTotal(tiposFallidos[0].error)}
+          </div>
         ) : (
           <>
+            {(tiposFallidos.length > 0 || huboCache) && (
+              <div className="bg-amber-50 border border-amber-300 text-amber-800 text-sm rounded-xl px-3 py-2 flex flex-col gap-1">
+                {tiposFallidos.length > 0 && (
+                  <div>
+                    <span className="font-semibold">Historial incompleto:</span> no se pudieron leer {tiposFallidos.length} de {TIPOS_HISTORIAL_I131.length} tipos de registro -- {etiquetasFallidas.join(", ")}.
+                  </div>
+                )}
+                {huboCache && (
+                  <div>Parte de estos datos viene del caché de este dispositivo (sin conexión al servidor) -- puede no reflejar cargas recientes de otros técnicos.</div>
+                )}
+              </div>
+            )}
+
             <div className="flex items-center justify-between">
               <Badge color="blue">{actas.length} registro{actas.length !== 1 ? "s" : ""}</Badge>
               {actas.length > 0 && <Btn size="sm" variant="outline" onClick={descargar}>↓ Descargar historial de este paciente</Btn>}
@@ -144,7 +237,11 @@ export function HistorialPacienteI131({ open, dni, sedeId, esAdmin, onClose, onT
                 );
               })}
               {actas.length === 0 && (
-                <div className="text-center py-12 text-gray-400 text-sm">Sin registros de I-131 para este DNI.</div>
+                <div className="text-center py-12 text-gray-400 text-sm">
+                  {tiposFallidos.length > 0
+                    ? "No se pudo determinar el historial completo -- ver aviso arriba."
+                    : "Sin registros de I-131 para este DNI."}
+                </div>
               )}
             </div>
           </>

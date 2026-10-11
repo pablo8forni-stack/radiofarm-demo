@@ -106,7 +106,7 @@ export function actasMarcacionPorFecha(sedeId, fecha) {
 // evidencia de staging: firestore.rules exige resource.data.sedeId ==
 // miRol().sedeAuditando para admin, y Firestore no puede validar esa
 // condición en una consulta sin ningún filtro where("sedeId", ...) --
-// rechazaba las 9 consultas de HistorialPacienteI131 con permission-denied,
+// rechazaba las 10 consultas de HistorialPacienteI131 con permission-denied,
 // para cualquier paciente, siempre (nunca funcionó en la práctica, sólo se
 // notó al probar con un paciente de MIBG). Confirmado con Pablo: admin ve
 // el historial sólo de la sede que está auditando en ese momento, igual
@@ -114,11 +114,20 @@ export function actasMarcacionPorFecha(sedeId, fecha) {
 // único llamador. El `if` de abajo queda igual (sigue soportando sedeId
 // vacío si algún llamador futuro lo necesitara), pero ya no hay ningún
 // caso real que lo ejercite.
+//
+// fromCache (snap.metadata.fromCache): con persistencia offline habilitada
+// (ver firebase.js), un getDocs() sin conexión NO tira error -- devuelve en
+// silencio lo último guardado en IndexedDB de este dispositivo, como si
+// fuera una lectura fresca y completa. Probado contra staging real con la
+// red del browser cortada (Playwright context.setOffline): el resultado
+// completo (330 registros de prueba) volvió sin ningún error. Devolver este
+// flag es lo único que le permite a HistorialPacienteI131.jsx avisar que el
+// historial puede estar desactualizado, en vez de mostrarlo como confirmado.
 export async function actasPorPacienteDni(tipo, { dni, sedeId, esAdmin }) {
   const clausulas = [where("tipo", "==", tipo), where("pacienteDni", "==", dni)];
   if (!esAdmin || sedeId) clausulas.push(where("sedeId", "==", sedeId));
   const snap = await getDocs(query(actasCol, ...clausulas, orderBy("fecha", "desc")));
-  return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  return { docs: snap.docs.map((d) => ({ id: d.id, ...d.data() })), fromCache: snap.metadata.fromCache };
 }
 
 // N° de Ficha (Libro 2): CORREGIDO para ser por sede, no global (confirmado
