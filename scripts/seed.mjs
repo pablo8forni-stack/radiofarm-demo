@@ -48,8 +48,21 @@ async function seed() {
     });
   }
 
+  // Isótopos base (Tc-99m, Lutecio-177, I-131) -- mismos ids y mismo
+  // contenido que sembrarRadioisotoposBase() (services/firestore/
+  // radioisotopos.js). Bug real (investigado con Pablo): esta colección NO
+  // se sembraba acá, así que un proyecto nuevo o un reset completo la deja
+  // vacía -- Libro 2 esconde el interruptor "¿Es un caso distinto a
+  // Tc-99m?" por completo si no existen estos 3 ids exactos (ver
+  // isotoposCasoDistinto en TabPacientes.jsx), sin ningún aviso. merge:true
+  // -- correr este script de nuevo con los 3 ya presentes no cambia nada
+  // (idempotente), y no pisa un nombre que se haya editado a mano después.
+  batch.set(db.collection("radioisotopos").doc("tc99m"), { nombre: "Tc-99m" }, { merge: true });
+  batch.set(db.collection("radioisotopos").doc("lu177"), { nombre: "Lutecio-177" }, { merge: true });
+  batch.set(db.collection("radioisotopos").doc("i131"), { nombre: "I-131" }, { merge: true });
+
   await batch.commit();
-  console.log(`Catálogo sembrado: ${FARMS_DEFAULT.length} radiofármacos, ${SEDES.length} sedes, ${PROVEEDORES_DEFAULT.length} proveedores.`);
+  console.log(`Catálogo sembrado: ${FARMS_DEFAULT.length} radiofármacos, ${SEDES.length} sedes, ${PROVEEDORES_DEFAULT.length} proveedores, 3 isótopos base (Tc-99m, Lutecio-177, I-131).`);
   console.log("Stock, movimientos y actas quedan vacíos -- se cargan desde la app.");
 }
 
