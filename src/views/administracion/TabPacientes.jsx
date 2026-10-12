@@ -620,6 +620,21 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
   // (6 tipos, sin cambios de modelo).
   const isotoposCasoDistinto = (catalogo.radioisotopos || []).filter((i) => i.id === "lu177" || i.id === "i131");
 
+  // Bug real investigado con Pablo: un reset/proyecto nuevo puede dejar
+  // radioisotopos vacío (scripts/seed.mjs no lo sembraba -- ya corregido
+  // aparte) o alguien puede borrar lu177/i131 a mano -- en los dos casos el
+  // interruptor "¿Es un caso distinto a Tc-99m?" desaparece sin ningún
+  // aviso, silencioso. catalogo.cargando (CatalogoContext.jsx) distingue
+  // "todavía no llegó ninguna respuesta de Firestore" (no mostrar nada
+  // todavía) de "catálogo confirmado vacío/incompleto" (sí avisar) --
+  // onSnapshot entrega su primer snapshot incluso si la colección está
+  // vacía o sin conexión con caché local, así que esto no queda colgado
+  // esperando red.
+  const faltanIsotoposBase = catalogo.cargando ? [] : [
+    ...(isotoposCasoDistinto.some((i) => i.id === "i131") ? [] : ["I-131"]),
+    ...(isotoposCasoDistinto.some((i) => i.id === "lu177") ? [] : ["Lutecio-177"]),
+  ];
+
   const tipoI131Actual = TIPOS_I131.find((t) => t.id === tipoI131);
 
   // Aviso INFORMATIVO (nunca auto-completa ni preselecciona nada -- la
@@ -1440,6 +1455,11 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
                 toda la carga vive acá sin importar el isótopo -- Gestión
                 I-131 es sólo una vista de consulta de estos mismos
                 registros. */}
+            {faltanIsotoposBase.length > 0 && (
+              <div className="sm:col-span-2 bg-amber-50 border border-amber-300 text-amber-800 text-sm rounded-xl px-3 py-2">
+                No se encontró el catálogo de isótopos base: {faltanIsotoposBase.join(" y ")} no {faltanIsotoposBase.length > 1 ? "están" : "está"} disponible{faltanIsotoposBase.length > 1 ? "s" : ""}. Avisá al administrador.
+              </div>
+            )}
             {!mostrarIsotopo && isotoposCasoDistinto.length > 0 && (
               <div className="sm:col-span-2">
                 <button type="button" onClick={() => setMostrarIsotopo(true)} className="text-xs text-blue-600 hover:text-blue-800 underline underline-offset-2">

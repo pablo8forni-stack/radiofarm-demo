@@ -722,3 +722,48 @@ describe("TabPacientes -- 'Ver todos los lotes en stock' (CasilleroExcepcion): s
     expect(botonLote().textContent).toContain("Seleccionar lote...");
   });
 });
+
+// Bug real investigado con Pablo: un reset/proyecto nuevo (o alguien
+// borrando lu177/i131 a mano) deja el interruptor "¿Es un caso distinto a
+// Tc-99m?" invisible sin ningún aviso -- silencioso. Este aviso ámbar hace
+// visible esa falta para CUALQUIER rol (no sólo admin), apenas el catálogo
+// terminó de cargar.
+describe("TabPacientes -- aviso ámbar cuando faltan los isótopos base (I-131/Lutecio-177)", () => {
+  async function abrirFormCon(user, catalogoParcial) {
+    render(<TabPacientes catalogo={catalogoParcial} usuario={usuario} esAdmin={false} onToast={vi.fn()} nav={null} />);
+    await user.click(await screen.findByText("+ Manual"));
+  }
+
+  test("catálogo completo (I-131 y Lutecio-177 presentes): sin aviso", async () => {
+    const user = userEvent.setup();
+    await abrirFormCon(user, catalogo); // fixture de arriba, con los 3 isótopos
+
+    expect(screen.queryByText(/No se encontró el catálogo de isótopos base/)).toBeNull();
+  });
+
+  test("faltan los dos (I-131 y Lutecio-177): aviso con el texto exacto pedido", async () => {
+    const user = userEvent.setup();
+    const catalogoSinAmbos = { ...catalogo, radioisotopos: [{ id: "tc99m", nombre: "Tc-99m" }] };
+    await abrirFormCon(user, catalogoSinAmbos);
+
+    expect(screen.getByText('No se encontró el catálogo de isótopos base: I-131 y Lutecio-177 no están disponibles. Avisá al administrador.')).toBeTruthy();
+  });
+
+  test("falta sólo I-131 (Lutecio-177 presente): singular, nombra sólo el que falta", async () => {
+    const user = userEvent.setup();
+    const catalogoSinI131 = { ...catalogo, radioisotopos: [{ id: "tc99m", nombre: "Tc-99m" }, { id: "lu177", nombre: "Lutecio-177" }] };
+    await abrirFormCon(user, catalogoSinI131);
+
+    expect(screen.getByText("No se encontró el catálogo de isótopos base: I-131 no está disponible. Avisá al administrador.")).toBeTruthy();
+    // El interruptor sigue ofreciendo Lutecio-177, que sí está disponible.
+    expect(screen.getByText("¿Es un caso distinto a Tc-99m?")).toBeTruthy();
+  });
+
+  test("catálogo todavía cargando (cargando=true): sin aviso aunque falten los dos", async () => {
+    const user = userEvent.setup();
+    const catalogoCargando = { ...catalogo, radioisotopos: [], cargando: true };
+    await abrirFormCon(user, catalogoCargando);
+
+    expect(screen.queryByText(/No se encontró el catálogo de isótopos base/)).toBeNull();
+  });
+});

@@ -6,21 +6,41 @@ import { addRadioisotopo, updateRadioisotopo, deleteRadioisotopo, sembrarRadiois
 
 const VACIO = { nombre: "" };
 
+// Los 3 ids con comportamiento real atado en el código (ver nota larga en
+// services/firestore/radioisotopos.js) -- protegidos acá: no se pueden
+// editar ni borrar desde esta pantalla, y "+ Nuevo isótopo" rechaza
+// cualquier nombre que normalice a uno de estos 3, para que nunca se
+// generen como id aleatorio (que el resto de la app no reconoce).
+const IDS_BASE = new Set(["tc99m", "lu177", "i131"]);
+const NOMBRES_RESERVADOS = new Set(["tc99m", "lu177", "lutecio177", "i131"]);
+// minúsculas, sin espacios/guiones/puntos -- cubre "Lutecio-177",
+// "lutecio 177", "I131", "i-131", "Tc99m", "TC-99m", "Lu-177", etc. todas
+// la misma forma normalizada.
+function normalizarNombreIsotopo(nombre) {
+  return nombre.toLowerCase().replace(/[\s\-.]/g, "");
+}
+
 export function TabRadioisotopos({ catalogo, onToast }) {
   const [mNuevo, setMNuevo] = useState(false);
   const [mEditar, setMEditar] = useState(null);
   const [mEliminar, setMEliminar] = useState(null);
   const [form, setForm] = useState(VACIO);
+  const [errorForm, setErrorForm] = useState("");
   const [eliminando, setEliminando] = useState(false);
   const [restaurando, setRestaurando] = useState(false);
 
   const isotopos = catalogo.radioisotopos || [];
 
-  function abrirNuevo() { setForm(VACIO); setMNuevo(true); }
+  function abrirNuevo() { setForm(VACIO); setErrorForm(""); setMNuevo(true); }
   function abrirEditar(iso) { setForm({ nombre: iso.nombre }); setMEditar(iso); }
 
   async function agregar() {
     if (!form.nombre.trim()) return;
+    if (NOMBRES_RESERVADOS.has(normalizarNombreIsotopo(form.nombre))) {
+      setErrorForm('Tc-99m, Lutecio-177 e I-131 ya tienen su id especial reservado -- agregarlos acá crearía una entrada que Libro 2/Gestión I-131 NO reconoce. Si no aparecen ahí, usá "Restaurar isótopos base" en vez de cargarlos de nuevo.');
+      return;
+    }
+    setErrorForm("");
     try {
       await addRadioisotopo({ nombre: form.nombre.trim() });
       onToast(`${form.nombre.trim()} agregado`);
@@ -87,23 +107,33 @@ export function TabRadioisotopos({ catalogo, onToast }) {
       </div>
 
       <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
-        {isotopos.map((iso, i) => (
-          <div key={iso.id} className={`flex items-center justify-between gap-3 px-5 py-4 ${i < isotopos.length - 1 ? "border-b border-gray-50" : ""}`}>
-            <div>
-              <div className="font-semibold text-sm text-gray-800">{iso.nombre}</div>
-              <div className="text-xs text-gray-400 font-mono mt-0.5">{iso.id}</div>
+        {isotopos.map((iso, i) => {
+          const esBase = IDS_BASE.has(iso.id);
+          return (
+            <div key={iso.id} className={`flex items-center justify-between gap-3 px-5 py-4 ${i < isotopos.length - 1 ? "border-b border-gray-50" : ""}`}>
+              <div>
+                <div className="font-semibold text-sm text-gray-800">{iso.nombre}</div>
+                <div className="text-xs text-gray-400 font-mono mt-0.5">{iso.id}</div>
+                {esBase && <div className="text-xs text-blue-500 mt-0.5">Isótopo base del sistema -- no se puede editar ni borrar acá.</div>}
+              </div>
+              <div className="flex items-center gap-1.5">
+                {esBase ? (
+                  <span className="text-xs text-gray-300 px-2" title="Isótopo base del sistema -- protegido">Protegido</span>
+                ) : (
+                  <>
+                    <Btn size="sm" variant="ghost" onClick={() => abrirEditar(iso)}>Editar</Btn>
+                    <Btn size="sm" variant="ghost" onClick={() => setMEliminar(iso)}>Quitar</Btn>
+                  </>
+                )}
+              </div>
             </div>
-            <div className="flex items-center gap-1.5">
-              <Btn size="sm" variant="ghost" onClick={() => abrirEditar(iso)}>Editar</Btn>
-              <Btn size="sm" variant="ghost" onClick={() => setMEliminar(iso)}>Quitar</Btn>
-            </div>
-          </div>
-        ))}
+          );
+        })}
         {isotopos.length === 0 && <div className="text-center py-12 text-gray-400 text-sm">Sin isótopos cargados todavía.</div>}
       </div>
 
       <Modal open={mNuevo} title="Nuevo isótopo" onClose={() => setMNuevo(false)} size="sm">
-        <FormRadioisotopo form={form} setForm={setForm} onConfirm={agregar} onCancel={() => setMNuevo(false)} confirmLabel="Agregar" />
+        <FormRadioisotopo form={form} setForm={setForm} onConfirm={agregar} onCancel={() => setMNuevo(false)} confirmLabel="Agregar" error={errorForm} />
       </Modal>
 
       <Modal open={!!mEditar} title={`Editar — ${mEditar?.nombre}`} onClose={() => setMEditar(null)} size="sm">
