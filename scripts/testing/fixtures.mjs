@@ -85,11 +85,34 @@ function usuarioDe(persona) {
 // Inicia sesión como esa persona en el auth/db por defecto de la app real
 // (mismo singleton que usan egresoTransaction, transferenciaTransaction,
 // etc.). Si el usuario de Auth todavía no existe (primera corrida), lo crea.
+//
+// Bug real encontrado (Pablo, evidencia propia): el catch de abajo era
+// ciego (sin filtrar código) -- cualquier falla de signIn, sin importar la
+// causa real, caía a createUserWithEmailAndPassword, cuyo propio error
+// (auth/email-already-in-use cuando el usuario SÍ existe) era el único que
+// se veía nunca. Así, un auth/quota-exceeded real (cuota de verificación de
+// contraseñas de Firebase Auth agotada por demasiados intentos en poco
+// tiempo) quedaba disfrazado de "el usuario ya existe", sin ninguna pista
+// de la causa real ni del hecho de que reintentar en caliente sólo empeora
+// la cuota. Verificado contra el emulador (mismo SDK cliente, mismo mapeo
+// de códigos): un email que no existe da exactamente auth/user-not-found
+// -- ese es el único código que amerita "no existe, hay que crearlo".
+// Cualquier otro código (en especial auth/quota-exceeded) se relanza tal
+// cual, con un mensaje explícito de qué pasó y qué hacer.
 export async function loguearComo(persona) {
   if (auth.currentUser?.email === persona.email) return usuarioDe(persona);
   try {
     await signInWithEmailAndPassword(auth, persona.email, PASSWORD_TEST);
-  } catch {
+  } catch (e) {
+    if (e.code !== "auth/user-not-found") {
+      if (e.code === "auth/quota-exceeded") {
+        throw new Error(
+          `Cuota de verificación de contraseñas de Firebase Auth agotada (auth/quota-exceeded) al intentar loguear a ${persona.email}. ` +
+          `No reintentar en caliente -- esperar a que la cuota se libere antes de volver a correr los tests.`
+        );
+      }
+      throw e;
+    }
     await createUserWithEmailAndPassword(auth, persona.email, PASSWORD_TEST);
   }
   return usuarioDe(persona);
