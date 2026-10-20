@@ -14,8 +14,9 @@
 //
 // Motivos de descarte (vencimiento/derrame) excluidos -- mismo criterio que
 // ya tenía TabMarcacion.jsx: un egreso de descarte no es candidato de
-// marcación.
-const MOTIVOS_DESCARTE = ["Vencimiento", "Derrame / accidente"];
+// marcación. Constante compartida con ModalEgreso.jsx (única fuente de
+// verdad, antes duplicada acá).
+import { MOTIVOS_DESCARTE } from "../constants/motivosEgreso.js";
 
 function tsMillis(fecha) {
   if (!fecha) return 0;
@@ -38,7 +39,7 @@ export function egresosDisponiblesParaMarcar(egresadosHoyRaw, farmId, lotesEnSto
   return egresadosHoyRaw
     .filter((m) => m.farmId === farmId && !MOTIVOS_DESCARTE.includes(m.motivo))
     .map((m) => ({
-      id: m.id, lote: m.lote, fecha: m.fecha,
+      id: m.id, lote: m.lote, fecha: m.fecha, cantidad: m.cantidad,
       vencimiento: stockPorLote.get(m.lote)?.vencimiento,
       seleccionable: !consumidos.has(m.id),
     }))

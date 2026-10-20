@@ -57,9 +57,15 @@ test("egreso: descuenta stock del lote en la propia sede del técnico", async ()
   const { loteId } = await crearLoteDirecto(SEDE_A, FARM_ID, 5);
 
   await loguearComo(PERSONAS.tecnicoA);
+  // motivo "Vencimiento" (descarte), no "Estudio" -- firestore.rules exige
+  // cantidad == 1 para los motivos de marcación (ver movimientoValido/
+  // esMotivoDescarte), así que un cantidad > 1 con "Estudio" ahora sería
+  // rechazado por las reglas. El descarte conserva cantidad libre, que es
+  // justo lo que este test necesita para probar la resta de stock de más
+  // de un vial por transacción.
   await egresoTransaction({
     sedeId: SEDE_A, sedeNombre: NOMBRE_SEDE[SEDE_A], farm: FARM, loteId,
-    cantidad: 2, motivo: "Estudio", observacion: "", usuario: PERSONAS.tecnicoA, operacionId: uid(),
+    cantidad: 2, motivo: "Vencimiento", observacion: "", usuario: PERSONAS.tecnicoA, operacionId: uid(),
   });
 
   const snap = await getDoc(doc(db, "sedes", SEDE_A, "lotes", loteId));
@@ -78,9 +84,11 @@ test("egreso: conflicto -- dos egresos simultáneos sobre el mismo lote cuya sum
   // distintas (dos técnicos casi al mismo tiempo), no un reintento de la
   // misma -- si compartieran operacionId, la idempotencia haría que el
   // segundo sea un no-op silencioso en vez de rechazar por stock insuficiente.
+  // motivo "Vencimiento" (descarte) -- mismo motivo que el test anterior,
+  // misma razón: cantidad > 1 con "Estudio" ya no pasa la regla del servidor.
   const intento = () => egresoTransaction({
     sedeId: SEDE_A, sedeNombre: NOMBRE_SEDE[SEDE_A], farm: FARM, loteId,
-    cantidad: 3, motivo: "Estudio", observacion: "", usuario: PERSONAS.tecnicoA, operacionId: uid(),
+    cantidad: 3, motivo: "Vencimiento", observacion: "", usuario: PERSONAS.tecnicoA, operacionId: uid(),
   });
 
   const resultados = await Promise.allSettled([intento(), intento()]);

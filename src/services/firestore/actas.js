@@ -261,8 +261,11 @@ export function addActaPaciente(data) {
 // mismo lote sin ningún egreso real que la respalde -- el selector de
 // TabMarcacion.jsx deduplicaba por texto de lote (perdía la cuenta de
 // cuántos egresos existían) y el servidor no exigía nada contra
-// movimientos/stock. "1 egreso = 1 marcación", confirmado, sin excepción
-// por cantidad (siempre se egresa de a un vial).
+// movimientos/stock. "1 egreso = 1 marcación", confirmado -- firestore.rules
+// (movimientoValido/esMotivoDescarte) exige cantidad == 1 para los egresos
+// de marcación desde su creación; el descarte conserva cantidad libre, pero
+// nunca es candidato de marcación. Los egresos de antes de esa regla pueden
+// tener cantidad > 1 igual, sin que cambie nada acá.
 //
 // data.egresoMovimientoId (camino normal) o data.confirmoSinEgreso (checkbox
 // "Ver todo el stock", TabMarcacion.jsx) -- exactamente uno de los dos,

@@ -70,6 +70,72 @@ test("movimiento con cantidad negativa es rechazado", async () => {
   );
 });
 
+// Egreso: cantidad fija = 1 para los motivos de marcación (ver
+// movimientoValido/esMotivoDescarte en firestore.rules) -- el descarte
+// (Vencimiento/Derrame) conserva cantidad libre. Escrituras directas al SDK
+// cliente (saltando ModalEgreso.jsx, que desde esta misma tanda ya fuerza
+// cantidad = 1 del lado del cliente para esos motivos) -- exactamente el
+// escenario que esta regla tiene que cubrir.
+test("egreso motivo de marcación (Estudio) con cantidad 1 -- permitido", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  await addDoc(collection(db, "movimientos"), movimientoBase({ tipo: "egreso", motivo: "Estudio", cantidad: 1, loteId: "x" }));
+});
+
+test("egreso motivo de marcación (Estudio) con cantidad 2 -- rechazado", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  await assertPermissionDenied(() =>
+    addDoc(collection(db, "movimientos"), movimientoBase({ tipo: "egreso", motivo: "Estudio", cantidad: 2, loteId: "x" }))
+  );
+});
+
+test("egreso motivo de marcación (Otro) con cantidad 2 -- rechazado", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  await assertPermissionDenied(() =>
+    addDoc(collection(db, "movimientos"), movimientoBase({ tipo: "egreso", motivo: "Otro", cantidad: 2, loteId: "x" }))
+  );
+});
+
+test("egreso SIN motivo (bypass directo) con cantidad 2 -- rechazado (ausente no es descarte)", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  await assertPermissionDenied(() =>
+    addDoc(collection(db, "movimientos"), movimientoBase({ tipo: "egreso", cantidad: 2, loteId: "x" }))
+  );
+});
+
+test("egreso SIN motivo (bypass directo) con cantidad 1 -- permitido (sin cambios de comportamiento previo)", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  await addDoc(collection(db, "movimientos"), movimientoBase({ tipo: "egreso", cantidad: 1, loteId: "x" }));
+});
+
+test("egreso motivo de descarte (Vencimiento) con cantidad 3 -- permitido", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  await addDoc(collection(db, "movimientos"), movimientoBase({ tipo: "egreso", motivo: "Vencimiento", cantidad: 3, loteId: "x" }));
+});
+
+test("egreso motivo de descarte (Derrame / accidente) con cantidad 5 -- permitido", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  await addDoc(collection(db, "movimientos"), movimientoBase({ tipo: "egreso", motivo: "Derrame / accidente", cantidad: 5, loteId: "x" }));
+});
+
+// Controles: la cláusula nueva sólo mira tipo == 'egreso' -- ingreso,
+// transferencia y anulación no deberían verse afectados por nada de esto,
+// sin importar la cantidad (creados por admin, que sí puede esos tipos).
+test("ingreso con cantidad 10 -- permitido (sin motivo, tipo distinto de egreso)", async () => {
+  await loguearComo(PERSONAS.admin);
+  await addDoc(collection(db, "movimientos"), movimientoBase({
+    tipo: "ingreso", cantidad: 10, loteId: "x",
+    usuarioEmail: PERSONAS.admin.email, usuarioNombre: PERSONAS.admin.nombre,
+  }));
+});
+
+test("transferencia_salida con cantidad 7 -- permitido (tipo distinto de egreso)", async () => {
+  await loguearComo(PERSONAS.admin);
+  await addDoc(collection(db, "movimientos"), movimientoBase({
+    tipo: "transferencia_salida", cantidad: 7, grupoId: "g1", sedeRelacionada: "italiano",
+    usuarioEmail: PERSONAS.admin.email, usuarioNombre: PERSONAS.admin.nombre,
+  }));
+});
+
 test("acta con mciAdministrados 0 es rechazada", async () => {
   await loguearComo(PERSONAS.tecnicoA);
   await assertPermissionDenied(() =>

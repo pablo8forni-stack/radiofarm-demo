@@ -378,7 +378,17 @@ export function TabMarcacion({ catalogo, usuario, esAdmin, onToast }) {
                   options={egresosDisponibles.map((l) => ({
                     value: l.id, label: `${l.lote} · ${fmtHora(l.fecha)} · Venc: ${fmtF(l.vencimiento)}`,
                     disabled: l.seleccionable === false,
-                    disabledHint: l.seleccionable === false ? "ya se usó en una marcación" : undefined,
+                    // Histórico de antes de la regla de cantidad == 1 (ver
+                    // firestore.rules): un egreso así puede tener más de un
+                    // vial aunque la marcación sólo haya consumido uno --
+                    // sin este aviso extra, la técnica no tiene forma de
+                    // saber que le queda stock de ese mismo egreso (ver caso
+                    // real, Pablo).
+                    disabledHint: l.seleccionable === false
+                      ? (l.cantidad > 1
+                          ? `ya se usó en una marcación — este egreso fue de ${l.cantidad} viales: para el resto, usá "Ver todo el stock (excepcional)"`
+                          : "ya se usó en una marcación")
+                      : undefined,
                   }))}
                 />
               )}

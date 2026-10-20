@@ -85,4 +85,12 @@ describe("egresosDisponiblesParaMarcar", () => {
   test("sin egresos -- lista vacía", () => {
     expect(egresosDisponiblesParaMarcar([], FARM, [], [], new Map())).toEqual([]);
   });
+
+  test("la cantidad del egreso se pasa tal cual, para el hint de un histórico cantidad > 1 ya consumido", () => {
+    const filas = egresosDisponiblesParaMarcar(
+      [{ id: "mov1", farmId: FARM, lote: "L1", fecha: ts("2026-09-27T09:00:00"), cantidad: 2 }],
+      FARM, [], [], new Map()
+    );
+    expect(filas[0].cantidad).toBe(2);
+  });
 });

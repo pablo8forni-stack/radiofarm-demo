@@ -198,9 +198,32 @@ service cloud.firestore {
       return ['ingreso', 'egreso', 'transferencia_salida', 'transferencia_entrada', 'anulacion'];
     }
 
+    // Egreso: cantidad fija = 1 para los motivos de marcación (Estudio,
+    // Control de calidad, Otro) -- el flujo real es un vial por egreso, una
+    // marcación por egreso (ver "1 egreso = 1 marcación" más abajo en
+    // actaValida()); si hacen falta más viales, son más egresos. El
+    // descarte (Vencimiento/Derrame -- vencido o derramado no se marca)
+    // conserva cantidad libre. Sólo gatilla en create (movimientos es
+    // create-only, ver más abajo): los egresos históricos con cantidad > 1
+    // de antes de esta regla no se re-validan nunca, quedan intactos y
+    // siguen siendo legibles para siempre.
+    //
+    // 'motivo' en sí no está validado como obligatorio en ningún otro lado
+    // de esta función (ver nota en services/firestore/movimientos.js) -- por
+    // eso acá se guarda con 'motivo' in d antes de comparar, en vez de dar
+    // por sentado que existe: un egreso sin motivo (ej. escritura directa
+    // por SDK, saltando ModalEgreso.jsx) no es descarte, así que también
+    // cae en la cláusula de abajo y necesita cantidad == 1.
+    function esMotivoDescarte(d) {
+      return 'motivo' in d && d.motivo in ['Vencimiento', 'Derrame / accidente'];
+    }
+
     // Valida contenido, no sólo permiso de escribir. Técnico sólo puede crear
     // 'egreso' (nunca ingreso, transferencia ni anulación) y siempre sobre su
-    // propia sede; admin no tiene esa restricción de tipo/sede.
+    // propia sede; admin no tiene esa restricción de tipo/sede -- pero SÍ
+    // queda sujeto, igual que el técnico, a la cláusula de cantidad == 1 de
+    // acá abajo: es una regla de negocio (qué es un egreso), no de permisos
+    // por rol.
     function movimientoValido() {
       let d = request.resource.data;
       return d.usuarioEmail == request.auth.token.email &&
@@ -214,7 +237,8 @@ service cloud.firestore {
         (!(d.tipo == 'ingreso' || d.tipo == 'egreso') || (d.loteId is string && d.loteId.size() > 0)) &&
         (!(d.tipo == 'transferencia_salida' || d.tipo == 'transferencia_entrada') ||
           (d.grupoId is string && d.grupoId.size() > 0 && d.sedeRelacionada is string)) &&
-        (d.tipo != 'anulacion' || (d.anulaId is string && d.anulaId.size() > 0));
+        (d.tipo != 'anulacion' || (d.anulaId is string && d.anulaId.size() > 0)) &&
+        (d.tipo != 'egreso' || esMotivoDescarte(d) || d.cantidad == 1);
     }
 
     match /movimientos/{movId} {
@@ -728,8 +752,15 @@ service cloud.firestore {
                         // cuáles ya se usaron, y el servidor no exigía nada
                         // contra movimientos/stock (pura validación de
                         // formato). "1 egreso = 1 marcación", confirmado --
-                        // sin excepción por cantidad (siempre se egresa de a
-                        // un vial). Mismo patrón exacto que MIBG/Lutecio-177:
+                        // movimientoValido() exige cantidad == 1 para los
+                        // egresos de marcación desde su creación (el
+                        // descarte conserva cantidad libre, pero nunca es
+                        // candidato acá -- ver MOTIVOS_DESCARTE/esMotivoDescarte()
+                        // más arriba). Los egresos de antes de esa regla
+                        // pueden tener cantidad > 1 igual -- no cambia nada
+                        // acá, la marcación sigue vinculada al MOVIMIENTO
+                        // entero, no a cuántos viales tenía. Mismo patrón
+                        // exacto que MIBG/Lutecio-177:
                         // la propia acta de marcación ES el marcador
                         // (marcacion_${egresoMovimientoId}_${n}), así que
                         // anularActaTransaction ya la libera gratis (crea
