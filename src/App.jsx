@@ -33,6 +33,8 @@ import { VistaHistorial } from "./views/VistaHistorial.jsx";
 import { VistaAdministracion } from "./views/administracion/VistaAdministracion.jsx";
 import { VistaTerapiaI131 } from "./views/VistaTerapiaI131.jsx";
 import { VistaConfiguracion } from "./views/configuracion/VistaConfiguracion.jsx";
+import { VistaAdministrativaFichas } from "./views/VistaAdministrativaFichas.jsx";
+import { TabAgendaI131 } from "./views/terapiaI131/TabAgendaI131.jsx";
 import { Badge } from "./components/ui/Badge.jsx";
 import { Btn } from "./components/ui/Btn.jsx";
 import { Toast } from "./components/ui/Toast.jsx";
@@ -54,7 +56,7 @@ export default function App() {
   if (usuario.sinAcceso) return <PantallaSinAcceso usuario={usuario} />;
 
   return (
-    <CatalogoProvider>
+    <CatalogoProvider rol={usuario.rol}>
       <AppAutenticada usuario={usuario} refrescarUsuario={refrescarUsuario} />
     </CatalogoProvider>
   );
@@ -62,7 +64,10 @@ export default function App() {
 
 function AppAutenticada({ usuario, refrescarUsuario }) {
   const catalogo = useCatalogo();
-  const [vista, setVista] = useState("inventario");
+  const esAdministrativa = usuario.rol === "administrativa";
+  // Default de "vista" por rol -- administrativa no tiene Inventario, su
+  // primera pantalla es la de fichas (ver navItems más abajo).
+  const [vista, setVista] = useState(() => (esAdministrativa ? "fichas" : "inventario"));
   const [toast, setToast] = useState(null);
   const [mostrarAcercaDe, setMostrarAcercaDe] = useState(false);
   const [mostrarSeguridad, setMostrarSeguridad] = useState(false);
@@ -220,14 +225,25 @@ function AppAutenticada({ usuario, refrescarUsuario }) {
     })
   );
 
-  const navItems = [
-    { id: "inventario", label: "Inventario", path: "M4 6h16M4 10h16M4 14h16M4 18h16" },
-    ...(esAdmin ? [{ id: "pedidos", label: "Pedidos", path: "M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" }] : []),
-    { id: "historial", label: "Historial", path: "M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" },
-    { id: "administracion", label: "Actas ARN", labelCorta: "Actas", path: "M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" },
-    { id: "terapia-i131", label: "Gestión I-131", labelCorta: "I-131", path: "M9.75 3.104v5.714a2.25 2.25 0 01-.659 1.591L5 14.5m4.75-11.396c.251.023.501.05.75.082m4.75-.082v5.714c0 .597.237 1.17.659 1.591L19.8 15.3m-5.55-12.196a24.301 24.301 0 00-4.5 0M19.8 15.3l-1.57.393A9.065 9.065 0 0112 15a9.065 9.065 0 00-6.23-.693L5 14.5m14.8.8l1.402 1.402c1.232 1.232.65 3.318-1.067 3.611A48.309 48.309 0 0112 21c-2.773 0-5.491-.235-8.135-.687-1.718-.293-2.3-2.379-1.067-3.61L5 14.5" },
-    ...(esAdmin ? [{ id: "configuracion", label: "Config.", path: "M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z M15 12a3 3 0 11-6 0 3 3 0 016 0z" }] : []),
-  ];
+  // administrativa (Fase 1A) tiene una navegación COMPLETAMENTE separada --
+  // nunca Inventario/Historial/Actas/Terapia I-131 (no lee el libro de
+  // actas, ni movimientos, ni stock/lotes -- ver firestore.rules). Sólo su
+  // pantalla de fichas y, si tiene el flag, la Agenda de turnos I-131
+  // (TabAgendaI131 directo, SIN pasar por VistaTerapiaI131 -- esa vista
+  // muestra "Registros"/"MIBG" sin ningún gate, no es segura para este rol).
+  const navItems = esAdministrativa
+    ? [
+        { id: "fichas", label: "Control de fichas", path: "M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" },
+        ...(usuario.accesoAgendaI131 ? [{ id: "agenda-i131", label: "Agenda I-131", labelCorta: "Agenda", path: "M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" }] : []),
+      ]
+    : [
+        { id: "inventario", label: "Inventario", path: "M4 6h16M4 10h16M4 14h16M4 18h16" },
+        ...(esAdmin ? [{ id: "pedidos", label: "Pedidos", path: "M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" }] : []),
+        { id: "historial", label: "Historial", path: "M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" },
+        { id: "administracion", label: "Actas ARN", labelCorta: "Actas", path: "M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" },
+        { id: "terapia-i131", label: "Gestión I-131", labelCorta: "I-131", path: "M9.75 3.104v5.714a2.25 2.25 0 01-.659 1.591L5 14.5m4.75-11.396c.251.023.501.05.75.082m4.75-.082v5.714c0 .597.237 1.17.659 1.591L19.8 15.3m-5.55-12.196a24.301 24.301 0 00-4.5 0M19.8 15.3l-1.57.393A9.065 9.065 0 0112 15a9.065 9.065 0 00-6.23-.693L5 14.5m14.8.8l1.402 1.402c1.232 1.232.65 3.318-1.067 3.611A48.309 48.309 0 0112 21c-2.773 0-5.491-.235-8.135-.687-1.718-.293-2.3-2.379-1.067-3.61L5 14.5" },
+        ...(esAdmin ? [{ id: "configuracion", label: "Config.", path: "M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z M15 12a3 3 0 11-6 0 3 3 0 016 0z" }] : []),
+      ];
 
   // countBadge por id, reusado tanto en el nav de arriba (desktop) como en la
   // barra inferior (mobile) -- un solo lugar para no repetir la lógica.
@@ -275,10 +291,10 @@ function AppAutenticada({ usuario, refrescarUsuario }) {
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z" />
                 </svg>
               </button>
-              <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold text-white ${esAdmin ? "bg-purple-500" : "bg-blue-500"}`}>{usuario.initial}</div>
+              <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold text-white ${esAdmin ? "bg-purple-500" : esAdministrativa ? "bg-orange-500" : "bg-blue-500"}`}>{usuario.initial}</div>
               <div className="hidden sm:block">
                 <div className="text-xs font-semibold text-gray-700 leading-tight">{usuario.nombre}</div>
-                <div className="text-xs leading-tight"><Badge color={esAdmin ? "purple" : "blue"}>{esAdmin ? "Responsable" : "Técnico"}</Badge></div>
+                <div className="text-xs leading-tight"><Badge color={esAdmin ? "purple" : esAdministrativa ? "orange" : "blue"}>{esAdmin ? "Responsable" : esAdministrativa ? "Administrativa" : "Técnico"}</Badge></div>
               </div>
               <button onClick={() => signOutUser()} className="text-gray-400 hover:text-red-500 rounded-lg hover:bg-red-50 transition min-w-11 min-h-11 md:min-w-0 md:min-h-0 flex items-center justify-center">
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -289,6 +305,15 @@ function AppAutenticada({ usuario, refrescarUsuario }) {
           </div>
         </div>
       </header>
+
+      {/* Fallo real de listenLotes() (no debería pasar nunca bajo las
+          reglas actuales) -- nunca se finge "sin stock" en silencio, ver
+          CatalogoContext.jsx. Persiste hasta recargar la página. */}
+      {catalogo.stockError && (
+        <div className="bg-red-600 text-white text-xs text-center py-1.5 px-2">
+          No se pudo cargar el stock — no confíes en los números de inventario hasta recargar la página. Si persiste, avisá al responsable.
+        </div>
+      )}
 
       {/* Nav superior: sólo md hacia arriba -- en mobile la reemplaza la barra inferior fija (más cerca del pulgar). */}
       <nav className="hidden md:block bg-white border-b border-gray-100">
@@ -336,12 +361,18 @@ function AppAutenticada({ usuario, refrescarUsuario }) {
       </nav>
 
       <main className="max-w-5xl mx-auto px-4 pt-6 pb-24 md:py-6">
-        {vista === "inventario" && <VistaInventario catalogo={catalogo} usuario={usuario} esAdmin={esAdmin} onToast={(m, t, d) => setToast({ m, t, d })} navInventario={navInventario} />}
-        {vista === "pedidos" && esAdmin && <VistaPedidos catalogo={catalogo} usuario={usuario} esAdmin={esAdmin} onToast={(m, t, d) => setToast({ m, t, d })} />}
-        {vista === "historial" && <VistaHistorial catalogo={catalogo} usuario={usuario} esAdmin={esAdmin} onToast={(m, t, d) => setToast({ m, t, d })} />}
-        {vista === "administracion" && <VistaAdministracion catalogo={catalogo} usuario={usuario} esAdmin={esAdmin} onToast={(m, t, d) => setToast({ m, t, d })} navAdministracion={navAdministracion} onIrAAdministracion={irAAdministracion} />}
-        {vista === "terapia-i131" && <VistaTerapiaI131 catalogo={catalogo} usuario={usuario} esAdmin={esAdmin} onToast={(m, t, d) => setToast({ m, t, d })} onIrAAdministracion={irAAdministracion} />}
-        {vista === "configuracion" && esAdmin && <VistaConfiguracion catalogo={catalogo} usuario={usuario} refrescarUsuario={refrescarUsuario} onToast={(m, t, d) => setToast({ m, t, d })} onIrAInventario={irAInventario} navConfiguracion={navConfiguracion} />}
+        {/* administrativa: SOLO estas 2 ramas, nunca las de abajo -- el
+            `&& !esAdministrativa` es defensa en profundidad (su navItems ya
+            no ofrece ningún botón hacia esas vistas, esto es el respaldo si
+            `vista` quedara en un valor viejo por cualquier otro motivo). */}
+        {vista === "fichas" && esAdministrativa && <VistaAdministrativaFichas usuario={usuario} onToast={(m, t, d) => setToast({ m, t, d })} />}
+        {vista === "agenda-i131" && esAdministrativa && usuario.accesoAgendaI131 && <TabAgendaI131 catalogo={catalogo} usuario={usuario} esAdmin={false} onToast={(m, t, d) => setToast({ m, t, d })} />}
+        {vista === "inventario" && !esAdministrativa && <VistaInventario catalogo={catalogo} usuario={usuario} esAdmin={esAdmin} onToast={(m, t, d) => setToast({ m, t, d })} navInventario={navInventario} />}
+        {vista === "pedidos" && esAdmin && !esAdministrativa && <VistaPedidos catalogo={catalogo} usuario={usuario} esAdmin={esAdmin} onToast={(m, t, d) => setToast({ m, t, d })} />}
+        {vista === "historial" && !esAdministrativa && <VistaHistorial catalogo={catalogo} usuario={usuario} esAdmin={esAdmin} onToast={(m, t, d) => setToast({ m, t, d })} />}
+        {vista === "administracion" && !esAdministrativa && <VistaAdministracion catalogo={catalogo} usuario={usuario} esAdmin={esAdmin} onToast={(m, t, d) => setToast({ m, t, d })} navAdministracion={navAdministracion} onIrAAdministracion={irAAdministracion} />}
+        {vista === "terapia-i131" && !esAdministrativa && <VistaTerapiaI131 catalogo={catalogo} usuario={usuario} esAdmin={esAdmin} onToast={(m, t, d) => setToast({ m, t, d })} onIrAAdministracion={irAAdministracion} />}
+        {vista === "configuracion" && esAdmin && !esAdministrativa && <VistaConfiguracion catalogo={catalogo} usuario={usuario} refrescarUsuario={refrescarUsuario} onToast={(m, t, d) => setToast({ m, t, d })} onIrAInventario={irAInventario} navConfiguracion={navConfiguracion} />}
       </main>
 
       {toast && <Toast msg={toast.m} type={toast.t || "success"} duracion={toast.d} onDone={() => setToast(null)} />}

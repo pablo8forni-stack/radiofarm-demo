@@ -73,6 +73,10 @@ export const PERSONAS = {
   admin: { email: "admin.test@radiofarm.local", nombre: "Admin de Prueba", rol: "admin", sede: SEDE_A },
   tecnicoA: { email: "tecnico.central.test@radiofarm.local", nombre: "Tecnico Central Test", rol: "tecnico", sede: SEDE_A },
   tecnicoB: { email: "tecnico.italiano.test@radiofarm.local", nombre: "Tecnico Italiano Test", rol: "tecnico", sede: SEDE_B },
+  // Fase 1A -- rol sin privilegios de técnico, sede propia igual que
+  // tecnicoA (misma sede a propósito, para poder comparar "mismo lugar,
+  // menos permiso" directo contra tecnicoA en los tests nuevos).
+  administrativa: { email: "administrativa.central.test@radiofarm.local", nombre: "Administrativa Central Test", rol: "administrativa", sede: SEDE_A },
   // A propósito sin rol/sede: es la persona usada para probar el flujo de
   // solicitudes de acceso desde cero.
   sinRol: { email: "sinrol.test@radiofarm.local", nombre: "Sin Rol Test" },
@@ -218,6 +222,7 @@ export async function prepararFixturesGlobales() {
 
   await setRol(PERSONAS.tecnicoA.email, { nombre: PERSONAS.tecnicoA.nombre, rol: "tecnico", sede: SEDE_A });
   await setRol(PERSONAS.tecnicoB.email, { nombre: PERSONAS.tecnicoB.nombre, rol: "tecnico", sede: SEDE_B });
+  await setRol(PERSONAS.administrativa.email, { nombre: PERSONAS.administrativa.nombre, rol: "administrativa", sede: SEDE_A });
 
   // sinRol nunca debe arrancar con rol ni solicitud pendiente -- por si una
   // corrida anterior la aprobó/creó y no se limpió (aprobar/rechazar borran

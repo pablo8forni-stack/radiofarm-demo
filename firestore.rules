@@ -168,7 +168,14 @@ service cloud.firestore {
       // el primer `isAdmin()` del OR. Crear/borrar lotes (ingreso, alta de
       // transferencia) sigue siendo sólo admin, igual que en la UI.
       match /lotes/{loteId} {
-        allow read: if tieneAcceso();
+        // Fase 1A (rol "administrativa"): no debe ver stock/lotes de
+        // ninguna sede -- a diferencia del resto de las colecciones donde
+        // admin tiene su propia rama separada, acá "técnico" y "admin" SIEMPRE
+        // comparten la misma condición de lectura (nunca hubo restricción
+        // por sede en read, ni siquiera para técnico, ver {path=**}/lotes
+        // más abajo) -- por eso el chequeo explícito de rol va directo en
+        // vez de agregar una rama nueva.
+        allow read: if tieneAcceso() && (isAdmin() || miRol().rol == 'tecnico');
         allow update: if isAdmin() || (
           miRol().rol == 'tecnico' && miRol().sede == sedeId &&
           request.resource.data.diff(resource.data).affectedKeys().hasOnly(['cantidad']) &&
@@ -188,7 +195,7 @@ service cloud.firestore {
     // para autorizar ese tipo de consulta -- si no está, el listener falla
     // con permission-denied aunque la regla anidada de arriba sea correcta.
     match /{path=**}/lotes/{loteId} {
-      allow read: if tieneAcceso();
+      allow read: if tieneAcceso() && (isAdmin() || miRol().rol == 'tecnico');
     }
 
     // movimientos y actas: inmutables por diseño (requisito 8) -- create-only,
@@ -242,8 +249,11 @@ service cloud.firestore {
     }
 
     match /movimientos/{movId} {
-      allow read: if tieneAcceso();
-      allow create: if tieneAcceso() && movimientoValido();
+      // Fase 1A: administrativa no ve movimientos (ni de su sede). Mismo
+      // criterio que lotes -- nunca hubo restricción por sede acá, el
+      // chequeo de rol va directo.
+      allow read: if tieneAcceso() && (isAdmin() || miRol().rol == 'tecnico');
+      allow create: if tieneAcceso() && (isAdmin() || miRol().rol == 'tecnico') && movimientoValido();
       allow update, delete: if false;
     }
 
@@ -382,12 +392,18 @@ service cloud.firestore {
       // permission-denied crudo en vez de ese mensaje (mismo patrón que el
       // bug de actas, misma función, no confirmado en producción pero
       // mismo riesgo).
+      // Fase 1A: administrativa no ve mibg_lote. 'sedeAuditando' in miRol()
+      // guardado explícito (bug real encontrado probando el endurecimiento
+      // de esta regla): un admin que nunca eligió sede a auditar no tiene
+      // ese campo en su doc -- sin el guard, acceder a él tira error en vez
+      // de false, y antes esto quedaba tapado porque la rama de abajo no
+      // miraba el rol y hacía match igual por la propia `sede` del admin.
       allow read: if tieneAcceso() && (
         resource == null ||
-        (isAdmin() && resource.data.sedeId == miRol().sedeAuditando) ||
-        resource.data.sedeId == miRol().sede
+        (isAdmin() && 'sedeAuditando' in miRol() && resource.data.sedeId == miRol().sedeAuditando) ||
+        (miRol().rol == 'tecnico' && resource.data.sedeId == miRol().sede)
       );
-      allow create: if tieneAcceso() && mibgLoteValido();
+      allow create: if tieneAcceso() && (isAdmin() || miRol().rol == 'tecnico') && mibgLoteValido();
       allow update, delete: if false;
     }
 
@@ -825,11 +841,25 @@ service cloud.firestore {
       // lote recién llegado). Sin este `||`, resource.data.sedeId sobre
       // un resource inexistente tira permission-denied para cualquier
       // rol no-admin.
+      // Fase 1A: administrativa no lee el libro de actas -- EXCEPTO las
+      // anulaciones de su propia sede (rama nueva más abajo), que necesita
+      // para saber qué fichas quedaron anuladas (control de fichas, ver
+      // VistaAdministrativaFichas.jsx). Esa rama es demostrable por los
+      // where() de listenAnulacionesActas (tipo+sedeId, ambos filtrados por
+      // la query) -- un intento de filtrar en cambio por el TIPO de la acta
+      // referenciada (anulaId) se probó y Firestore rechaza el list entero
+      // (no filtra documento por documento cuando la condición depende de
+      // un campo fuera del where()), así que no se intentó.
+      //
+      // 'sedeAuditando' in miRol() guardado explícito -- mismo motivo que
+      // mibg_lote arriba.
       allow read: if (tieneAcceso() && resource == null) ||
-        (isAdmin() && resource.data.sedeId == miRol().sedeAuditando) ||
-        (tieneAcceso() && miRol().sede == resource.data.sedeId &&
-         (!esTipoStockI131(resource.data.tipo) || tieneAccesoI131()));
-      allow create: if tieneAcceso() && actaValida(actaId);
+        (isAdmin() && 'sedeAuditando' in miRol() && resource.data.sedeId == miRol().sedeAuditando) ||
+        (tieneAcceso() && miRol().rol == 'tecnico' && miRol().sede == resource.data.sedeId &&
+         (!esTipoStockI131(resource.data.tipo) || tieneAccesoI131())) ||
+        (tieneAcceso() && miRol().rol == 'administrativa' && miRol().sede == resource.data.sedeId &&
+         resource.data.tipo == 'anulacion');
+      allow create: if tieneAcceso() && (isAdmin() || miRol().rol == 'tecnico') && actaValida(actaId);
       allow update, delete: if false;
     }
 
@@ -863,7 +893,9 @@ service cloud.firestore {
 
     match /generadoresVistos/{id} {
       allow read: if tieneAcceso();
-      allow create: if tieneAcceso() && generadorValido(id);
+      // Fase 1A: sin esto, administrativa podría fabricar un marcador falso
+      // (sin datos de paciente, pero igual escritura que no le corresponde).
+      allow create: if tieneAcceso() && (isAdmin() || miRol().rol == 'tecnico') && generadorValido(id);
       allow update, delete: if false;
     }
 
@@ -1056,8 +1088,22 @@ service cloud.firestore {
     }
 
     match /fichasUsadas/{id} {
-      allow read: if tieneAcceso();
-      allow create: if tieneAcceso() && fichaUsadaValida(id);
+      // Fase 1A: restringido a sede propia (antes era global -- ningún
+      // flujo de técnico/admin leía entre sedes, confirmado leyendo
+      // listenUltimaFicha/obtenerUltimaFicha/fechaFichaSiguiente/
+      // listenFichasUsadasRecientes, las 4 ya filtran por sedeId). Esto SÍ
+      // le da lectura a administrativa (su función es justo controlar
+      // esto) -- a diferencia de actas/movimientos/lotes, acá no hace
+      // falta chequear rol.
+      //
+      // resource == null: fichaIntentoHabilitado() necesita comprobar "¿ya
+      // se usó este número?" ANTES de que el marcador exista -- mismo
+      // motivo que el resource==null de actas/mibg_lote. Sin esto, CUALQUIER
+      // alta nueva (los 4 flujos) se rompía (confirmado probando).
+      allow read: if tieneAcceso() && (resource == null || isAdmin() || miRol().sede == resource.data.sedeId);
+      // Fase 1A: sólo admin/técnico pueden crear -- una ficha falsa de
+      // administrativa bloquearía ese número para un técnico real.
+      allow create: if tieneAcceso() && (isAdmin() || miRol().rol == 'tecnico') && fichaUsadaValida(id);
       allow update, delete: if false;
     }
 

@@ -11,7 +11,7 @@ import {
   crearLoteDirecto, borrarLote,
 } from "./fixtures.mjs";
 import { addActaI131Vial, addActaI131Extraccion } from "../../src/services/firestore/actas.js";
-import { setSedeAuditando } from "../../src/services/auth.js";
+import { setSedeAuditando, setRol } from "../../src/services/auth.js";
 import { LIMITE_FICHAS_USADAS } from "../../src/services/firestore/fichasDescartadas.js";
 
 before(async () => { await prepararFixturesGlobales(); });
@@ -587,6 +587,10 @@ test("acta con N° de ficha que YA tiene el intento 1 ACTIVO es rechazada, aunqu
 
 test("control positivo: acta con N° de ficha SIN marcador previo se acepta normalmente (intento 1)", async () => {
   await loguearComo(PERSONAS.admin);
+  // Fase 1A: leer una acta como admin exige sedeAuditando == la sede de la
+  // acta (antes esto hacía match "de prestado" por la propia `sede` del
+  // admin en la rama de técnico, sin mirar el rol -- ya corregido).
+  await setSedeAuditando(PERSONAS.admin.email, SEDE_A);
   const ficha = fichaDePrueba();
   const ref = await addDoc(collection(db, "actas"), {
     tipo: "i131_barrido", fecha: serverTimestamp(), sedeId: SEDE_A,
@@ -604,6 +608,9 @@ test("control positivo: acta con N° de ficha SIN marcador previo se acepta norm
 // ausencia de un choque -- ambas actas tienen que quedar creadas.
 test("control positivo: dos sedes distintas pueden usar el MISMO N° de Ficha sin chocar", async () => {
   await loguearComo(PERSONAS.admin);
+  // Fase 1A: ver nota de la prueba anterior -- se fija explícito antes del
+  // primer getDoc(refA), no sólo antes del de refB.
+  await setSedeAuditando(PERSONAS.admin.email, SEDE_A);
   const ficha = fichaDePrueba();
   const refA = await addDoc(collection(db, "actas"), {
     tipo: "i131_barrido", fecha: serverTimestamp(), sedeId: SEDE_A,
@@ -633,6 +640,8 @@ test("control positivo: dos sedes distintas pueden usar el MISMO N° de Ficha si
 // volver a guardar tras corregir un error de DNI.
 test("control positivo: anular la acta libera el intento 2 de la misma ficha", async () => {
   await loguearComo(PERSONAS.admin);
+  // Fase 1A: ver nota de la primera prueba de este bloque.
+  await setSedeAuditando(PERSONAS.admin.email, SEDE_A);
   const ficha = fichaDePrueba();
   const actaRef1 = doc(collection(db, "actas"));
   await setDoc(actaRef1, {
@@ -741,14 +750,23 @@ test("fichasUsadas no admite update ni delete (create-only)", async () => {
   await assertPermissionDenied(() => deleteDoc(ref));
 });
 
-test("control positivo: técnico de OTRA sede puede LEER un marcador fichasUsadas (lectura global -- la UNICIDAD es por sede, la lectura no)", async () => {
+// Fase 1A: la lectura de fichasUsadas pasó de global a restringida por
+// sede -- ningún flujo real leía entre sedes (listenUltimaFicha/
+// obtenerUltimaFicha/fechaFichaSiguiente/listenFichasUsadasRecientes, las 4
+// ya filtraban por sedeId), así que esto no le quita nada a nadie. Este
+// test afirmaba justo el comportamiento viejo que se decidió cambiar -- se
+// invierte para afirmar el nuevo.
+test("control positivo/negativo: fichasUsadas ahora es por sede -- técnico de OTRA sede NO puede leer un marcador de otra sede, técnico de la MISMA sede sí", async () => {
   await loguearComo(PERSONAS.admin);
   const ficha = fichaDePrueba();
   await setDoc(doc(db, "fichasUsadas", fichaUsadaId(SEDE_A, ficha, "1")), fichaUsadaDoc(ficha, "1", { sedeId: SEDE_A }));
 
   await loguearComo(PERSONAS.tecnicoB); // sede italiano == SEDE_B
+  await assertPermissionDenied(() => getDoc(doc(db, "fichasUsadas", fichaUsadaId(SEDE_A, ficha, "1"))));
+
+  await loguearComo(PERSONAS.tecnicoA); // sede central == SEDE_A
   const snap = await getDoc(doc(db, "fichasUsadas", fichaUsadaId(SEDE_A, ficha, "1")));
-  assert.ok(snap.exists(), "la lectura sigue siendo global -- cualquier sede tiene que poder ver el detalle de un marcador de otra, aunque ya no compitan por el mismo número");
+  assert.ok(snap.exists(), "la propia sede sigue pudiendo leer sus marcadores, sin cambios");
 });
 
 // Integración de punta a punta del mecanismo real (crearActaConFicha en
@@ -757,6 +775,8 @@ test("control positivo: técnico de OTRA sede puede LEER un marcador fichasUsada
 // la acta ni el marcador quedan creados (atómico).
 test("control positivo: batch acta+marcador de ficha (mecanismo real) se acepta, y un segundo batch con el mismo intento se rechaza entero", async () => {
   await loguearComo(PERSONAS.admin);
+  // Fase 1A: ver nota de la primera prueba de este bloque.
+  await setSedeAuditando(PERSONAS.admin.email, SEDE_A);
   const ficha = fichaDePrueba();
 
   const batch1 = writeBatch(db);
@@ -2845,4 +2865,160 @@ test("control positivo: admin SÍ puede escribir en estudios", async () => {
   const snap = await getDoc(doc(db, "estudios", "test-estudio"));
   assert.ok(snap.exists());
   await deleteDoc(doc(db, "estudios", "test-estudio"));
+});
+
+// =====================================================================
+// Fase 1A -- rol "administrativa". Casos positivos/negativos con el rol
+// real (PERSONAS.administrativa, no admin), más el barrido negativo de
+// escrituras pedido explícitamente: TODAS las colecciones del sistema,
+// incluido su propio doc de rol. Confirmado antes de agregar esto como
+// test permanente con corridas sueltas en el emulador (ver historial de
+// la investigación) -- acá queda como regresión de verdad.
+// =====================================================================
+
+test("administrativa: LEE anulaciones de su propia sede", async () => {
+  await loguearComo(PERSONAS.admin);
+  await setSedeAuditando(PERSONAS.admin.email, SEDE_A);
+  const anulaRef = doc(db, "actas", "anula_sweepAdm1");
+  await setDoc(anulaRef, { tipo: "anulacion", anulaId: "sweepAdm1", sedeId: SEDE_A, fecha: serverTimestamp(), motivo: "test", usuarioNombre: "x", usuarioEmail: PERSONAS.admin.email });
+
+  await loguearComo(PERSONAS.administrativa);
+  const snap = await getDoc(anulaRef);
+  assert.ok(snap.exists());
+});
+
+test("administrativa: NO lee anulaciones de OTRA sede", async () => {
+  await loguearComo(PERSONAS.admin);
+  const anulaRef = doc(db, "actas", "anula_sweepAdm2");
+  await setDoc(anulaRef, { tipo: "anulacion", anulaId: "sweepAdm2", sedeId: SEDE_B, fecha: serverTimestamp(), motivo: "test", usuarioNombre: "x", usuarioEmail: PERSONAS.admin.email });
+
+  await loguearComo(PERSONAS.administrativa); // sede central == SEDE_A
+  await assertPermissionDenied(() => getDoc(anulaRef));
+});
+
+test("administrativa: NO lee actas tipo paciente de su propia sede", async () => {
+  await loguearComo(PERSONAS.admin);
+  await setSedeAuditando(PERSONAS.admin.email, SEDE_A);
+  const ref = await addDoc(collection(db, "actas"), {
+    tipo: "paciente", fecha: serverTimestamp(), sedeId: SEDE_A, farmId: FARM_ID, lote: loteDePrueba(),
+    usuarioEmail: PERSONAS.admin.email, pacienteFicha: fichaDePrueba(), fichaIntentoNro: "1",
+    pacienteNombre: "X", pacienteDni: "1", isotopoId: "tc99m", mciAdministrados: 1, estudio: "Test",
+  });
+
+  await loguearComo(PERSONAS.administrativa);
+  await assertPermissionDenied(() => getDoc(ref));
+});
+
+test("administrativa: LEE fichasUsadas de su propia sede, NO de otra", async () => {
+  await loguearComo(PERSONAS.admin);
+  const ficha = fichaDePrueba();
+  await setDoc(doc(db, "fichasUsadas", fichaUsadaId(SEDE_A, ficha, "1")), fichaUsadaDoc(ficha, "1", { sedeId: SEDE_A }));
+  const fichaOtra = fichaDePrueba();
+  await setDoc(doc(db, "fichasUsadas", fichaUsadaId(SEDE_B, fichaOtra, "1")), fichaUsadaDoc(fichaOtra, "1", { sedeId: SEDE_B }));
+
+  await loguearComo(PERSONAS.administrativa);
+  const propia = await getDoc(doc(db, "fichasUsadas", fichaUsadaId(SEDE_A, ficha, "1")));
+  assert.ok(propia.exists());
+  await assertPermissionDenied(() => getDoc(doc(db, "fichasUsadas", fichaUsadaId(SEDE_B, fichaOtra, "1"))));
+});
+
+test("administrativa: SIN accesoAgendaI131, no puede crear turno ni pedidoSemanal", async () => {
+  await loguearComo(PERSONAS.administrativa);
+  await assertPermissionDenied(() => addDoc(collection(db, "turnos"), {
+    sedeId: SEDE_A, fechaTurno: "2027-01-01", pacienteNombre: "X", pacienteDni: "1", tipoDosis: "i131_barrido", estado: "confirmado",
+  }));
+  await assertPermissionDenied(() => setDoc(doc(db, "pedidosSemanales", `${SEDE_A}_sweep1`), { sedeId: SEDE_A, semana: "sweep1" }));
+});
+
+test("administrativa: CON accesoAgendaI131, SÍ puede crear turno y pedidoSemanal de su sede, NO de otra sede", async () => {
+  await loguearComo(PERSONAS.admin);
+  await setRol(PERSONAS.administrativa.email, { nombre: PERSONAS.administrativa.nombre, rol: "administrativa", sede: SEDE_A, accesoAgendaI131: true });
+
+  await loguearComo(PERSONAS.administrativa);
+  await addDoc(collection(db, "turnos"), {
+    sedeId: SEDE_A, fechaTurno: "2027-01-01", pacienteNombre: "X", pacienteDni: "1", tipoDosis: "i131_barrido", estado: "confirmado",
+  });
+  await setDoc(doc(db, "pedidosSemanales", `${SEDE_A}_sweep2`), { sedeId: SEDE_A, semana: "sweep2" });
+  await assertPermissionDenied(() => addDoc(collection(db, "turnos"), {
+    sedeId: SEDE_B, fechaTurno: "2027-01-01", pacienteNombre: "X", pacienteDni: "1", tipoDosis: "i131_barrido", estado: "confirmado",
+  }));
+
+  // Se restaura el flag a false -- no filtrar estado a los tests que corren después.
+  await loguearComo(PERSONAS.admin);
+  await setRol(PERSONAS.administrativa.email, { nombre: PERSONAS.administrativa.nombre, rol: "administrativa", sede: SEDE_A, accesoAgendaI131: false });
+});
+
+// Barrido negativo COMPLETO de escrituras -- todas las colecciones del
+// sistema, incluido su propio doc de rol (para descartar que pueda
+// cambiarse el rol a sí misma). Confirmado 23/23 correcto en una corrida
+// suelta antes de agregar esto como test permanente.
+test("administrativa: barrido negativo de escrituras sobre TODAS las colecciones", async () => {
+  await loguearComo(PERSONAS.admin);
+  const { loteId } = await crearLoteDirecto(SEDE_A, FARM_ID, 5);
+  await setDoc(doc(db, "mibg_lote", "sweepMibgLote1"), {
+    sedeId: SEDE_A, numeroLote: "L1", proveedor: "x", actividadCalibrada: 10, volumen: 5,
+    fechaHoraCalibracion: serverTimestamp(), fechaVencimiento: "2027-01-01", isotopoId: "mibg",
+    observacion: "", conformidad: true, usuarioEmail: PERSONAS.admin.email,
+  });
+
+  await loguearComo(PERSONAS.administrativa);
+
+  // roles -- su propio doc.
+  await assertPermissionDenied(() => setDoc(doc(db, "roles", PERSONAS.administrativa.email), { rol: "admin" }, { merge: true }));
+  await assertPermissionDenied(() => setDoc(doc(db, "roles", PERSONAS.administrativa.email), { sede: SEDE_B }, { merge: true }));
+  await assertPermissionDenied(() => setDoc(doc(db, "roles", "otro.sweep@x.com"), { rol: "tecnico", sede: SEDE_A, nombre: "x" }));
+
+  // catálogos -- sólo admin escribe.
+  await assertPermissionDenied(() => setDoc(doc(db, "farms", "farmSweep"), { nombre: "x", viales_x_kit: 1 }));
+  await assertPermissionDenied(() => addDoc(collection(db, "proveedores"), { nombre: "x" }));
+  await assertPermissionDenied(() => setDoc(doc(db, "radioisotopos", "isoSweep"), { nombre: "x" }));
+  await assertPermissionDenied(() => addDoc(collection(db, "estudios"), { nombre: "x" }));
+  await assertPermissionDenied(() => updateDoc(doc(db, "sedes", SEDE_A), { activo: true }));
+
+  // lotes -- ni leer ni escribir.
+  await assertPermissionDenied(() => getDoc(doc(db, "sedes", SEDE_A, "lotes", loteId)));
+  await assertPermissionDenied(() => updateDoc(doc(db, "sedes", SEDE_A, "lotes", loteId), { cantidad: 1 }));
+
+  // movimientos -- ni leer ni crear.
+  await assertPermissionDenied(() => getDocs(query(collection(db, "movimientos"), where("sedeId", "==", SEDE_A))));
+  await assertPermissionDenied(() => addDoc(collection(db, "movimientos"), {
+    tipo: "egreso", sedeId: SEDE_A, farmId: FARM_ID, lote: "x", loteId, cantidad: 1, motivo: "Estudio",
+    usuarioEmail: PERSONAS.administrativa.email, fecha: serverTimestamp(),
+  }));
+
+  // mibg_lote -- ni leer (uno real) ni crear.
+  await assertPermissionDenied(() => getDoc(doc(db, "mibg_lote", "sweepMibgLote1")));
+  await assertPermissionDenied(() => setDoc(doc(db, "mibg_lote", "sweepMibgLote2"), {
+    sedeId: SEDE_A, numeroLote: "L2", proveedor: "x", actividadCalibrada: 1, volumen: 1,
+    fechaHoraCalibracion: serverTimestamp(), fechaVencimiento: "2027-01-01", isotopoId: "mibg",
+    observacion: "", conformidad: true, usuarioEmail: PERSONAS.administrativa.email,
+  }));
+
+  // actas -- crear.
+  await assertPermissionDenied(() => addDoc(collection(db, "actas"), {
+    tipo: "paciente", fecha: serverTimestamp(), sedeId: SEDE_A, farmId: FARM_ID, lote: loteDePrueba(),
+    usuarioEmail: PERSONAS.administrativa.email, pacienteFicha: fichaDePrueba(), fichaIntentoNro: "1",
+    pacienteNombre: "X", pacienteDni: "1", isotopoId: "tc99m", mciAdministrados: 1, estudio: "Test",
+  }));
+
+  // fichasUsadas -- crear un marcador falso bloquearía un número real.
+  const fichaFalsa = fichaDePrueba();
+  await assertPermissionDenied(() => setDoc(
+    doc(db, "fichasUsadas", fichaUsadaId(SEDE_A, fichaFalsa, "1")),
+    fichaUsadaDoc(fichaFalsa, "1", { sedeId: SEDE_A, pacienteNombre: "Fantasma" })
+  ));
+
+  // generadoresVistos -- crear.
+  await assertPermissionDenied(() => setDoc(doc(db, "generadoresVistos", `${SEDE_A}_LOTESWEEP`), {
+    sedeId: SEDE_A, loteGenerador: "LOTESWEEP", actividadCalibrada: 1,
+    fechaCalibracion: "2027-01-01", fechaVencimiento: "2027-01-02", numeroGenerador: "N1",
+  }));
+
+  // fichasDescartadas -- ya exigía admin, confirma que sigue así.
+  await assertPermissionDenied(() => setDoc(doc(db, "fichasDescartadas", `${SEDE_A}_999_1`), {
+    sedeId: SEDE_A, numero: "999", intentoNro: "1", motivo: "x", usuarioEmail: PERSONAS.administrativa.email,
+  }));
+
+  // auditoria -- sólo admin.
+  await assertPermissionDenied(() => addDoc(collection(db, "auditoria"), { tipo: "restauracion_backup", usuarioEmail: PERSONAS.administrativa.email }));
 });

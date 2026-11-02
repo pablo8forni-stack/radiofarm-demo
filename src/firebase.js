@@ -3,8 +3,9 @@ import {
   initializeFirestore,
   persistentLocalCache,
   persistentMultipleTabManager,
+  connectFirestoreEmulator,
 } from "firebase/firestore";
-import { getAuth, GoogleAuthProvider } from "firebase/auth";
+import { getAuth, GoogleAuthProvider, connectAuthEmulator } from "firebase/auth";
 
 // Lee de import.meta.env (Vite, browser) o cae a process.env (Node, para los
 // scripts de prueba en scripts/testing/ que corren con `node --env-file`) --
@@ -45,3 +46,20 @@ export const db = initializeFirestore(app, persistente
 export const auth = getAuth(app);
 
 export const googleProvider = new GoogleAuthProvider();
+
+// SOLO DESARROLLO -- conecta a los emuladores locales de Firestore/Auth
+// cuando se corre `npm run dev` con VITE_USE_EMULATOR=1, para poder probar
+// la app real en el navegador con el login de Google FALSO del emulador de
+// Auth (sin cuenta de Google real, sin tocar ningún dato de staging/
+// producción). `import.meta.env.DEV` es una constante que Vite resuelve en
+// tiempo de build: `true` sólo en `vite dev`, SIEMPRE `false` en `vite
+// build` (staging o producción) sin importar nada en runtime -- por eso
+// esta rama entera se elimina del bundle real (confirmado: `dist/` no
+// contiene ninguna referencia a connectFirestoreEmulator/connectAuthEmulator
+// después de un build, ver verificación en el chat). No requiere ningún
+// cambio en firebase.json/firestore.rules -- usa las reglas reales tal
+// cual, sólo corriendo contra el emulador en vez de contra la nube.
+if (import.meta.env?.DEV && env("VITE_USE_EMULATOR") === "1") {
+  connectFirestoreEmulator(db, "127.0.0.1", 8080);
+  connectAuthEmulator(auth, "http://127.0.0.1:9099", { disableWarnings: true });
+}

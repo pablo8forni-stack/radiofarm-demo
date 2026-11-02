@@ -21,7 +21,15 @@ const movimientosCol = collection(db, "movimientos");
 // Un solo listener de app entera sobre todos los lotes de todas las sedes,
 // reagrupado a la forma {sedeId:{farmId:[lotes]}} — igual que el `estado.stock`
 // de la demo, para no tener que reescribir las tablas que ya leen esa forma.
-export function listenLotes(callback) {
+//
+// onError: el rol "administrativa" (Fase 1A) no tiene permiso para leer
+// lotes a propósito -- CatalogoContext.jsx no llama a esta función para ese
+// rol en absoluto, así que onError acá es sólo para un fallo REAL
+// (inesperado) de técnico/admin. Nunca se llama a `callback` en el error:
+// un error no es "sin stock", es "no sabemos el stock" -- confundir los dos
+// dejaría a un técnico creyendo que no hay nada cuando en realidad la
+// lectura falló. CatalogoContext.jsx decide qué mostrar ante ese error.
+export function listenLotes(callback, onError) {
   return onSnapshot(collectionGroup(db, "lotes"), (snap) => {
     const stock = {};
     snap.docs.forEach((d) => {
@@ -32,7 +40,7 @@ export function listenLotes(callback) {
       stock[sedeId][farmId].push({ id: d.id, ...lote });
     });
     callback(stock);
-  });
+  }, onError);
 }
 
 // Ingreso: siempre crea un lote nuevo (no mergea), no depende de leer nada

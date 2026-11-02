@@ -49,7 +49,9 @@ const MAX_HUECO_RAZONABLE = 500;
 // TabPacientes.jsx ya tiene para los badges "ANULADO", sin costo marginal) --
 // se filtran acá adentro por prefijo de anulaId, nunca se le pide al
 // llamador que las separe de antemano.
-function idsFichaAnulados(anulaciones) {
+// Exportada para VistaAdministrativaFichas.jsx (tabla de fichas, Fase 1A) --
+// mismo criterio que numerosActivos más abajo, no uno nuevo inventado ahí.
+export function idsFichaAnulados(anulaciones) {
   return new Set(
     anulaciones
       .map((a) => a.anulaId)

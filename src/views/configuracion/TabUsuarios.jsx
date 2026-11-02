@@ -12,6 +12,12 @@ function formatFecha(ts) {
   return ts.toDate().toLocaleString("es-AR", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 
+// Fase 1A: tercer rol, sin privilegios de técnico (no lee el libro de
+// actas, movimientos ni stock/lotes -- ver firestore.rules). Centralizado
+// acá para no repetir el ternario 4 veces (2 badges × desktop/mobile).
+function rolLabel(rol) { return rol === "admin" ? "Responsable" : rol === "administrativa" ? "Administrativa" : "Técnico"; }
+function rolColor(rol) { return rol === "admin" ? "purple" : rol === "administrativa" ? "orange" : "blue"; }
+
 export function TabUsuarios({ catalogo, roles, solicitudes, usuarioActual, onToast }) {
   const sedes = todasLasSedes(catalogo);
   const sedeDefault = (sedes.find((s) => s.principal) || sedes.find((s) => s.activo) || sedes[0])?.id;
@@ -139,9 +145,9 @@ export function TabUsuarios({ catalogo, roles, solicitudes, usuarioActual, onToa
                 <td className="px-4 py-3 text-xs text-gray-500 font-mono">{r.email}</td>
                 <td className="px-4 py-3 text-center">
                   <div className="flex items-center justify-center gap-1 flex-wrap">
-                    <Badge color={r.rol === "admin" ? "purple" : "blue"}>{r.rol === "admin" ? "Responsable" : "Técnico"}</Badge>
+                    <Badge color={rolColor(r.rol)}>{rolLabel(r.rol)}</Badge>
                     {r.rol === "tecnico" && r.accesoTerapiaI131 && <Badge color="teal">I-131</Badge>}
-                    {r.rol === "tecnico" && r.accesoAgendaI131 && <Badge color="orange">Agenda</Badge>}
+                    {(r.rol === "tecnico" || r.rol === "administrativa") && r.accesoAgendaI131 && <Badge color="orange">Agenda</Badge>}
                   </div>
                 </td>
                 <td className="px-4 py-3 text-center text-xs text-gray-600">{catalogo.sedes[r.sede]?.short || r.sede}</td>
@@ -163,9 +169,9 @@ export function TabUsuarios({ catalogo, roles, solicitudes, usuarioActual, onToa
                 <div className="text-xs text-gray-500 font-mono">{r.email}</div>
               </div>
               <div className="flex items-center gap-2 flex-wrap">
-                <Badge color={r.rol === "admin" ? "purple" : "blue"}>{r.rol === "admin" ? "Responsable" : "Técnico"}</Badge>
+                <Badge color={rolColor(r.rol)}>{rolLabel(r.rol)}</Badge>
                 {r.rol === "tecnico" && r.accesoTerapiaI131 && <Badge color="teal">I-131</Badge>}
-                {r.rol === "tecnico" && r.accesoAgendaI131 && <Badge color="orange">Agenda</Badge>}
+                {(r.rol === "tecnico" || r.rol === "administrativa") && r.accesoAgendaI131 && <Badge color="orange">Agenda</Badge>}
                 <span className="text-xs text-gray-600">{catalogo.sedes[r.sede]?.short || r.sede}</span>
               </div>
               <div className="flex gap-1.5 justify-end mt-1">
@@ -184,6 +190,7 @@ export function TabUsuarios({ catalogo, roles, solicitudes, usuarioActual, onToa
           <Input label="Nombre" value={form.nombre} onChange={(e) => setForm((f) => ({ ...f, nombre: e.target.value }))} placeholder="Carlos T." />
           <Sel label="Rol" value={form.rol} onChange={(e) => setForm((f) => ({ ...f, rol: e.target.value }))}>
             <option value="tecnico">Técnico</option>
+            <option value="administrativa">Administrativa</option>
             <option value="admin">Responsable (admin)</option>
           </Sel>
           <Sel label="Sede" value={form.sede} onChange={(e) => setForm((f) => ({ ...f, sede: e.target.value }))}>
@@ -200,8 +207,10 @@ export function TabUsuarios({ catalogo, roles, solicitudes, usuarioActual, onToa
           )}
           {/* Permiso SEPARADO del anterior -- pensado para poder darle acceso
               sólo a la agenda a personal administrativo, sin darle acceso a
-              cargar dosis ni ver cálculos clínicos. */}
-          {form.rol === "tecnico" && (
+              cargar dosis ni ver cálculos clínicos. También para el rol
+              "administrativa" (Fase 1A) -- es la única pantalla de técnico
+              que ese rol puede llegar a tener, con este flag. */}
+          {(form.rol === "tecnico" || form.rol === "administrativa") && (
             <label className="flex items-center gap-2 text-xs font-semibold text-gray-600 cursor-pointer">
               <input type="checkbox" className="w-4 h-4 accent-blue-600" checked={form.accesoAgendaI131}
                 onChange={(e) => setForm((f) => ({ ...f, accesoAgendaI131: e.target.checked }))} />
