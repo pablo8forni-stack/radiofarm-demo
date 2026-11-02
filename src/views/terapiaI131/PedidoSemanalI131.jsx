@@ -97,7 +97,11 @@ export function PedidoSemanalI131({ sedeId, semana, turnosSemana, onToast }) {
           return (
             <div key={b.id} className="bg-white/70 border border-purple-100 rounded-xl p-3 flex flex-col gap-3">
               <div className="text-xs font-bold text-purple-700">{b.label} ({fmtF(diaDeSemana(semana, b.offsetDia))})</div>
-              <div className="grid grid-cols-2 gap-2">
+              {/* grid-cols-1 sm:grid-cols-2, mismo patrón que la grilla de
+                  baldes más arriba (línea ~89) -- el input datetime-local
+                  no se achica bien en navegadores móviles y se salía del
+                  borde de la tarjeta a 2 columnas fijas en celular. */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                 <Input
                   label="Actividad esperada (mCi)" type="number" min={0} max={500}
                   value={form[b.campoActividad] ?? ""}
