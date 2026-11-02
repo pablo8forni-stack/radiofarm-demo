@@ -169,6 +169,26 @@ export function calcularHuecos(fichasUsadas, anulaciones, fichasDescartadas, sed
   return { huecos, saltosGrandes };
 }
 
+// Fase 1A, pantalla de administrativa (VistaAdministrativaFichas.jsx) --
+// clasifica cuáles de los `huecos` que YA calculó calcularHuecos
+// corresponden en realidad a una ficha anulada sin reemplazo (Pablo,
+// decisión "opción A": el flujo de anulación/descarte no cambia, esta
+// pantalla sólo lo explica).
+//
+// No repregunta contra idsFichaAnulados ni duplica ninguna lógica de
+// calcularHuecos -- por construcción, un número que calcularHuecos reporta
+// como hueco NUNCA puede tener un fichasUsadas activo (si lo tuviera,
+// numerosActivos ya lo habría excluido del hueco). Así que si existe
+// CUALQUIER documento de fichasUsadas con ese pacienteFichaNum, ese
+// documento tiene que estar anulado -- alcanza con comprobar que existe,
+// sin volver a mirar anulaciones acá.
+export function huecosYaAnulados(huecos, fichasUsadas, sedeId) {
+  const numerosConRegistro = new Set(
+    fichasUsadas.filter((f) => f.sedeId === sedeId).map((f) => f.pacienteFichaNum)
+  );
+  return huecos.filter((n) => numerosConRegistro.has(n));
+}
+
 // Fichas sospechosas de estar mal tipeadas -- vive todo el día (no gateado
 // a las 13:00 como el cartel de huecos, ver CartelFichasFaltantes.jsx),
 // pero el aviso VENCE a las 48hs (mismo criterio y mismo plazo que un

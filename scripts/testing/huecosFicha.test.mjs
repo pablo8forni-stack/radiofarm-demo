@@ -10,7 +10,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   calcularHuecos, calcularFichasSospechosas, calcularFichasSospechosasDelMes,
-  formatearListaFichas, UMBRAL_SOSPECHA, UMBRAL_SALTO_GRANDE,
+  formatearListaFichas, huecosYaAnulados, UMBRAL_SOSPECHA, UMBRAL_SALTO_GRANDE,
 } from "../../src/helpers/huecosFicha.js";
 
 const SEDE = "central";
@@ -288,4 +288,33 @@ test("calcularFichasSospechosasDelMes: sin ninguna ficha aislada, lista vacía",
   const actas = [actaDelMes(104), actaDelMes(105), actaDelMes(106)];
   const sospechosas = calcularFichasSospechosasDelMes(actas, new Map());
   assert.deepEqual(sospechosas, []);
+});
+
+// --- huecosYaAnulados (Fase 1A, VistaAdministrativaFichas.jsx) -- avisa
+// cuáles huecos ya calculados por calcularHuecos corresponden a una ficha
+// anulada sin reemplazo, sin repreguntar contra anulaciones ni recalcular
+// nada: la sola existencia de un fichasUsadas con ese número alcanza. ---
+
+test("huecosYaAnulados: un hueco con fichasUsadas (anulado) queda marcado", () => {
+  const huecos = [102];
+  const fichasUsadas = [ficha(102, 10)]; // existe un registro para el 102
+  assert.deepEqual(huecosYaAnulados(huecos, fichasUsadas, SEDE), [102]);
+});
+
+test("huecosYaAnulados: un hueco SIN ningún fichasUsadas (nunca se cargó) no se marca", () => {
+  const huecos = [103];
+  const fichasUsadas = []; // ningún registro para el 103 -- hueco real
+  assert.deepEqual(huecosYaAnulados(huecos, fichasUsadas, SEDE), []);
+});
+
+test("huecosYaAnulados: mezcla -- algunos huecos ya anulados, otros reales", () => {
+  const huecos = [102, 103, 104];
+  const fichasUsadas = [ficha(102, 10), ficha(104, 5)]; // 103 nunca se cargó
+  assert.deepEqual(huecosYaAnulados(huecos, fichasUsadas, SEDE), [102, 104]);
+});
+
+test("huecosYaAnulados: un registro de OTRA sede no cuenta", () => {
+  const huecos = [102];
+  const fichasUsadas = [{ ...ficha(102, 10), sedeId: "otra-sede" }];
+  assert.deepEqual(huecosYaAnulados(huecos, fichasUsadas, SEDE), []);
 });
