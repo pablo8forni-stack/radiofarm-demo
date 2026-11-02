@@ -13,6 +13,7 @@ import { fmtF, fmtTs, fmtHora, fmtFechaISO, hoy, capitalizarPalabras, agruparPor
 import { descargarArchivo } from "../../helpers/descargarArchivo.js";
 import { parseQR } from "../../helpers/qr.js";
 import { prepararSonidoEscaneo } from "../../helpers/feedbackEscaneo.js";
+import { registrarLog } from "../../helpers/debugLog.js";
 import { sedesActivas, farmsDeSede } from "../../helpers/stock.js";
 import { normalizarFicha, compararPorSedeYFichaDescendente } from "../../helpers/fichaPaciente.js";
 import { crearGuardDeSecuencia } from "../../helpers/guardSecuencia.js";
@@ -108,6 +109,12 @@ const TIPOS_I131 = [
   { id: "capt_centellograma", label: "Captación y Centellograma", categoria: "diagnostico", requierePermiso: true, fn: addActaI131CaptacionCentellograma },
 ];
 
+// INSTRUMENTACIÓN TEMPORAL (Pablo, investigación del lector QR lento con
+// wifi sin internet en Android) -- mismo flag que QRScanner.jsx (?debugQR=1
+// en la URL), duplicado acá a propósito: es instrumentación de usar y
+// tirar, no amerita un módulo compartido nuevo. Apagada por defecto.
+const DEBUG_QR = typeof window !== "undefined" && new URLSearchParams(window.location.search).get("debugQR") === "1";
+
 export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
   const [pacientesTodas, setPacientesTodas] = useState([]);
   const [ablativaI131, setAblativaI131] = useState([]);
@@ -120,6 +127,39 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
   const [loteExpandidoId, setLoteExpandidoId] = useState(null);
   const [mostrarForm, setMostrarForm] = useState(false);
   const [mostrarQR, setMostrarQR] = useState(false);
+  // Instrumentación temporal (ver DEBUG_QR arriba) -- statsQRRef acumula
+  // SIEMPRE (mientras DEBUG_QR esté prendido), nunca se resetea sola;
+  // statsQRAperturaRef guarda una foto de los contadores al abrir el
+  // escáner, así el cierre loguea la DIFERENCIA (lo que pasó mientras
+  // estuvo abierto) sin depender de resetear nada en el medio -- evita una
+  // carrera entre el render que abre el escáner (ya cuenta ese render) y el
+  // efecto que reaccionaría a mostrarQR (que corre después del commit).
+  const statsQRRef = useRef({ renders: 0, callbacks: {} });
+  const statsQRAperturaRef = useRef(null);
+  if (DEBUG_QR) statsQRRef.current.renders++;
+  function contarCallback(nombre, setter) {
+    if (!DEBUG_QR) return setter;
+    return (valor) => {
+      statsQRRef.current.callbacks[nombre] = (statsQRRef.current.callbacks[nombre] || 0) + 1;
+      setter(valor);
+    };
+  }
+  useEffect(() => {
+    if (!DEBUG_QR) return;
+    if (mostrarQR) {
+      statsQRAperturaRef.current = { renders: statsQRRef.current.renders, callbacks: { ...statsQRRef.current.callbacks } };
+      registrarLog("[QR debug] TabPacientes.jsx: escáner abierto, empieza a contar renders/callbacks");
+    } else if (statsQRAperturaRef.current) {
+      const inicio = statsQRAperturaRef.current;
+      const renders = statsQRRef.current.renders - inicio.renders;
+      const callbacks = {};
+      for (const k of new Set([...Object.keys(statsQRRef.current.callbacks), ...Object.keys(inicio.callbacks)])) {
+        callbacks[k] = (statsQRRef.current.callbacks[k] || 0) - (inicio.callbacks[k] || 0);
+      }
+      registrarLog(`[QR debug] TabPacientes.jsx: escáner cerrado -- renders mientras estuvo abierto: ${renders}, callbacks onSnapshot: ${JSON.stringify(callbacks)}`);
+      statsQRAperturaRef.current = null;
+    }
+  }, [mostrarQR]);
   const [filtroFecha, setFiltroFecha] = useState(hoy());
   // Sede efectiva de ESTA pantalla: fija (usuario.sede) para un técnico;
   // para admin, la que esté auditando ahora (sedeAuditando, elegida en
@@ -243,7 +283,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
   // activo). Ref, no state: no debe re-renderizar.
   const backupLoteVerTodoElStock = useRef(null);
   const [marcadosHoyRaw, setMarcadosHoyRaw] = useState([]);
-  useEffect(() => { if (sedeId) return listenActasMarcacionHoy(sedeId, setMarcadosHoyRaw); }, [sedeId]);
+  useEffect(() => { if (sedeId) return listenActasMarcacionHoy(sedeId, contarCallback("marcacionHoy", setMarcadosHoyRaw)); }, [sedeId]);
   // Carga tardía (mostrarFechaReal): mismos lotes marcados, pero de la
   // fecha real de atención en vez de hoy -- getDocs suelto (actasMarcacionPorFecha),
   // NO listener: un día pasado no cambia, no amerita onSnapshot en vivo.
@@ -307,8 +347,8 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
   const [mibgLoteSeleccionado, setMibgLoteSeleccionado] = useState("");
   const [lutecioLoteSeleccionado, setLutecioLoteSeleccionado] = useState("");
 
-  useEffect(() => { if (sedeEfectiva) return listenActas("paciente", setPacientesTodas, { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
-  useEffect(() => { if (sedeEfectiva) return listenAnulacionesActas(setAnulacionesRaw, { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
+  useEffect(() => { if (sedeEfectiva) return listenActas("paciente", contarCallback("paciente", setPacientesTodas), { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
+  useEffect(() => { if (sedeEfectiva) return listenAnulacionesActas(contarCallback("anulaciones", setAnulacionesRaw), { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
   // Un listener por tipo de I-131 (mismo criterio que dosis/barrido ya
   // tenían) -- dosisI131/ablativaI131 alimentan además el picker "Dosis
   // relacionada" de los 3 diagnósticos originales (ver dosisParaVincular;
@@ -320,24 +360,24 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
   // por hora para no dejar saltos de ficha sin explicación visible dentro
   // de la misma sede. La pestaña "Gestión I-131" (consulta) sigue siendo el
   // filtro específico de estos mismos 8 tipos, sin cambios.
-  useEffect(() => { if (sedeEfectiva) return listenActas("i131_ablativa", setAblativaI131, { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
-  useEffect(() => { if (sedeEfectiva) return listenActas("i131_dosis", setDosisI131, { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
-  useEffect(() => { if (sedeEfectiva) return listenActas("i131_barrido", setBarridosI131, { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
-  useEffect(() => { if (sedeEfectiva) return listenActas("i131_dosis_barrido", setDosisBarridoI131, { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
-  useEffect(() => { if (sedeEfectiva) return listenActas("i131_mibg", setMibgI131, { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
-  useEffect(() => { if (sedeEfectiva) return listenActas("i131_captacion", setCaptacionI131, { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
-  useEffect(() => { if (sedeEfectiva) return listenActas("i131_centellograma", setCentellogramaI131, { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
-  useEffect(() => { if (sedeEfectiva) return listenActas("i131_captacion_centellograma", setCaptCentellogramaI131, { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
+  useEffect(() => { if (sedeEfectiva) return listenActas("i131_ablativa", contarCallback("i131_ablativa", setAblativaI131), { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
+  useEffect(() => { if (sedeEfectiva) return listenActas("i131_dosis", contarCallback("i131_dosis", setDosisI131), { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
+  useEffect(() => { if (sedeEfectiva) return listenActas("i131_barrido", contarCallback("i131_barrido", setBarridosI131), { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
+  useEffect(() => { if (sedeEfectiva) return listenActas("i131_dosis_barrido", contarCallback("i131_dosis_barrido", setDosisBarridoI131), { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
+  useEffect(() => { if (sedeEfectiva) return listenActas("i131_mibg", contarCallback("i131_mibg", setMibgI131), { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
+  useEffect(() => { if (sedeEfectiva) return listenActas("i131_captacion", contarCallback("i131_captacion", setCaptacionI131), { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
+  useEffect(() => { if (sedeEfectiva) return listenActas("i131_centellograma", contarCallback("i131_centellograma", setCentellogramaI131), { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
+  useEffect(() => { if (sedeEfectiva) return listenActas("i131_captacion_centellograma", contarCallback("i131_captacion_centellograma", setCaptCentellogramaI131), { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
   // Parte A (Stock de viales), sólo para alimentar el picker "Extracción
   // relacionada" de abajo -- esta pantalla no es Gestión I-131 > Stock de
   // viales, no se edita nada acá, sólo se lee para armar el vínculo.
-  useEffect(() => { if (sedeEfectiva) return listenActas("i131_extraccion", setExtraccionesI131, { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
-  useEffect(() => { if (sedeEfectiva) return listenActas("i131_vial", setVialesI131, { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
+  useEffect(() => { if (sedeEfectiva) return listenActas("i131_extraccion", contarCallback("i131_extraccion", setExtraccionesI131), { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
+  useEffect(() => { if (sedeEfectiva) return listenActas("i131_vial", contarCallback("i131_vial", setVialesI131), { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
   // mibgLotes/mibgUsos no se mezclan en actasTodas (mibg_lote no es una
   // acta) -- alimentan sólo el picker "Lote disponible" de abajo, filtrado
   // en tiempo real: un lote usado por otra técnica desaparece para todos al
   // instante, sin importar el día (ver lotesMibgDisponibles).
-  useEffect(() => { if (sedeEfectiva) return listenMibgLotes(setMibgLotes, { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
+  useEffect(() => { if (sedeEfectiva) return listenMibgLotes(contarCallback("mibgLotes", setMibgLotes), { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
 
   // Pre-chequeo amigable (aviso inmediato antes de intentar guardar) -- la
   // garantía real es el choque server-side contra el marcador create-only

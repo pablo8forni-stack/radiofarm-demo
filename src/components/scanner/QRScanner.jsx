@@ -5,6 +5,17 @@ import { Html5QrcodeFallback } from "./Html5QrcodeFallback.jsx";
 import { avisarEscaneoExitoso } from "../../helpers/feedbackEscaneo.js";
 import { registrarLog } from "../../helpers/debugLog.js";
 
+// INSTRUMENTACIÓN TEMPORAL (Pablo, investigación del lector QR lento con
+// wifi sin internet en Android) -- activa SÓLO con ?debugQR=1 en la URL,
+// apagada por defecto. Mide, no cambia nada de la lógica de lectura: tiempo
+// hasta la primera lectura exitosa, intervalo entre frames del loop de
+// requestAnimationFrame y duración de cada detect() -- para confirmar o
+// descartar si los listeners onSnapshot de TabPacientes.jsx (ver
+// instrumentación paralela ahí) le compiten el hilo principal al loop de
+// detección cuando la red está en ese estado. Sacar este bloque (y el de
+// TabPacientes.jsx) una vez resuelta la investigación.
+const DEBUG_QR = typeof window !== "undefined" && new URLSearchParams(window.location.search).get("debugQR") === "1";
+
 // Nativo (BarcodeDetector, Chrome/Android) cuando está disponible; si no,
 // cae a html5-qrcode (Safari/iOS) -- requisito 5.
 export function QRScanner({ onResult, onClose }) {
@@ -18,8 +29,22 @@ function QRScannerNativo({ onResult, onClose }) {
   const [error, setError] = useState("");
   const [scanning, setScanning] = useState(false);
   const streamRef = useRef(null);
+  // Instrumentación temporal (ver comentario de DEBUG_QR arriba). aperturaRef
+  // se fija en startCamera() (abajo), apenas arranca el efecto de montaje --
+  // el momento más fiel a "se abrió el escáner" desde la perspectiva de la
+  // técnica. medicionRef acumula por segundo (mismo criterio de muestreo que
+  // ya usa Html5QrcodeFallback.jsx para no inundar el buffer de logs
+  // logueando por frame).
+  const aperturaRef = useRef(null);
+  const yaMidioAperturaRef = useRef(false);
+  const medicionRef = useRef({ frames: 0, sumaIntervalo: 0, maxIntervalo: 0, ultimoFrame: null, detects: 0, sumaDetect: 0, maxDetect: 0, ultimoLog: null });
 
   useEffect(() => {
+    if (DEBUG_QR) {
+      aperturaRef.current = performance.now();
+      medicionRef.current.ultimoLog = aperturaRef.current;
+      registrarLog("[QR debug] escáner nativo: abierto, empieza a medir");
+    }
     async function startCamera() {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
@@ -110,15 +135,59 @@ function QRScannerNativo({ onResult, onClose }) {
       const detector = new window.BarcodeDetector({ formats: ["qr_code"] });
       async function tick() {
         if (!active || !videoRef.current) return;
+        // Instrumentación temporal (ver DEBUG_QR arriba) -- intervalo entre
+        // frames, medido ANTES del detect() de este frame (así el tiempo que
+        // tarda detect() en sí queda aparte, en medicionRef.sumaDetect/
+        // maxDetect, sin mezclarse con el intervalo entre frames).
+        if (DEBUG_QR) {
+          const ahora = performance.now();
+          const m = medicionRef.current;
+          if (m.ultimoFrame != null) {
+            const intervalo = ahora - m.ultimoFrame;
+            m.frames += 1;
+            m.sumaIntervalo += intervalo;
+            if (intervalo > m.maxIntervalo) m.maxIntervalo = intervalo;
+          }
+          m.ultimoFrame = ahora;
+        }
         try {
+          const t0 = DEBUG_QR ? performance.now() : 0;
           const codes = await detector.detect(videoRef.current);
+          if (DEBUG_QR) {
+            const dt = performance.now() - t0;
+            const m = medicionRef.current;
+            m.detects += 1;
+            m.sumaDetect += dt;
+            if (dt > m.maxDetect) m.maxDetect = dt;
+          }
           if (codes.length > 0) {
+            if (DEBUG_QR && !yaMidioAperturaRef.current && aperturaRef.current != null) {
+              yaMidioAperturaRef.current = true;
+              registrarLog(`[QR debug] primera lectura exitosa a los ${(performance.now() - aperturaRef.current).toFixed(0)} ms de abrir el escáner`);
+            }
             avisarEscaneoExitoso();
             if (streamRef.current) streamRef.current.getTracks().forEach((t) => t.stop());
             onResult(codes[0].rawValue);
             return;
           }
         } catch {}
+        // Muestreo cada ~1s (no por frame) -- mismo criterio que ya usa
+        // Html5QrcodeFallback.jsx para no inundar el buffer de registrarLog.
+        if (DEBUG_QR) {
+          const m = medicionRef.current;
+          const ahora = performance.now();
+          if (m.ultimoLog != null && ahora - m.ultimoLog >= 1000) {
+            const avgIntervalo = m.frames ? m.sumaIntervalo / m.frames : 0;
+            const avgDetect = m.detects ? m.sumaDetect / m.detects : 0;
+            registrarLog(
+              `[QR debug] último segundo -- frames: ${m.frames} (intervalo avg=${avgIntervalo.toFixed(0)}ms, max=${m.maxIntervalo.toFixed(0)}ms) -- ` +
+              `detect(): ${m.detects} llamados (avg=${avgDetect.toFixed(0)}ms, max=${m.maxDetect.toFixed(0)}ms)`
+            );
+            m.frames = 0; m.sumaIntervalo = 0; m.maxIntervalo = 0;
+            m.detects = 0; m.sumaDetect = 0; m.maxDetect = 0;
+            m.ultimoLog = ahora;
+          }
+        }
         if (active) requestAnimationFrame(tick);
       }
       tick();
