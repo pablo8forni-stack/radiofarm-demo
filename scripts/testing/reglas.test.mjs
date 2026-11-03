@@ -703,6 +703,26 @@ test("control positivo: técnico SÍ puede crear un marcador fichasUsadas válid
   assert.ok(snap.exists());
 });
 
+// Fase 1B: pacienteDni, OPCIONAL a propósito -- el test de arriba (sin el
+// campo, fichaUsadaDoc no lo incluye por defecto) ya prueba el caso "cliente
+// viejo": sigue pasando sin cambios. Estos dos prueban los bordes nuevos.
+test("fichasUsadas CON pacienteDni válido es aceptado", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  const ficha = fichaDePrueba();
+  const ref = doc(db, "fichasUsadas", fichaUsadaId(SEDE_A, ficha, "1"));
+  await setDoc(ref, fichaUsadaDoc(ficha, "1", { usuarioEmail: PERSONAS.tecnicoA.email, pacienteDni: "12345678" }));
+  const snap = await getDoc(ref);
+  assert.equal(snap.data().pacienteDni, "12345678");
+});
+
+test("fichasUsadas con pacienteDni vacío (string vacío) es rechazado", async () => {
+  await loguearComo(PERSONAS.admin);
+  const ficha = fichaDePrueba();
+  await assertPermissionDenied(() =>
+    setDoc(doc(db, "fichasUsadas", fichaUsadaId(SEDE_A, ficha, "1")), fichaUsadaDoc(ficha, "1", { pacienteDni: "" }))
+  );
+});
+
 test("fichasUsadas con id que no coincide con sedeId_pacienteFicha_fichaIntentoNro es rechazado", async () => {
   await loguearComo(PERSONAS.admin);
   const ficha = fichaDePrueba();

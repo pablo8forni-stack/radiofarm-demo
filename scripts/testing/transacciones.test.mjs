@@ -11,6 +11,7 @@ import {
 } from "./fixtures.mjs";
 import { egresoTransaction, ingresoBatch, transferenciaTransaction } from "../../src/services/firestore/stock.js";
 import { addMibgLote, administrarMibgTransaction, administrarLutecioTransaction } from "../../src/services/firestore/mibgLotes.js";
+import { addActaPaciente, addActaI131Barrido } from "../../src/services/firestore/actas.js";
 import { FARMS_DEFAULT } from "../../src/constants/farmsSeed.js";
 import { uid } from "../../src/helpers/id.js";
 
@@ -240,4 +241,157 @@ test("MIBG: administrar un loteId inexistente da el mensaje amigable, no permiss
     }),
     /no existe/i
   );
+});
+
+// Fase 1B: pacienteDni en fichasUsadas -- ejercita las 4 transacciones de
+// carga REALES (no reglas en crudo) con y sin el campo, confirmando que
+// datosFichaUsada (actas.js) lo propaga tal cual en el marcador. I-131 usa
+// i131_barrido como representativo: los 8 tipos comparten exactamente la
+// misma función addActaI131()/crearActaConFicha(), sólo cambia el string
+// `tipo` -- no hay lógica distinta por tipo que probar acá.
+test("Tc-99m (addActaPaciente): CON pacienteDni, el marcador fichasUsadas lo tiene", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  const ficha = fichaDePrueba();
+  await addActaPaciente({
+    sedeId: SEDE_A, farmId: FARM_ID, lote: loteDePrueba(), mciAdministrados: 10,
+    pacienteFicha: ficha, fichaIntentoNro: "1", isotopoId: "tc99m",
+    pacienteNombre: "Paciente Test Tc99m", pacienteDni: "11111111", estudio: "Test",
+    usuarioNombre: PERSONAS.tecnicoA.nombre, usuarioEmail: PERSONAS.tecnicoA.email,
+  });
+  const fichaSnap = await getDoc(doc(db, "fichasUsadas", `${SEDE_A}_${ficha}_1`));
+  assert.equal(fichaSnap.data().pacienteDni, "11111111");
+});
+
+test("Tc-99m (addActaPaciente): SIN pacienteDni (cliente viejo), el marcador se crea igual, sin el campo", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  const ficha = fichaDePrueba();
+  await addActaPaciente({
+    sedeId: SEDE_A, farmId: FARM_ID, lote: loteDePrueba(), mciAdministrados: 10,
+    pacienteFicha: ficha, fichaIntentoNro: "1", isotopoId: "tc99m",
+    pacienteNombre: "Paciente Test Tc99m Viejo", estudio: "Test",
+    usuarioNombre: PERSONAS.tecnicoA.nombre, usuarioEmail: PERSONAS.tecnicoA.email,
+  });
+  const fichaSnap = await getDoc(doc(db, "fichasUsadas", `${SEDE_A}_${ficha}_1`));
+  assert.ok(fichaSnap.exists());
+  assert.equal(fichaSnap.data().pacienteDni, undefined);
+});
+
+test("I-131 (addActaI131Barrido, representativo de los 8 tipos): CON pacienteDni, el marcador lo tiene", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  const ficha = fichaDePrueba();
+  await addActaI131Barrido({
+    sedeId: SEDE_A, pacienteFicha: ficha, fichaIntentoNro: "1",
+    pacienteNombre: "Paciente Test I131", pacienteDni: "22222222",
+    usuarioNombre: PERSONAS.tecnicoA.nombre, usuarioEmail: PERSONAS.tecnicoA.email,
+  });
+  const fichaSnap = await getDoc(doc(db, "fichasUsadas", `${SEDE_A}_${ficha}_1`));
+  assert.equal(fichaSnap.data().pacienteDni, "22222222");
+});
+
+// A diferencia de Tc-99m/Lutecio-177 (tipo "paciente"), i131_barrido YA
+// exige pacienteDni como obligatorio en actaValida() (firestore.rules) --
+// esto es PRE-EXISTENTE, de antes de la Fase 1B, no algo que haya cambiado
+// acá. Un "cliente viejo sin DNI" no es un caso real posible para I-131:
+// el acta misma lo rechaza antes de llegar a fichasUsadas. Este test
+// documenta eso (rechazo, no éxito) en vez de fingir un escenario que no
+// puede pasar.
+test("I-131 (addActaI131Barrido): SIN pacienteDni es rechazado -- ya era obligatorio en el acta antes de la 1B", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  const ficha = fichaDePrueba();
+  await assert.rejects(() =>
+    addActaI131Barrido({
+      sedeId: SEDE_A, pacienteFicha: ficha, fichaIntentoNro: "1",
+      pacienteNombre: "Paciente Test I131 Sin DNI",
+      usuarioNombre: PERSONAS.tecnicoA.nombre, usuarioEmail: PERSONAS.tecnicoA.email,
+    })
+  );
+});
+
+test("MIBG: CON pacienteDni, el marcador fichasUsadas lo tiene", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  const numeroLote = `TEST-MIBG-DNI-${Date.now()}`;
+  const loteRef = await addMibgLote({
+    sedeId: SEDE_A, sedeNombre: "FUESMEN Central", isotopoId: "mibg",
+    numeroLote, proveedor: "Proveedor Test",
+    actividadCalibrada: 20, volumen: 2, fechaHoraCalibracion: new Date(),
+    fechaVencimiento: "2027-06-01", conformidad: true,
+    usuarioNombre: PERSONAS.tecnicoA.nombre, usuarioEmail: PERSONAS.tecnicoA.email, observacion: "",
+  });
+  const ficha = fichaDePrueba();
+  await administrarMibgTransaction(loteRef.id, {
+    sedeId: SEDE_A, sedeNombre: "FUESMEN Central",
+    pacienteFicha: ficha, pacienteNombre: "Paciente Test MIBG DNI", pacienteDni: "33333333",
+    numeroLote, actividadCalibrada: 20, volumen: 2, actividadAdministrada: 18,
+    usuarioNombre: PERSONAS.tecnicoA.nombre, usuarioEmail: PERSONAS.tecnicoA.email, observacion: "",
+  });
+  const fichaSnap = await getDoc(doc(db, "fichasUsadas", `${SEDE_A}_${ficha}_1`));
+  assert.equal(fichaSnap.data().pacienteDni, "33333333");
+});
+
+// MIBG usa tipo "i131_mibg" (administrarMibgTransaction, ver mibgLotes.js),
+// que TAMBIÉN exige pacienteDni obligatorio en actaValida() desde antes de
+// la Fase 1B -- mismo caso que I-131 arriba, no un caso real posible.
+test("MIBG: SIN pacienteDni es rechazado -- ya era obligatorio en el acta antes de la 1B", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  const numeroLote = `TEST-MIBG-SINDNI-${Date.now()}`;
+  const loteRef = await addMibgLote({
+    sedeId: SEDE_A, sedeNombre: "FUESMEN Central", isotopoId: "mibg",
+    numeroLote, proveedor: "Proveedor Test",
+    actividadCalibrada: 20, volumen: 2, fechaHoraCalibracion: new Date(),
+    fechaVencimiento: "2027-06-01", conformidad: true,
+    usuarioNombre: PERSONAS.tecnicoA.nombre, usuarioEmail: PERSONAS.tecnicoA.email, observacion: "",
+  });
+  await assert.rejects(() =>
+    administrarMibgTransaction(loteRef.id, {
+      sedeId: SEDE_A, sedeNombre: "FUESMEN Central",
+      pacienteFicha: fichaDePrueba(), pacienteNombre: "Paciente Test MIBG Sin DNI",
+      numeroLote, actividadCalibrada: 20, volumen: 2, actividadAdministrada: 18,
+      usuarioNombre: PERSONAS.tecnicoA.nombre, usuarioEmail: PERSONAS.tecnicoA.email, observacion: "",
+    })
+  );
+});
+
+test("Lutecio-177: CON pacienteDni, el marcador fichasUsadas lo tiene", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  const numeroLote = `TEST-LU-DNI-${Date.now()}`;
+  const loteRef = await addMibgLote({
+    sedeId: SEDE_A, sedeNombre: "FUESMEN Central", isotopoId: "lutecio177",
+    numeroLote, proveedor: "Proveedor Test",
+    actividadCalibrada: 150, volumen: 10, fechaHoraCalibracion: new Date(),
+    fechaVencimiento: "2027-06-01", conformidad: true,
+    usuarioNombre: PERSONAS.tecnicoA.nombre, usuarioEmail: PERSONAS.tecnicoA.email, observacion: "",
+  });
+  const ficha = fichaDePrueba();
+  await administrarLutecioTransaction(loteRef.id, {
+    sedeId: SEDE_A, sedeNombre: "FUESMEN Central",
+    pacienteFicha: ficha, pacienteNombre: "Paciente Test Lutecio DNI", pacienteDni: "44444444",
+    peso: 70, talla: 170, mciAdministrados: 140, actividadCalibrada: 150,
+    isotopoId: "lu177", lote: numeroLote, medicoResponsable: "Dr. Test",
+    usuarioNombre: PERSONAS.tecnicoA.nombre, usuarioEmail: PERSONAS.tecnicoA.email, observacion: "",
+  });
+  const fichaSnap = await getDoc(doc(db, "fichasUsadas", `${SEDE_A}_${ficha}_1`));
+  assert.equal(fichaSnap.data().pacienteDni, "44444444");
+});
+
+test("Lutecio-177: SIN pacienteDni (cliente viejo), el marcador se crea igual", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  const numeroLote = `TEST-LU-SINDNI-${Date.now()}`;
+  const loteRef = await addMibgLote({
+    sedeId: SEDE_A, sedeNombre: "FUESMEN Central", isotopoId: "lutecio177",
+    numeroLote, proveedor: "Proveedor Test",
+    actividadCalibrada: 150, volumen: 10, fechaHoraCalibracion: new Date(),
+    fechaVencimiento: "2027-06-01", conformidad: true,
+    usuarioNombre: PERSONAS.tecnicoA.nombre, usuarioEmail: PERSONAS.tecnicoA.email, observacion: "",
+  });
+  const ficha = fichaDePrueba();
+  await administrarLutecioTransaction(loteRef.id, {
+    sedeId: SEDE_A, sedeNombre: "FUESMEN Central",
+    pacienteFicha: ficha, pacienteNombre: "Paciente Test Lutecio Viejo",
+    peso: 70, talla: 170, mciAdministrados: 140, actividadCalibrada: 150,
+    isotopoId: "lu177", lote: numeroLote, medicoResponsable: "Dr. Test",
+    usuarioNombre: PERSONAS.tecnicoA.nombre, usuarioEmail: PERSONAS.tecnicoA.email, observacion: "",
+  });
+  const fichaSnap = await getDoc(doc(db, "fichasUsadas", `${SEDE_A}_${ficha}_1`));
+  assert.ok(fichaSnap.exists());
+  assert.equal(fichaSnap.data().pacienteDni, undefined);
 });

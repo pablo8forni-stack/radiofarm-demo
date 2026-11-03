@@ -5,13 +5,14 @@ import { listenAnulacionesActas } from "../services/firestore/actas.js";
 import { listenFichasUsadasRecientes, listenFichasDescartadas } from "../services/firestore/fichasDescartadas.js";
 import { idsFichaAnulados, calcularHuecos, huecosYaAnulados } from "../helpers/huecosFicha.js";
 
-// Pantalla del rol "administrativa" (Fase 1A) -- control de N° de Ficha de
-// su propia sede: encabezado (última vigente + anulada más reciente, si
-// corresponde), tabla de solo lectura (N° ficha / nombre / estado / motivo
-// de anulación) y cartel de huecos/sospechosas, mismo CartelFichasFaltantes
-// que ya usa un técnico, con esAdmin={false} para que las acciones de
-// escritura (Descartar/Auditoría/Deshacer) queden ocultas igual que para
-// cualquier no-admin -- sin tocar ese componente.
+// Pantalla del rol "administrativa" (Fase 1A/1B) -- control de N° de Ficha
+// de su propia sede: encabezado (última vigente + anulada más reciente, si
+// corresponde), lista de solo lectura (N° ficha / estado / nombre / DNI /
+// motivo de anulación -- DNI es Fase 1B, "—" en históricos sin el campo) y
+// cartel de huecos/sospechosas, mismo CartelFichasFaltantes que ya usa un
+// técnico, con esAdmin={false} para que las acciones de escritura
+// (Descartar/Auditoría/Deshacer) queden ocultas igual que para cualquier
+// no-admin -- sin tocar ese componente.
 //
 // Decisión de Pablo sobre fichas anuladas sin recarga ("opción A"): el
 // flujo de anulación/descarte sigue exactamente como está hoy -- el admin
@@ -126,33 +127,33 @@ export function VistaAdministrativaFichas({ usuario, onToast }) {
           <p className="text-xs text-orange-500 font-semibold">Anulada más reciente: {anuladaMasReciente}</p>
         )}
       </div>
-      <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="border-b border-gray-100 text-left text-xs text-gray-400">
-              <th className="px-4 py-2 font-semibold">N° Ficha</th>
-              <th className="px-4 py-2 font-semibold">Nombre</th>
-              <th className="px-4 py-2 font-semibold">Estado</th>
-            </tr>
-          </thead>
-          <tbody>
-            {filas.length === 0 && (
-              <tr><td colSpan={3} className="px-4 py-3 text-xs text-gray-400 text-center">Sin fichas cargadas todavía.</td></tr>
+      {/* Fase 1B: se suma DNI -- la tabla de 3 columnas ya quedaba angosta
+          en celular, agregar una 4ta columna la hacía peor. En vez de eso,
+          disposición compacta de 2 líneas por fila (ficha + estado arriba,
+          nombre + DNI abajo) -- mismo patrón que ya usa el modal "Fichas
+          descartadas" de CartelFichasFaltantes.jsx (auditoría), sin tocar
+          ese archivo, sólo repitiendo el estilo visual. Funciona igual en
+          desktop y celular, no hace falta una versión aparte por ancho.
+          DNI histórico ausente (fichas de antes de la 1B) muestra "—" --
+          nunca se rellena ni se modifica el documento viejo. */}
+      <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden divide-y divide-gray-50">
+        {filas.length === 0 && (
+          <p className="px-4 py-3 text-xs text-gray-400 text-center">Sin fichas cargadas todavía.</p>
+        )}
+        {filas.map((f) => (
+          <div key={f.id} className="px-4 py-3 flex flex-col gap-1">
+            <div className="flex items-center justify-between gap-2">
+              <span className="font-semibold text-gray-800">{f.pacienteFichaNum}</span>
+              {f.anulada ? <Badge color="red">ANULADA</Badge> : <Badge color="green">Activa</Badge>}
+            </div>
+            <div className="text-xs text-gray-600">
+              {f.pacienteNombre || "—"} <span className="text-gray-400">· DNI {f.pacienteDni || "—"}</span>
+            </div>
+            {f.anulada && f.motivo && (
+              <p className="text-xs text-gray-400 truncate" title={f.motivo}>{f.motivo}</p>
             )}
-            {filas.map((f) => (
-              <tr key={f.id} className="border-b border-gray-50 last:border-0">
-                <td className="px-4 py-2 font-semibold text-gray-800 align-top">{f.pacienteFichaNum}</td>
-                <td className="px-4 py-2 text-gray-600 align-top">{f.pacienteNombre || "—"}</td>
-                <td className="px-4 py-2 align-top">
-                  {f.anulada ? <Badge color="red">ANULADA</Badge> : <Badge color="green">Activa</Badge>}
-                  {f.anulada && f.motivo && (
-                    <p className="text-xs text-gray-400 truncate max-w-[16rem] mt-1" title={f.motivo}>{f.motivo}</p>
-                  )}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+          </div>
+        ))}
       </div>
       <CartelFichasFaltantes sedeId={usuario.sede} esAdmin={false} usuario={usuario} anulacionesRaw={anulacionesRaw} onToast={onToast} />
       {huecosAnuladosSinReemplazo.length > 0 && (

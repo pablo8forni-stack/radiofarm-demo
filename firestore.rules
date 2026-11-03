@@ -1081,6 +1081,11 @@ service cloud.firestore {
         fichaIntentoHabilitado(d.sedeId, d.pacienteFicha, d.fichaIntentoNro) &&
         d.pacienteFichaNum is number && d.pacienteFichaNum > 0 &&
         d.pacienteNombre is string && d.pacienteNombre.size() > 0 &&
+        // Fase 1B: pacienteDni OPCIONAL a propósito -- un cliente viejo (sin
+        // el campo nuevo, ver datosFichaUsada en actas.js) tiene que poder
+        // seguir creando fichas sin que esta regla lo rechace. Si el campo
+        // viene, sí se valida su forma (string no vacío), igual que el resto.
+        (!('pacienteDni' in d) || (d.pacienteDni is string && d.pacienteDni.size() > 0)) &&
         (isAdmin() || miRol().sede == d.sedeId) &&
         d.actaId is string && d.actaId.size() > 0 &&
         d.tipo is string && d.tipo.size() > 0 &&

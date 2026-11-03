@@ -161,11 +161,28 @@ export const fichaUsadaRef = (sedeId, pacienteFicha, fichaIntentoNro) => doc(fic
 // transacción que la anulación de la acta cuando corresponde.
 export const anulaFichaRef = (sedeId, pacienteFicha, fichaIntentoNro) => doc(actasCol, `anula_ficha_${sedeId}_${pacienteFicha}_${fichaIntentoNro}`);
 
+// Fase 1B: pacienteDni, mismo string que ya va en la acta (data.pacienteDni
+// llega de TabPacientes.jsx ya con .trim(), ningún normalizado nuevo acá --
+// a propósito, para no inventar una segunda fuente de verdad sobre el
+// formato). Riesgo a futuro, sin resolver ahora: si algún día se cruza
+// contra el padrón de VM RIS, un DNI con puntos/ceros a la izquierda/
+// espacios internos tipeados distinto en cada sistema puede no matchear
+// como string exacto -- recién sería un problema real al hacer ese cruce,
+// no antes.
+//
+// Spread condicional, NO `pacienteDni: data.pacienteDni` directo -- bug
+// real encontrado probando el caso "cliente viejo" (data sin el campo): el
+// SDK de Firestore rechaza client-side (antes de llegar al servidor)
+// cualquier valor `undefined` en un campo, así que escribirlo siempre
+// rompía la escritura ENTERA para cualquier llamador que no mande DNI --
+// exactamente lo opuesto de "campo opcional". Omitir la clave del todo
+// cuando no viene definida es lo que de verdad la hace opcional.
 export function datosFichaUsada(data, tipo, actaId) {
   return {
     pacienteFicha: data.pacienteFicha, pacienteFichaNum: parseInt(data.pacienteFicha, 10),
     fichaIntentoNro: data.fichaIntentoNro,
     pacienteNombre: data.pacienteNombre, sedeId: data.sedeId, actaId, tipo,
+    ...(data.pacienteDni != null ? { pacienteDni: data.pacienteDni } : {}),
     fecha: serverTimestamp(),
   };
 }
