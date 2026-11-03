@@ -56,7 +56,7 @@ export default function App() {
   if (usuario.sinAcceso) return <PantallaSinAcceso usuario={usuario} />;
 
   return (
-    <CatalogoProvider rol={usuario.rol}>
+    <CatalogoProvider rol={usuario.rol} sedeId={usuario.sede}>
       <AppAutenticada usuario={usuario} refrescarUsuario={refrescarUsuario} />
     </CatalogoProvider>
   );

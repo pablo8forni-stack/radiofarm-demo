@@ -3,6 +3,42 @@ rules_version = '2';
 // Asume que roles/{email} usa siempre el email en minúsculas (así lo escribe
 // services/auth.js#setRol) y que request.auth.token.email también viene en
 // minúsculas (así lo devuelve Google para cuentas Gmail/Workspace estándar).
+//
+// Aislamiento entre sedes (decisión de Pablo, auditoría de aislamiento
+// 2026-11-03): cada sede es independiente de las demás, salvo para
+// intercambiar fármacos (transferencias) -- eso lo hace siempre un admin,
+// nunca un técnico. Un técnico sólo ve su propia sede, siempre, en
+// cualquier colección (movimientos/lotes/fichasDescartadas/actas/
+// mibg_lote/fichasUsadas/turnos/pedidosSemanales).
+//
+// Pacientes y actas (actas, mibg_lote): el admin también ve UNA sede a la
+// vez -- la que esté auditando (roles/{email}.sedeAuditando, ver más
+// abajo), nunca varias mezcladas.
+//
+// fichasUsadas: EXCEPCIÓN CONOCIDA Y PENDIENTE, todavía sin cerrar -- el
+// admin hoy puede leer fichasUsadas de cualquier sede, sin pasar por
+// sedeAuditando (a diferencia de actas/mibg_lote). No es el mismo criterio
+// de logística de movimientos/lotes: fichasUsadas SÍ tiene datos de
+// paciente (pacienteNombre/pacienteDni, Fase 1B) y la intención es que
+// termine igual que actas/mibg_lote. Queda así a propósito, pendiente de
+// una decisión de Pablo sobre TabPacientes.jsx (selector admin "Guardar en
+// sede", ver nota en services/firestore/actas.js:52-61): ese selector deja
+// guardar un paciente en una sede distinta de la auditada, y el chequeo
+// previo al guardado (resolverFichaIntento/fechaFichaSiguiente/
+// obtenerUltimaFicha) lee fichasUsadas de esa sede elegida, no de
+// sedeAuditando -- cerrar esta regla tal cual rompería ese flujo (probado
+// real contra el emulador: ambas funciones tiran permission-denied cuando
+// la sede elegida no es la auditada).
+//
+// Logística (movimientos, lotes): excepción EXPLÍCITA y acotada a estas
+// dos colecciones -- el admin SÍ puede leer varias sedes a la vez, sin
+// pasar por sedeAuditando. Motivo: decidir transferencias y pedidos
+// (restock) requiere comparar stock/movimientos entre sedes, no auditar
+// una por una (VistaHistorial.jsx "Todas las sedes" + export CSV,
+// VistaPedidos.jsx, TabCatalogo.jsx/TabSedesActivas.jsx -- Configuración).
+// No es un descuido ni una regla pendiente de cerrar: es la excepción que
+// Pablo aceptó a propósito, separada de la de técnico (que NUNCA tiene
+// esta excepción, ver las reglas de movimientos/lotes más abajo).
 service cloud.firestore {
   match /databases/{database}/documents {
 
@@ -175,7 +211,20 @@ service cloud.firestore {
         // por sede en read, ni siquiera para técnico, ver {path=**}/lotes
         // más abajo) -- por eso el chequeo explícito de rol va directo en
         // vez de agregar una rama nueva.
-        allow read: if tieneAcceso() && (isAdmin() || miRol().rol == 'tecnico');
+        //
+        // Auditoría de aislamiento entre sedes (2026-11-03): CERRADO. Antes
+        // de esta regla, CUALQUIER técnico podía leer el stock de CUALQUIER
+        // sede (hueco real, confirmado con una query real contra el
+        // emulador). El admin queda EXCEPTUADO a propósito (sigue viendo
+        // todas las sedes, sin pasar por sedeAuditando): decidir
+        // transferencias y pedidos necesita comparar stock entre sedes
+        // (VistaPedidos.jsx, TabCatalogo.jsx/TabSedesActivas.jsx,
+        // Configuración) -- distinto del criterio de actas/mibg_lote/
+        // fichasUsadas, donde ni el admin mezcla sedes. Sólo el técnico
+        // pierde el acceso cruzado, nunca lo tuvo que tener -- el cliente
+        // (CatalogoContext.jsx) ya escucha sólo su propia sede para este rol
+        // (listenLotesSede, services/firestore/stock.js), no collectionGroup.
+        allow read: if tieneAcceso() && (isAdmin() || (miRol().rol == 'tecnico' && miRol().sede == sedeId));
         allow update: if isAdmin() || (
           miRol().rol == 'tecnico' && miRol().sede == sedeId &&
           request.resource.data.diff(resource.data).affectedKeys().hasOnly(['cantidad']) &&
@@ -195,7 +244,21 @@ service cloud.firestore {
     // para autorizar ese tipo de consulta -- si no está, el listener falla
     // con permission-denied aunque la regla anidada de arriba sea correcta.
     match /{path=**}/lotes/{loteId} {
-      allow read: if tieneAcceso() && (isAdmin() || miRol().rol == 'tecnico');
+      // Auditoría de aislamiento entre sedes (2026-11-03): CERRADO. Antes
+      // de esta regla, un técnico veía TODAS las sedes acá (probado real
+      // contra el emulador con un collectionGroup sin where). El documento
+      // de lote no guarda sedeId como campo -- no hay ningún where que el
+      // cliente pueda agregar para acotarlo -- así que esta regla por sí
+      // sola NO alcanza: el cliente (CatalogoContext.jsx) además dejó de
+      // usar collectionGroup para técnico/administrativa, y escucha sólo
+      // sedes/{suSede}/lotes (listenLotesSede, services/firestore/
+      // stock.js). Lo de abajo es la red de seguridad server-side, no la
+      // única barrera. Admin sigue exceptuado acá también, mismo motivo
+      // (logística cruza sedes a propósito, ver nota de arriba).
+      allow read: if tieneAcceso() && (
+        isAdmin() ||
+        (miRol().rol == 'tecnico' && path.size() == 2 && path[0] == 'sedes' && path[1] == miRol().sede)
+      );
     }
 
     // movimientos y actas: inmutables por diseño (requisito 8) -- create-only,
@@ -252,7 +315,27 @@ service cloud.firestore {
       // Fase 1A: administrativa no ve movimientos (ni de su sede). Mismo
       // criterio que lotes -- nunca hubo restricción por sede acá, el
       // chequeo de rol va directo.
-      allow read: if tieneAcceso() && (isAdmin() || miRol().rol == 'tecnico');
+      //
+      // Auditoría de aislamiento entre sedes (2026-11-03): CERRADO. Antes de
+      // esta regla, un técnico podía listar movimientos de CUALQUIER sede
+      // sin ningún where(sedeId) (probado real contra el emulador). El
+      // admin SÍ queda exceptuado a propósito (sigue viendo varias sedes
+      // mezcladas, sin pasar por sedeAuditando): VistaHistorial.jsx "Todas
+      // las sedes" + export CSV y anularTransferenciaTransaction (busca el
+      // par de la transferencia por grupoId, cruza las 2 sedes por diseño)
+      // son admin-only y necesitan esa vista amplia para decidir/auditar
+      // logística. El técnico nunca tuvo ni debe tener ese cruce.
+      //
+      // resource == null: el técnico siempre arranca su primer egreso
+      // leyendo (tx.get) un movimiento que todavía no existe
+      // (egresoTransaction#movimientoRef, idempotencia) -- sin este guard,
+      // esa lectura se evalúa contra un resource inexistente y rompe para
+      // cualquier no-admin, probado real (egreso técnico, primer intento).
+      allow read: if tieneAcceso() && (
+        resource == null ||
+        isAdmin() ||
+        (miRol().rol == 'tecnico' && miRol().sede == resource.data.sedeId)
+      );
       allow create: if tieneAcceso() && (isAdmin() || miRol().rol == 'tecnico') && movimientoValido();
       allow update, delete: if false;
     }
@@ -940,7 +1023,26 @@ service cloud.firestore {
         id == d.sedeId + '_' + d.numero + '_' + d.intentoNro;
     }
     match /fichasDescartadas/{id} {
-      allow read: if tieneAcceso();
+      // Auditoría de aislamiento entre sedes (2026-11-03): CERRADO. Antes
+      // de esta regla, cualquier rol (técnico, admin, administrativa)
+      // podía listar fichasDescartadas de CUALQUIER sede sin ningún
+      // where(sedeId) (probado real contra el emulador). El admin queda
+      // EXCEPTUADO acá a propósito, mismo criterio que movimientos/lotes:
+      // esta colección no lleva datos de paciente (sólo número + motivo),
+      // es control operativo -- no el mismo caso que fichasUsadas (ver nota
+      // de cabecera del archivo), que sí tiene pacienteNombre/pacienteDni y
+      // queda pendiente aparte.
+      //
+      // resource == null: resolverIntentoDescarte (fichasDescartadas.js)
+      // hace getDoc() por id para encontrar el primer intento LIBRE (1..5),
+      // que por definición no existe todavía la primera vez -- mismo guard
+      // que ya usan actas/mibg_lote/fichasUsadas/movimientos. Hoy sólo lo
+      // dispara un admin (botones "Descartar"/"Deshacer" en
+      // CartelFichasFaltantes.jsx, gateados esAdmin -- confirmado leyendo el
+      // componente), así que isAdmin() ya lo cubre por cortocircuito del OR
+      // sin necesitar este guard en la práctica -- se agrega igual, mismo
+      // criterio defensivo que el resto de las reglas de esta colección.
+      allow read: if tieneAcceso() && (resource == null || isAdmin() || miRol().sede == resource.data.sedeId);
       allow create: if tieneAcceso() && fichaDescartadaValida(id);
       allow update, delete: if false;
     }

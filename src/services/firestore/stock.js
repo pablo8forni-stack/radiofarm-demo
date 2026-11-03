@@ -43,6 +43,28 @@ export function listenLotes(callback, onError) {
   }, onError);
 }
 
+// Aislamiento entre sedes (2026-11): versión para técnico/administrativa --
+// a diferencia de listenLotes (collectionGroup sobre TODAS las sedes, sólo
+// admin), un técnico sólo puede leer su propia sede (firestore.rules). Un
+// collectionGroup sin where(sedeId) no se puede acotar -- el documento de
+// lote no guarda sedeId como campo, nada que filtrar -- así que la única
+// forma de que un técnico siga viendo stock es escuchar directamente
+// sedes/{sedeId}/lotes, UNA sede. Misma forma de salida que listenLotes
+// ({sedeId:{farmId:[lotes]}}, acá con una sola clave) para no tocar ningún
+// consumidor de catalogo.stock -- técnico ya SIEMPRE indexa por su propia
+// sedeEfectiva.
+export function listenLotesSede(sedeId, callback, onError) {
+  return onSnapshot(collection(db, "sedes", sedeId, "lotes"), (snap) => {
+    const stock = { [sedeId]: {} };
+    snap.docs.forEach((d) => {
+      const { farmId, ...lote } = d.data();
+      stock[sedeId][farmId] ??= [];
+      stock[sedeId][farmId].push({ id: d.id, ...lote });
+    });
+    callback(stock);
+  }, onError);
+}
+
 // Ingreso: siempre crea un lote nuevo (no mergea), no depende de leer nada
 // antes -> writeBatch, offline-safe (se encola y sincroniza solo).
 export function ingresoBatch({ sedeId, sedeNombre, farm, lote, vencimiento, cantidad, kits, unidadesSueltas, proveedorNombre, observacion, usuario }) {

@@ -1,7 +1,7 @@
 import { createContext, useEffect, useState } from "react";
 import { listenFarms } from "../services/firestore/farms.js";
 import { listenSedes } from "../services/firestore/sedes.js";
-import { listenLotes } from "../services/firestore/stock.js";
+import { listenLotes, listenLotesSede } from "../services/firestore/stock.js";
 import { listenProveedores } from "../services/firestore/proveedores.js";
 import { listenRadioisotopos } from "../services/firestore/radioisotopos.js";
 import { listenEstudios } from "../services/firestore/estudios.js";
@@ -22,16 +22,29 @@ export const CatalogoContext = createContext(null);
 // marca de una sola vez, sin esperar ningún snapshot, para que su
 // `cargando` resuelva igual de rápido que para cualquier otro rol.
 //
-// Para técnico/admin, un fallo REAL de listenLotes (no debería pasar nunca
-// bajo las reglas actuales, es la red de seguridad) NO se trata como "sin
-// stock" -- confundir "no sabemos el stock" con "no hay stock" podría hacer
-// que alguien opere sobre un número falso. En cambio: se registra el error
-// (consola + registrarLog, mismo visor de diagnóstico que ya usa el resto
-// de la app), se expone `stockError` en el contexto para que App.jsx
-// muestre un aviso visible y persistente, y de todas formas se llama a
-// marcarListo("stock") -- para no colgar la app en carga infinita -- sin
-// nunca pisar `stock` con un valor inventado.
-export function CatalogoProvider({ children, rol }) {
+// Para técnico/admin, un fallo REAL de listenLotes/listenLotesSede (no
+// debería pasar nunca bajo las reglas actuales, es la red de seguridad) NO
+// se trata como "sin stock" -- confundir "no sabemos el stock" con "no hay
+// stock" podría hacer que alguien opere sobre un número falso. En cambio:
+// se registra el error (consola + registrarLog, mismo visor de diagnóstico
+// que ya usa el resto de la app), se expone `stockError` en el contexto
+// para que App.jsx muestre un aviso visible y persistente, y de todas
+// formas se llama a marcarListo("stock") -- para no colgar la app en carga
+// infinita -- sin nunca pisar `stock` con un valor inventado.
+//
+// Aislamiento entre sedes (2026-11): técnico pasa a escuchar SÓLO su propia
+// sede (listenLotesSede, sedeId=usuario.sede -- nunca sedeAuditando, eso es
+// sólo de admin) -- firestore.rules ya no le permite el collectionGroup sin
+// filtro de las demás sedes. Admin sigue con listenLotes (todas las sedes,
+// excepción de logística aceptada -- ver firestore.rules). rol "tecnico" sin
+// sedeId (roles/{email}.sede vacío/ausente -- no debería pasar nunca, cuenta
+// mal dada de alta) NO llama a listenLotesSede(undefined,...) -- eso arma
+// collection(db,'sedes',undefined,'lotes'), una ruta inválida -- se trata
+// como el mismo error visible que un fallo real de lectura. Mismo criterio
+// para cualquier rol que no sea exactamente "administrativa"/"tecnico"/
+// "admin" (dato corrupto o un rol nuevo todavía no contemplado acá): no se
+// suscribe a nada por las dudas, pero tampoco se queda en blanco sin avisar.
+export function CatalogoProvider({ children, rol, sedeId }) {
   const [farms, setFarms] = useState([]);
   const [sedes, setSedes] = useState({});
   const [stock, setStock] = useState({});
@@ -43,6 +56,12 @@ export function CatalogoProvider({ children, rol }) {
 
   useEffect(() => {
     const marcarListo = (clave) => setListo((l) => ({ ...l, [clave]: true }));
+    const marcarErrorStock = (motivo, err) => {
+      console.error(`[catalogo] stock no disponible: ${motivo}`, err || "");
+      registrarLog(`[catalogo] stock no disponible: ${motivo}${err ? ` -- ${err.code}: ${err.message}` : ""}`);
+      setStockError(true);
+      marcarListo("stock");
+    };
     const unsubs = [
       listenFarms((v) => { setFarms(v); marcarListo("farms"); }),
       listenSedes((v) => { setSedes(v); marcarListo("sedes"); }),
@@ -52,19 +71,26 @@ export function CatalogoProvider({ children, rol }) {
     ];
     if (rol === "administrativa") {
       marcarListo("stock");
-    } else {
+    } else if (rol === "tecnico") {
+      if (!sedeId) {
+        marcarErrorStock(`rol "tecnico" sin sedeId (roles/{email}.sede vacío o ausente)`);
+      } else {
+        unsubs.push(listenLotesSede(
+          sedeId,
+          (v) => { setStock(v); setStockError(false); marcarListo("stock"); },
+          (err) => marcarErrorStock("listenLotesSede() falló", err)
+        ));
+      }
+    } else if (rol === "admin") {
       unsubs.push(listenLotes(
         (v) => { setStock(v); setStockError(false); marcarListo("stock"); },
-        (err) => {
-          console.error("listenLotes() falló:", err);
-          registrarLog(`[catalogo] listenLotes() falló: ${err.code} -- ${err.message}`);
-          setStockError(true);
-          marcarListo("stock");
-        }
+        (err) => marcarErrorStock("listenLotes() falló", err)
       ));
+    } else {
+      marcarErrorStock(`rol desconocido: "${rol}"`);
     }
     return () => unsubs.forEach((u) => u());
-  }, [rol]);
+  }, [rol, sedeId]);
 
   const cargando = !Object.values(listo).every(Boolean);
 

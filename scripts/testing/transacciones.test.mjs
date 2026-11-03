@@ -136,6 +136,43 @@ test("transferencia: descuenta en origen y acredita en destino, vinculados por g
   await borrarLote(SEDE_B, destinoLote.id);
 });
 
+// Aislamiento entre sedes (2026-11-03): la regla de lectura de movimientos
+// ahora exige resource==null || isAdmin() || miRol().sede==resource.data.sedeId
+// -- egresoTransaction hace tx.get(movimientoRef) sobre un movimiento que la
+// PRIMERA vez no existe todavía (idempotencia). Sin el guard resource==null,
+// esto rompía para cualquier técnico -- este test lo cubre explícito, no
+// sólo de rebote en el resto de la suite.
+test("aislamiento entre sedes: egreso técnico, primer intento (tx.get sobre movimiento inexistente) sigue funcionando", async () => {
+  await loguearComo(PERSONAS.admin);
+  const { loteId } = await crearLoteDirecto(SEDE_A, FARM_ID, 5);
+  await loguearComo(PERSONAS.tecnicoA);
+  await egresoTransaction({
+    sedeId: SEDE_A, sedeNombre: NOMBRE_SEDE[SEDE_A], farm: FARM, loteId, cantidad: 1,
+    motivo: "Estudio", observacion: "", usuario: PERSONAS.tecnicoA, operacionId: uid(),
+  });
+  const snap = await getDoc(doc(db, "sedes", SEDE_A, "lotes", loteId));
+  assert.equal(snap.data().cantidad, 4);
+  await loguearComo(PERSONAS.admin);
+  await borrarLote(SEDE_A, loteId);
+});
+
+// Control: un técnico intentando transferir sigue rechazado -- ya lo estaba
+// desde antes (la regla de `lotes` exige isAdmin() para el incremento en
+// destino), el cambio de aislamiento entre sedes no abre ni cierra nada
+// nuevo acá, pero lo deja probado explícito en esta tanda.
+test("aislamiento entre sedes: técnico intentando transferenciaTransaction sigue rechazado", async () => {
+  await loguearComo(PERSONAS.admin);
+  const { loteId } = await crearLoteDirecto(SEDE_A, FARM_ID, 8);
+  await loguearComo(PERSONAS.tecnicoA);
+  await assert.rejects(() => transferenciaTransaction({
+    sedeOrigenId: SEDE_A, sedeOrigenNombre: NOMBRE_SEDE[SEDE_A],
+    sedeDestinoId: SEDE_B, sedeDestinoNombre: NOMBRE_SEDE[SEDE_B],
+    farm: FARM, loteId, cantidad: 3, observacion: "", usuario: PERSONAS.tecnicoA, operacionId: uid(),
+  }));
+  await loguearComo(PERSONAS.admin);
+  await borrarLote(SEDE_A, loteId);
+});
+
 test("transferencia: conflicto -- dos transferencias simultáneas desde el mismo lote cuya suma excede el stock", async () => {
   await loguearComo(PERSONAS.admin);
   const { loteId } = await crearLoteDirecto(SEDE_A, FARM_ID, 5);

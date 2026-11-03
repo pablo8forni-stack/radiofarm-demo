@@ -5,7 +5,7 @@
 // restrictiva de lo debido.
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { collection, addDoc, doc, getDoc, getDocs, query, where, orderBy, limit, setDoc, updateDoc, deleteDoc, serverTimestamp, writeBatch } from "firebase/firestore";
+import { collection, collectionGroup, addDoc, doc, getDoc, getDocs, query, where, orderBy, limit, setDoc, updateDoc, deleteDoc, serverTimestamp, writeBatch } from "firebase/firestore";
 import {
   PERSONAS, SEDE_A, SEDE_B, FARM_ID, db, loguearComo, prepararFixturesGlobales, loteDePrueba, fichaDePrueba, cerrarConexiones,
   crearLoteDirecto, borrarLote,
@@ -3041,4 +3041,72 @@ test("administrativa: barrido negativo de escrituras sobre TODAS las colecciones
 
   // auditoria -- sólo admin.
   await assertPermissionDenied(() => addDoc(collection(db, "auditoria"), { tipo: "restauracion_backup", usuarioEmail: PERSONAS.administrativa.email }));
+});
+
+// Aislamiento entre sedes (movimientos/lotes/fichasDescartadas, 2026-11-03):
+// las reglas no filtran -- una query sin el where que la regla exige se
+// rechaza ENTERA, no parcial. Cada bloque prueba eso con queries reales
+// (list), nunca con documentos sueltos, salvo donde se indica.
+test("aislamiento entre sedes: movimientos", async () => {
+  await loguearComo(PERSONAS.admin);
+  await addDoc(collection(db, "movimientos"), {
+    fecha: serverTimestamp(), tipo: "ingreso", sedeId: SEDE_A, sedeNombre: "Central",
+    farmId: FARM_ID, farmNombre: "MIBI", cantidad: 1, lote: "AISL-A", loteId: "aisl-a",
+    usuarioEmail: PERSONAS.admin.email, usuarioNombre: PERSONAS.admin.nombre,
+  });
+  await addDoc(collection(db, "movimientos"), {
+    fecha: serverTimestamp(), tipo: "ingreso", sedeId: SEDE_B, sedeNombre: "Italiano",
+    farmId: FARM_ID, farmNombre: "MIBI", cantidad: 1, lote: "AISL-B", loteId: "aisl-b",
+    usuarioEmail: PERSONAS.admin.email, usuarioNombre: PERSONAS.admin.nombre,
+  });
+
+  await loguearComo(PERSONAS.tecnicoA); // sede central == SEDE_A
+  await getDocs(query(collection(db, "movimientos"), where("sedeId", "==", SEDE_A), orderBy("fecha", "desc"), limit(50)));
+  await assertPermissionDenied(() =>
+    getDocs(query(collection(db, "movimientos"), orderBy("fecha", "desc"), limit(50)))
+  );
+  await assertPermissionDenied(() =>
+    getDocs(query(collection(db, "movimientos"), where("sedeId", "==", SEDE_B), orderBy("fecha", "desc"), limit(50)))
+  );
+
+  await loguearComo(PERSONAS.admin);
+  await getDocs(query(collection(db, "movimientos"), orderBy("fecha", "desc"), limit(50)));
+});
+
+test("aislamiento entre sedes: lotes (nested sedes/{sedeId}/lotes)", async () => {
+  await loguearComo(PERSONAS.tecnicoA); // sede central == SEDE_A
+  await getDocs(collection(db, "sedes", SEDE_A, "lotes"));
+  await assertPermissionDenied(() => getDocs(collection(db, "sedes", SEDE_B, "lotes")));
+
+  await loguearComo(PERSONAS.admin);
+  await getDocs(collection(db, "sedes", SEDE_B, "lotes"));
+});
+
+test("aislamiento entre sedes: lotes (collectionGroup, usado hoy sólo por admin)", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  // Sin where posible (el doc de lote no guarda sedeId) -- la query entera
+  // se rechaza para técnico, por eso el cliente (CatalogoContext.jsx) ya no
+  // usa collectionGroup para este rol.
+  await assertPermissionDenied(() => getDocs(collectionGroup(db, "lotes")));
+
+  await loguearComo(PERSONAS.admin);
+  await getDocs(collectionGroup(db, "lotes"));
+});
+
+test("aislamiento entre sedes: fichasDescartadas", async () => {
+  await loguearComo(PERSONAS.admin);
+  await setDoc(doc(db, "fichasDescartadas", `${SEDE_A}_888_1`), {
+    sedeId: SEDE_A, numero: "888", intentoNro: "1", motivo: "aislamiento",
+    usuarioEmail: PERSONAS.admin.email, fecha: serverTimestamp(),
+  });
+
+  await loguearComo(PERSONAS.tecnicoA);
+  await getDocs(query(collection(db, "fichasDescartadas"), where("sedeId", "==", SEDE_A), limit(100)));
+  await assertPermissionDenied(() => getDocs(query(collection(db, "fichasDescartadas"), limit(100))));
+
+  await loguearComo(PERSONAS.administrativa); // misma sede que tecnicoA (central)
+  await getDocs(query(collection(db, "fichasDescartadas"), where("sedeId", "==", SEDE_A), limit(100)));
+
+  await loguearComo(PERSONAS.admin);
+  await getDocs(query(collection(db, "fichasDescartadas"), limit(100)));
 });
