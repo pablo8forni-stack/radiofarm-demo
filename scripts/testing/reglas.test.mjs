@@ -617,11 +617,17 @@ test("control positivo: dos sedes distintas pueden usar el MISMO N° de Ficha si
     usuarioEmail: PERSONAS.admin.email, pacienteFicha: ficha, fichaIntentoNro: "1",
     pacienteNombre: "Paciente Central", pacienteDni: "1",
   });
+  // Sede de trabajo del admin (2026-11-04): el admin (sede central) ya no
+  // puede crear una acta en SEDE_B directo -- usa tecnicoB (sede italiano)
+  // para esa punta, el test sigue probando lo mismo (dos sedes, mismo N°
+  // de Ficha, sin chocar).
+  await loguearComo(PERSONAS.tecnicoB);
   const refB = await addDoc(collection(db, "actas"), {
     tipo: "i131_barrido", fecha: serverTimestamp(), sedeId: SEDE_B,
-    usuarioEmail: PERSONAS.admin.email, pacienteFicha: ficha, fichaIntentoNro: "1",
+    usuarioEmail: PERSONAS.tecnicoB.email, pacienteFicha: ficha, fichaIntentoNro: "1",
     pacienteNombre: "Paciente Italiano", pacienteDni: "2",
   });
+  await loguearComo(PERSONAS.admin);
   assert.ok((await getDoc(refA)).exists());
   // Leer una acta de SEDE_B como admin exige sedeAuditando == SEDE_B (ver
   // firestore.rules) -- acá SÍ es parte de lo que se prueba (el test es
@@ -1645,13 +1651,16 @@ function extraccionBase(vialId, overrides = {}) {
 // llamar la función real de src/ para reproducirlo.
 test("addActaI131Vial (servicio real) no falla por pacienteFicha undefined", async () => {
   await loguearComo(PERSONAS.admin);
-  await addActaI131Vial(vialBase({ sedeId: SEDE_B, usuarioEmail: PERSONAS.admin.email, lote: "REGRESION-VIAL" }));
+  // Sede de trabajo del admin (2026-11-04): SEDE_A (propia), antes SEDE_B
+  // -- era incidental, el punto del test no tiene nada que ver con sede.
+  await addActaI131Vial(vialBase({ sedeId: SEDE_A, usuarioEmail: PERSONAS.admin.email, lote: "REGRESION-VIAL" }));
 });
 
 test("addActaI131Extraccion (servicio real) no falla por pacienteFicha undefined", async () => {
   await loguearComo(PERSONAS.admin);
-  const v = await addDoc(collection(db, "actas"), vialBase({ sedeId: SEDE_B, usuarioEmail: PERSONAS.admin.email, lote: "REGRESION-EXT" }));
-  await addActaI131Extraccion(extraccionBase(v.id, { sedeId: SEDE_B, usuarioEmail: PERSONAS.admin.email }));
+  // Sede de trabajo del admin (2026-11-04): SEDE_A (propia), antes SEDE_B.
+  const v = await addDoc(collection(db, "actas"), vialBase({ sedeId: SEDE_A, usuarioEmail: PERSONAS.admin.email, lote: "REGRESION-EXT" }));
+  await addActaI131Extraccion(extraccionBase(v.id, { sedeId: SEDE_A, usuarioEmail: PERSONAS.admin.email }));
 });
 
 test("técnico sin accesoTerapiaI131 NO puede crear un vial de I-131", async () => {
@@ -1745,27 +1754,30 @@ test("control positivo: admin SÍ puede crear una extracción de I-131 combinand
 // resto de las actas.
 test("extracción de I-131 sobre un vial anulado es rechazada, aunque sea admin", async () => {
   await loguearComo(PERSONAS.admin);
-  const v = await addDoc(collection(db, "actas"), vialBase({ sedeId: SEDE_B, usuarioEmail: PERSONAS.admin.email, lote: "ANULADO-1" }));
+  // Sede de trabajo del admin (2026-11-04): SEDE_A (propia) -- incidental,
+  // el punto real es el vial anulado, no la sede.
+  const v = await addDoc(collection(db, "actas"), vialBase({ sedeId: SEDE_A, usuarioEmail: PERSONAS.admin.email, lote: "ANULADO-1" }));
   await setDoc(doc(db, "actas", `anula_${v.id}`), {
-    tipo: "anulacion", anulaId: v.id, sedeId: SEDE_B, fecha: serverTimestamp(),
+    tipo: "anulacion", anulaId: v.id, sedeId: SEDE_A, fecha: serverTimestamp(),
     motivo: "Test", usuarioEmail: PERSONAS.admin.email, usuarioNombre: "Admin",
   });
   await assertPermissionDenied(() =>
-    addDoc(collection(db, "actas"), extraccionBase(v.id, { sedeId: SEDE_B, usuarioEmail: PERSONAS.admin.email }))
+    addDoc(collection(db, "actas"), extraccionBase(v.id, { sedeId: SEDE_A, usuarioEmail: PERSONAS.admin.email }))
   );
 });
 
 test("extracción de I-131 combinando dos viales donde UNO está anulado es rechazada", async () => {
   await loguearComo(PERSONAS.admin);
-  const v1 = await addDoc(collection(db, "actas"), vialBase({ sedeId: SEDE_B, usuarioEmail: PERSONAS.admin.email, lote: "OK-1" }));
-  const v2 = await addDoc(collection(db, "actas"), vialBase({ sedeId: SEDE_B, usuarioEmail: PERSONAS.admin.email, lote: "ANULADO-2" }));
+  // Sede de trabajo del admin (2026-11-04): SEDE_A (propia), incidental.
+  const v1 = await addDoc(collection(db, "actas"), vialBase({ sedeId: SEDE_A, usuarioEmail: PERSONAS.admin.email, lote: "OK-1" }));
+  const v2 = await addDoc(collection(db, "actas"), vialBase({ sedeId: SEDE_A, usuarioEmail: PERSONAS.admin.email, lote: "ANULADO-2" }));
   await setDoc(doc(db, "actas", `anula_${v2.id}`), {
-    tipo: "anulacion", anulaId: v2.id, sedeId: SEDE_B, fecha: serverTimestamp(),
+    tipo: "anulacion", anulaId: v2.id, sedeId: SEDE_A, fecha: serverTimestamp(),
     motivo: "Test", usuarioEmail: PERSONAS.admin.email, usuarioNombre: "Admin",
   });
   await assertPermissionDenied(() =>
     addDoc(collection(db, "actas"), extraccionBase(v1.id, {
-      sedeId: SEDE_B, usuarioEmail: PERSONAS.admin.email,
+      sedeId: SEDE_A, usuarioEmail: PERSONAS.admin.email,
       viales: [{ vialId: v1.id, mlExtraidos: 1 }, { vialId: v2.id, mlExtraidos: 0.5 }],
       vialIds: [v1.id, v2.id],
     }))
@@ -1774,13 +1786,14 @@ test("extracción de I-131 combinando dos viales donde UNO está anulado es rech
 
 test("extracción de I-131 con más de 4 viales combinados es rechazada (tope fijo)", async () => {
   await loguearComo(PERSONAS.admin);
+  // Sede de trabajo del admin (2026-11-04): SEDE_A (propia), incidental.
   const viales = [];
   for (let i = 0; i < 5; i++) {
-    viales.push(await addDoc(collection(db, "actas"), vialBase({ sedeId: SEDE_B, usuarioEmail: PERSONAS.admin.email, lote: `TOPE-${i}` })));
+    viales.push(await addDoc(collection(db, "actas"), vialBase({ sedeId: SEDE_A, usuarioEmail: PERSONAS.admin.email, lote: `TOPE-${i}` })));
   }
   await assertPermissionDenied(() =>
     addDoc(collection(db, "actas"), extraccionBase(viales[0].id, {
-      sedeId: SEDE_B, usuarioEmail: PERSONAS.admin.email,
+      sedeId: SEDE_A, usuarioEmail: PERSONAS.admin.email,
       viales: viales.map((v) => ({ vialId: v.id, mlExtraidos: 0.5 })),
       vialIds: viales.map((v) => v.id),
     }))
@@ -2436,8 +2449,11 @@ test("lote sin conformidad (ni sí ni no) es rechazado", async () => {
 });
 
 test("técnico NO puede LEER un lote de MIBG de otra sede", async () => {
-  await loguearComo(PERSONAS.admin);
-  const ref = await addDoc(collection(db, "mibg_lote"), mibgLoteBase({ sedeId: SEDE_B, usuarioEmail: PERSONAS.admin.email, usuarioNombre: "Admin" }));
+  // Sede de trabajo del admin (2026-11-04): admin (sede central) ya no
+  // puede crear un mibg_lote en SEDE_B -- usa tecnicoB (sede italiano) para
+  // esa punta, el test sigue probando lo mismo.
+  await loguearComo(PERSONAS.tecnicoB);
+  const ref = await addDoc(collection(db, "mibg_lote"), mibgLoteBase({ sedeId: SEDE_B, usuarioEmail: PERSONAS.tecnicoB.email, usuarioNombre: PERSONAS.tecnicoB.nombre }));
 
   await loguearComo(PERSONAS.tecnicoA); // sede central == SEDE_A
   await assertPermissionDenied(() => getDoc(ref));
@@ -2525,8 +2541,13 @@ test("i131_mibg con mibgLoteId de un lote inexistente es rechazado", async () =>
 });
 
 test("i131_mibg con mibgLoteId de un lote de OTRA sede es rechazado", async () => {
+  // Sede de trabajo del admin (2026-11-04): el lote lo crea tecnicoB (sede
+  // italiano) -- admin ya no puede crear un mibg_lote ahí directo. El resto
+  // del test no cambia: la acta se declara en SEDE_A (la propia del admin),
+  // apuntando a un lote que en realidad es de SEDE_B.
+  await loguearComo(PERSONAS.tecnicoB);
+  const loteDeB = await addDoc(collection(db, "mibg_lote"), mibgLoteBase({ sedeId: SEDE_B, usuarioEmail: PERSONAS.tecnicoB.email, usuarioNombre: PERSONAS.tecnicoB.nombre }));
   await loguearComo(PERSONAS.admin);
-  const loteDeB = await addDoc(collection(db, "mibg_lote"), mibgLoteBase({ sedeId: SEDE_B, usuarioEmail: PERSONAS.admin.email, usuarioNombre: "Admin" }));
   // sedeId de la acta declarado como SEDE_A, pero el lote es de SEDE_B.
   await assertPermissionDenied(() =>
     setDoc(doc(db, "actas", `mibg_${loteDeB.id}_1`), mibgActaBase(loteDeB.id, { sedeId: SEDE_A, usuarioEmail: PERSONAS.admin.email, usuarioNombre: "Admin" }))
@@ -2754,8 +2775,11 @@ test("acta de Lutecio-177 con id que no es lote_${loteDosisUnicaId}_${intentoNro
 });
 
 test("acta de Lutecio-177 con loteDosisUnicaId de un lote de OTRA sede es rechazada", async () => {
+  // Sede de trabajo del admin (2026-11-04): el lote lo crea tecnicoB (sede
+  // italiano), mismo motivo que el equivalente de MIBG arriba.
+  await loguearComo(PERSONAS.tecnicoB);
+  const loteDeB = await addDoc(collection(db, "mibg_lote"), mibgLoteBase({ isotopoId: "lutecio177", sedeId: SEDE_B, usuarioEmail: PERSONAS.tecnicoB.email, usuarioNombre: PERSONAS.tecnicoB.nombre }));
   await loguearComo(PERSONAS.admin);
-  const loteDeB = await addDoc(collection(db, "mibg_lote"), mibgLoteBase({ isotopoId: "lutecio177", sedeId: SEDE_B, usuarioEmail: PERSONAS.admin.email, usuarioNombre: "Admin" }));
   await assertPermissionDenied(() =>
     setDoc(doc(db, "actas", `lote_${loteDeB.id}_1`), lutecioActaBase(loteDeB.id, { sedeId: SEDE_A, usuarioEmail: PERSONAS.admin.email, usuarioNombre: "Admin" }))
   );
@@ -3054,8 +3078,14 @@ test("aislamiento entre sedes: movimientos", async () => {
     farmId: FARM_ID, farmNombre: "MIBI", cantidad: 1, lote: "AISL-A", loteId: "aisl-a",
     usuarioEmail: PERSONAS.admin.email, usuarioNombre: PERSONAS.admin.nombre,
   });
+  // Sede de trabajo del admin (2026-11-04): 'ingreso' ya exige
+  // d.sedeId==miRol().sede para admin, así que esta segunda punta (sede
+  // ajena, SEDE_B) usa 'transferencia_entrada' -- tipo exceptuado de esa
+  // restricción, sigue sirviendo igual para probar que técnico no puede
+  // leer movimientos de otra sede.
   await addDoc(collection(db, "movimientos"), {
-    fecha: serverTimestamp(), tipo: "ingreso", sedeId: SEDE_B, sedeNombre: "Italiano",
+    fecha: serverTimestamp(), tipo: "transferencia_entrada", sedeId: SEDE_B, sedeNombre: "Italiano",
+    sedeRelacionada: "Central", grupoId: "aisl-grupo",
     farmId: FARM_ID, farmNombre: "MIBI", cantidad: 1, lote: "AISL-B", loteId: "aisl-b",
     usuarioEmail: PERSONAS.admin.email, usuarioNombre: PERSONAS.admin.nombre,
   });
@@ -3109,4 +3139,225 @@ test("aislamiento entre sedes: fichasDescartadas", async () => {
 
   await loguearComo(PERSONAS.admin);
   await getDocs(query(collection(db, "fichasDescartadas"), limit(100)));
+});
+
+// Sede de trabajo del admin (2026-11-04): sedeAuditando es sólo para ver;
+// todo lo que el admin registra va a los libros de su propia sede
+// (roles/{email}.sede), nunca a la que esté auditando. Excepciones:
+// transferencias (origen/destino libres) y anular/descartar (cualquier
+// sede). PERSONAS.admin tiene sede==SEDE_A -- adminSedeB (definido acá,
+// sede==SEDE_B) existe sólo para probar que NINGUNA de las dos puntas de
+// una transferencia necesita ser la sede de quien la hace. adminSinSede se
+// crea con firebase-admin (bypassa el rechazo client-side de valores
+// undefined, y las reglas) para simular una cuenta real mal dada de alta.
+const adminSedeB = { email: "admin.italiano.test@radiofarm.local", nombre: "Admin Italiano Test", rol: "admin", sede: SEDE_B };
+const adminSinSede = { email: "admin.sinsede.test@radiofarm.local", nombre: "Admin Sin Sede Test", rol: "admin" };
+
+async function crearRolAdminSinSede() {
+  process.env.FIRESTORE_EMULATOR_HOST = "127.0.0.1:8080";
+  const { initializeApp: initAdminApp, getApps: getAdminApps } = await import("firebase-admin/app");
+  const { getFirestore: getAdminFirestore } = await import("firebase-admin/firestore");
+  if (!getAdminApps().length) initAdminApp({ projectId: "radiofarm-fuesmen-staging" });
+  // set() sin 'sede' -- a propósito, el campo queda AUSENTE del doc, no
+  // sólo vacío (simula una cuenta de admin dada de alta sin ese campo, el
+  // caso que el guard 'sede' in miRol() tiene que cubrir).
+  await getAdminFirestore().doc(`roles/${adminSinSede.email}`).set({ nombre: adminSinSede.nombre, rol: "admin" });
+}
+
+test("SETUP sede de trabajo: adminSedeB y adminSinSede", async () => {
+  await loguearComo(PERSONAS.admin);
+  await setRol(adminSedeB.email, { nombre: adminSedeB.nombre, rol: "admin", sede: SEDE_B });
+  await crearRolAdminSinSede();
+});
+
+test("movimientos: admin crea 'ingreso' en sede ajena -- rechazado; en la propia -- permitido", async () => {
+  await loguearComo(PERSONAS.admin); // sede central == SEDE_A
+  await assertPermissionDenied(() =>
+    addDoc(collection(db, "movimientos"), movimientoBase({
+      tipo: "ingreso", sedeId: SEDE_B, loteId: "x", usuarioEmail: PERSONAS.admin.email, usuarioNombre: PERSONAS.admin.nombre,
+    }))
+  );
+  await addDoc(collection(db, "movimientos"), movimientoBase({
+    tipo: "ingreso", sedeId: SEDE_A, loteId: "x", usuarioEmail: PERSONAS.admin.email, usuarioNombre: PERSONAS.admin.nombre,
+  }));
+});
+
+test("movimientos: admin crea 'egreso' en sede ajena -- rechazado; en la propia -- permitido", async () => {
+  await loguearComo(PERSONAS.admin);
+  await assertPermissionDenied(() =>
+    addDoc(collection(db, "movimientos"), movimientoBase({
+      tipo: "egreso", cantidad: 1, sedeId: SEDE_B, loteId: "x", usuarioEmail: PERSONAS.admin.email, usuarioNombre: PERSONAS.admin.nombre,
+    }))
+  );
+  await addDoc(collection(db, "movimientos"), movimientoBase({
+    tipo: "egreso", cantidad: 1, sedeId: SEDE_A, loteId: "x", usuarioEmail: PERSONAS.admin.email, usuarioNombre: PERSONAS.admin.nombre,
+  }));
+});
+
+test("movimientos: transferencia -- NINGUNA punta es la sede de quien la hace (ni origen ni destino)", async () => {
+  // adminSedeB (sede==italiano) hace una transferencia entre central y
+  // "espanol" -- NI origen NI destino son su propia sede (italiano). Si
+  // alguna de las dos coincidiera con su sede, esa punta pasaría igual sin
+  // necesitar la excepción y el test no probaría nada nuevo.
+  await loguearComo(adminSedeB);
+  await addDoc(collection(db, "movimientos"), movimientoBase({
+    tipo: "transferencia_salida", sedeId: SEDE_A, sedeRelacionada: "Español", grupoId: "g-wot",
+    usuarioEmail: adminSedeB.email, usuarioNombre: adminSedeB.nombre,
+  }));
+  await addDoc(collection(db, "movimientos"), movimientoBase({
+    tipo: "transferencia_entrada", sedeId: "espanol", sedeRelacionada: "Central", grupoId: "g-wot",
+    usuarioEmail: adminSedeB.email, usuarioNombre: adminSedeB.nombre,
+  }));
+});
+
+test("movimientos: admin anula un movimiento de una sede que no es la suya -- permitido", async () => {
+  await loguearComo(PERSONAS.tecnicoB); // sede italiano -- crea el movimiento a anular
+  const mov = await addDoc(collection(db, "movimientos"), movimientoBase({
+    tipo: "egreso", cantidad: 1, sedeId: SEDE_B, loteId: "x", usuarioEmail: PERSONAS.tecnicoB.email, usuarioNombre: PERSONAS.tecnicoB.nombre,
+  }));
+  await loguearComo(PERSONAS.admin); // sede central -- anula uno de italiano
+  await addDoc(collection(db, "movimientos"), movimientoBase({
+    tipo: "anulacion", sedeId: SEDE_B, anulaId: mov.id, usuarioEmail: PERSONAS.admin.email, usuarioNombre: PERSONAS.admin.nombre,
+  }));
+});
+
+test("movimientos: admin SIN sede cargada -- cualquier ingreso/egreso rechazado limpio (permission-denied)", async () => {
+  await loguearComo(adminSinSede);
+  await assertPermissionDenied(() =>
+    addDoc(collection(db, "movimientos"), movimientoBase({
+      tipo: "ingreso", sedeId: SEDE_A, loteId: "x", usuarioEmail: adminSinSede.email, usuarioNombre: adminSinSede.nombre,
+    }))
+  );
+});
+
+test("actas: admin crea 'paciente' en sede ajena -- rechazado; en la propia -- permitido", async () => {
+  await loguearComo(PERSONAS.admin); // sede central == SEDE_A
+  const ficha1 = fichaDePrueba();
+  await assertPermissionDenied(() =>
+    addDoc(collection(db, "actas"), {
+      tipo: "paciente", fecha: serverTimestamp(), sedeId: SEDE_B,
+      usuarioEmail: PERSONAS.admin.email, mciAdministrados: 1, isotopoId: "tc99m", sinRadiofarmaco: true,
+      pacienteFicha: ficha1, fichaIntentoNro: "1", pacienteNombre: "Test", pacienteDni: "1",
+    })
+  );
+  const ficha2 = fichaDePrueba();
+  await addDoc(collection(db, "actas"), {
+    tipo: "paciente", fecha: serverTimestamp(), sedeId: SEDE_A,
+    usuarioEmail: PERSONAS.admin.email, mciAdministrados: 1, isotopoId: "tc99m", sinRadiofarmaco: true,
+    pacienteFicha: ficha2, fichaIntentoNro: "1", pacienteNombre: "Test", pacienteDni: "1",
+  });
+});
+
+test("actas: admin crea 'marcacion' en sede ajena -- rechazado; en la propia -- permitido", async () => {
+  await loguearComo(PERSONAS.admin);
+  await assertPermissionDenied(() =>
+    addDoc(collection(db, "actas"), {
+      tipo: "marcacion", fecha: serverTimestamp(), sedeId: SEDE_B,
+      usuarioEmail: PERSONAS.admin.email, lote: loteDePrueba(), farmId: FARM_ID, mciMarcacion: 1, confirmoSinEgreso: true,
+    })
+  );
+  await addDoc(collection(db, "actas"), {
+    tipo: "marcacion", fecha: serverTimestamp(), sedeId: SEDE_A,
+    usuarioEmail: PERSONAS.admin.email, lote: loteDePrueba(), farmId: FARM_ID, mciMarcacion: 1, confirmoSinEgreso: true,
+  });
+});
+
+test("actas: admin crea 'elucion' en sede ajena -- rechazado", async () => {
+  // adminSedeB (sede==italiano, NO eluye) intenta en SEDE_A (central, SÍ
+  // eluye) -- así el rechazo es por sede de trabajo, no por el flag
+  // `eluye` de la sede (que daría el mismo permission-denied por otro
+  // motivo y no probaría nada nuevo).
+  await loguearComo(adminSedeB);
+  await assertPermissionDenied(() =>
+    addDoc(collection(db, "actas"), {
+      tipo: "elucion", fecha: serverTimestamp(), sedeId: SEDE_A,
+      usuarioEmail: adminSedeB.email, loteGenerador: loteDePrueba(), actividadEluida: 1, volumen: 1, actividadCalibrada: 1,
+      fechaCalibracion: "2027-01-01", fechaVencimiento: "2027-01-02", numeroGenerador: "N1",
+    })
+  );
+});
+
+test("actas: admin anula un acta de una sede que no es la suya -- permitido", async () => {
+  await loguearComo(PERSONAS.tecnicoB); // sede italiano -- crea el acta a anular
+  const ficha = fichaDePrueba();
+  const actaRef = await addDoc(collection(db, "actas"), {
+    tipo: "i131_barrido", fecha: serverTimestamp(), sedeId: SEDE_B,
+    usuarioEmail: PERSONAS.tecnicoB.email, pacienteFicha: ficha, fichaIntentoNro: "1",
+    pacienteNombre: "Test Italiano", pacienteDni: "1",
+  });
+  await loguearComo(PERSONAS.admin); // sede central -- anula una de italiano
+  // id determinístico obligatorio (actaId == 'anula_' + d.anulaId), no un
+  // addDoc con id al azar -- ver actaValida(), rama 'anulacion'.
+  await setDoc(doc(db, "actas", `anula_${actaRef.id}`), {
+    tipo: "anulacion", fecha: serverTimestamp(), sedeId: SEDE_B,
+    usuarioEmail: PERSONAS.admin.email, anulaId: actaRef.id, motivo: "Test",
+  });
+});
+
+test("actas: admin SIN sede cargada -- cualquier registro rechazado limpio (permission-denied)", async () => {
+  await loguearComo(adminSinSede);
+  const ficha = fichaDePrueba();
+  await assertPermissionDenied(() =>
+    addDoc(collection(db, "actas"), {
+      tipo: "paciente", fecha: serverTimestamp(), sedeId: SEDE_A,
+      usuarioEmail: adminSinSede.email, mciAdministrados: 1, isotopoId: "tc99m", sinRadiofarmaco: true,
+      pacienteFicha: ficha, fichaIntentoNro: "1", pacienteNombre: "Test", pacienteDni: "1",
+    })
+  );
+});
+
+test("mibg_lote: admin crea lote en sede ajena -- rechazado; en la propia -- permitido", async () => {
+  await loguearComo(PERSONAS.admin);
+  await assertPermissionDenied(() =>
+    addDoc(collection(db, "mibg_lote"), mibgLoteBase({ sedeId: SEDE_B, usuarioEmail: PERSONAS.admin.email, usuarioNombre: PERSONAS.admin.nombre }))
+  );
+  await addDoc(collection(db, "mibg_lote"), mibgLoteBase({ sedeId: SEDE_A, usuarioEmail: PERSONAS.admin.email, usuarioNombre: PERSONAS.admin.nombre }));
+});
+
+test("fichasDescartadas: descartar/deshacer en cualquier sede sigue permitido (excepción, sin cambios)", async () => {
+  await loguearComo(PERSONAS.admin); // sede central
+  const numero = fichaDePrueba();
+  await setDoc(doc(db, "fichasDescartadas", `${SEDE_B}_${numero}_1`), {
+    sedeId: SEDE_B, numero, intentoNro: "1", motivo: "excepción sede de trabajo",
+    usuarioEmail: PERSONAS.admin.email,
+  });
+});
+
+// fichasUsadas: CERRADO (2026-11-04) -- admin lee su sede de trabajo Y la
+// que esté auditando, nunca una tercera. Consultas REALES (list, where
+// sedeId), no sólo get -- las reglas no filtran, una query sin el where
+// que la regla exige se rechaza entera.
+test("fichasUsadas: admin lee su sede de trabajo (list real, sin sedeAuditando puesta)", async () => {
+  await loguearComo(PERSONAS.admin); // sede central == SEDE_A
+  await setSedeAuditando(PERSONAS.admin.email, "");
+  await getDocs(query(collection(db, "fichasUsadas"), where("sedeId", "==", SEDE_A), orderBy("pacienteFichaNum", "desc"), limit(10)));
+});
+
+test("fichasUsadas: admin lee la sede que está auditando, distinta de la propia (list real)", async () => {
+  await loguearComo(PERSONAS.admin); // sede central
+  await setSedeAuditando(PERSONAS.admin.email, SEDE_B);
+  await getDocs(query(collection(db, "fichasUsadas"), where("sedeId", "==", SEDE_B), orderBy("pacienteFichaNum", "desc"), limit(10)));
+  await setSedeAuditando(PERSONAS.admin.email, SEDE_A); // restaura, no filtrar estado a otros tests
+});
+
+test("fichasUsadas: admin NO puede leer una TERCERA sede (ni propia ni auditada) -- list real rechazada", async () => {
+  await loguearComo(adminSedeB); // sede italiano
+  await setSedeAuditando(adminSedeB.email, SEDE_A); // audita central -- ninguna es espanol
+  await assertPermissionDenied(() =>
+    getDocs(query(collection(db, "fichasUsadas"), where("sedeId", "==", "espanol"), orderBy("pacienteFichaNum", "desc"), limit(10)))
+  );
+});
+
+test("fichasUsadas: admin SIN sede cargada Y sin sedeAuditando -- list real rechazada limpio", async () => {
+  await loguearComo(adminSinSede);
+  await assertPermissionDenied(() =>
+    getDocs(query(collection(db, "fichasUsadas"), where("sedeId", "==", SEDE_A), orderBy("pacienteFichaNum", "desc"), limit(10)))
+  );
+});
+
+test("fichasUsadas: técnico y administrativa sin cambios -- su propia sede sigue permitida (list real)", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  await getDocs(query(collection(db, "fichasUsadas"), where("sedeId", "==", SEDE_A), orderBy("pacienteFichaNum", "desc"), limit(10)));
+  await loguearComo(PERSONAS.administrativa);
+  await getDocs(query(collection(db, "fichasUsadas"), where("sedeId", "==", SEDE_A), orderBy("pacienteFichaNum", "desc"), limit(10)));
 });

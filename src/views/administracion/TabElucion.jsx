@@ -2,11 +2,9 @@ import { useEffect, useMemo, useState } from "react";
 import { Badge } from "../../components/ui/Badge.jsx";
 import { Btn } from "../../components/ui/Btn.jsx";
 import { Input } from "../../components/ui/Input.jsx";
-import { Sel } from "../../components/ui/Sel.jsx";
 import { ModalAnularActa } from "../../components/actas/ModalAnularActa.jsx";
 import { fmtF, fmtTs, fmtHora, fmtFechaISO, hoy, agruparPorFecha } from "../../helpers/formato.js";
 import { descargarArchivo } from "../../helpers/descargarArchivo.js";
-import { sedesActivas } from "../../helpers/stock.js";
 import { normalizarLoteSeisDigitos } from "../../helpers/lote.js";
 import { listenActas, addActaElucion, actasPorRango, anularActaTransaction, listenAnulacionesActas, loteGeneradorYaRegistrado } from "../../services/firestore/actas.js";
 
@@ -41,7 +39,9 @@ export function TabElucion({ catalogo, usuario, esAdmin, onToast }) {
     return (e) => { setter(e.target.value); setResultadoRango(null); setErrorRango(null); };
   }
 
-  const [sedeId, setSedeId] = useState(usuario.sede);
+  // Sede de trabajo (2026-11): constante, no estado -- ver nota equivalente
+  // en TabPacientes.jsx. Ya no hay selector "Sede" para elegir otra.
+  const sedeId = usuario.sede;
   const [loteGenerador, setLoteGenerador] = useState("");
   const [loteVerificado, setLoteVerificado] = useState("");
   const [esPrimeraVez, setEsPrimeraVez] = useState(false);
@@ -108,12 +108,29 @@ export function TabElucion({ catalogo, usuario, esAdmin, onToast }) {
   async function confirmarAnulacion(acta, motivo) {
     try {
       await anularActaTransaction(acta, motivo, usuario);
-      onToast("Elución anulada", "info", 6000);
       setMAnular(null);
+      // Sede de trabajo (2026-11): hallazgo real de Pablo -- loteGenerador
+      // está atado a generadoresVistos, un marcador POR SEDE (id
+      // sedeId_lote). Precargarlo en una elución nueva de la sede de
+      // trabajo haría que la detección de "primera vez" (useEffect de
+      // abajo, vía loteGeneradorYaRegistrado(sedeId,...)) mire el marcador
+      // de la sede de trabajo, no el de la sede real del generador --
+      // resultado incorrecto, no sólo una mezcla de datos. Sólo se puede
+      // ver una elución de otra sede auditándola, nunca trabajando ahí --
+      // si eso pasó, NO se precarga nada: la corrección se carga desde los
+      // libros de esa otra sede, no desde acá.
+      if (acta.sedeId !== sedeId) {
+        onToast(
+          `Elución anulada. Era de ${catalogo.sedes[acta.sedeId]?.nombre || "otra sede"} -- la corrección se carga desde los libros de esa sede, no desde acá.`,
+          "info", 10000
+        );
+        return;
+      }
+      onToast("Elución anulada", "info", 6000);
       // Precarga para corregir sólo lo que estaba mal -- ver mismo patrón en
       // TabMarcacion/TabPacientes. La detección de "primera vez" se vuelve a
       // correr sola (useEffect de arriba) apenas se precarga el lote.
-      setSedeId(acta.sedeId); setLoteGenerador(acta.loteGenerador); setLoteVerificado(acta.loteGenerador);
+      setLoteGenerador(acta.loteGenerador); setLoteVerificado(acta.loteGenerador);
       setActividadCalibrada(acta.actividadCalibrada != null ? String(acta.actividadCalibrada) : "");
       setFechaCalibracionGen(acta.fechaCalibracion || ""); setFechaVencimientoGen(acta.fechaVencimiento || ""); setNumeroGenerador(acta.numeroGenerador || "");
       setActividadEluida(String(acta.actividadEluida ?? "")); setVolumen(String(acta.volumen ?? "")); setObs(acta.observacion || "");
@@ -356,11 +373,6 @@ export function TabElucion({ catalogo, usuario, esAdmin, onToast }) {
             </button>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            {esAdmin && (
-              <Sel label="Sede" value={sedeId} onChange={(e) => setSedeId(e.target.value)}>
-                {sedesActivas(catalogo).map((s) => <option key={s.id} value={s.id}>{s.short}</option>)}
-              </Sel>
-            )}
             {!sedeEluye && (
               <div className="sm:col-span-2 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 text-sm text-amber-700">
                 Esta sede no tiene elución habilitada — activala en Configuración → Sedes activas.
@@ -463,6 +475,11 @@ export function TabElucion({ catalogo, usuario, esAdmin, onToast }) {
         <ModalAnularActa
           acta={mAnular}
           resumen={`Elución ${mAnular.loteGenerador} — ${mAnular.actividadEluida} mCi (${mAnular.sedeNombre || catalogo.sedes[mAnular.sedeId]?.nombre})`}
+          notaExtra={
+            mAnular.sedeId === sedeId
+              ? "Después de confirmar se abre el formulario precargado con estos mismos datos para que corrijas sólo lo que estaba mal."
+              : `Es un registro de ${catalogo.sedes[mAnular.sedeId]?.nombre || "otra sede"} -- no se precarga ningún dato: la corrección se carga desde los libros de esa sede, no desde acá.`
+          }
           onConfirm={confirmarAnulacion}
           onClose={() => setMAnular(null)}
         />

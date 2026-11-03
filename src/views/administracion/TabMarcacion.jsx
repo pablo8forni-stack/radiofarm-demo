@@ -8,7 +8,7 @@ import { CasilleroExcepcion } from "../../components/ui/CasilleroExcepcion.jsx";
 import { ModalAnularActa } from "../../components/actas/ModalAnularActa.jsx";
 import { fmtF, fmtTs, fmtHora, fmtFechaISO, hoy, agruparPorFecha } from "../../helpers/formato.js";
 import { descargarArchivo } from "../../helpers/descargarArchivo.js";
-import { sedesActivas, farmsDeSede } from "../../helpers/stock.js";
+import { farmsDeSede } from "../../helpers/stock.js";
 import { egresosDisponiblesParaMarcar } from "../../helpers/egresosDisponiblesParaMarcar.js";
 import { listenActas, addActaMarcacion, actasPorRango, anularActaTransaction, listenAnulacionesActas } from "../../services/firestore/actas.js";
 import { listenMovimientosEgresoHoy } from "../../services/firestore/movimientos.js";
@@ -54,7 +54,9 @@ export function TabMarcacion({ catalogo, usuario, esAdmin, onToast }) {
   // en la app (CSV, cruce con Libro 2) sigue leyendo por texto de lote.
   const [egresoMovimientoId, setEgresoMovimientoId] = useState("");
   const [mciMarcacion, setMciMarcacion] = useState(""); const [obs, setObs] = useState("");
-  const [sedeId, setSedeId] = useState(usuario.sede);
+  // Sede de trabajo (2026-11): constante, no estado -- ver nota equivalente
+  // en TabPacientes.jsx. Ya no hay selector "Sede" para elegir otra.
+  const sedeId = usuario.sede;
   // Bug real encontrado (Pablo, evidencia propia): con 2 egresos + 2
   // marcaciones reales del mismo lote (stock a 0), se pudo crear una
   // TERCERA marcación sin ningún egreso real que la respalde -- el
@@ -87,8 +89,23 @@ export function TabMarcacion({ catalogo, usuario, esAdmin, onToast }) {
   async function confirmarAnulacion(acta, motivo) {
     try {
       await anularActaTransaction(acta, motivo, usuario);
-      onToast("Marcación anulada", "info", 6000);
       setMAnular(null);
+      // Sede de trabajo (2026-11): hallazgo real de Pablo -- acta.lote es
+      // stock FÍSICO de la sede donde se marcó, no un dato genérico.
+      // Precargarlo en una marcación nueva de la sede de trabajo lo
+      // atribuiría a un lote que puede ni siquiera existir (o ser otro
+      // distinto) en esa sede. Sólo se puede ver una marcación de otra
+      // sede auditándola, nunca trabajando ahí -- si eso pasó, NO se
+      // precarga nada: la corrección se carga desde los libros de esa
+      // otra sede, no desde acá.
+      if (acta.sedeId !== sedeId) {
+        onToast(
+          `Marcación anulada. Era de ${catalogo.sedes[acta.sedeId]?.nombre || "otra sede"} -- la corrección se carga desde los libros de esa sede, no desde acá.`,
+          "info", 10000
+        );
+        return;
+      }
+      onToast("Marcación anulada", "info", 6000);
       // Precarga el formulario con los mismos datos para corregir sólo lo
       // que estaba mal, en vez de tipear todo de nuevo. Restaura el mismo
       // camino que tenía la marcación original -- best effort, no
@@ -96,7 +113,7 @@ export function TabMarcacion({ catalogo, usuario, esAdmin, onToast }) {
       // lo liberó (mismo id determinístico que intentoHabilitado espera),
       // así que vuelve a aparecer seleccionable en la lista; si venía de
       // "Ver todo el stock" (confirmoSinEgreso), vuelve a ese modo.
-      setSedeId(acta.sedeId); setFarmId(acta.farmId); setLote(acta.lote);
+      setFarmId(acta.farmId); setLote(acta.lote);
       setVerTodoElStock(!acta.egresoMovimientoId);
       setEgresoMovimientoId(acta.egresoMovimientoId || "");
       setMciMarcacion(String(acta.mciMarcacion ?? "")); setObs(acta.observacion || "");
@@ -346,11 +363,6 @@ export function TabMarcacion({ catalogo, usuario, esAdmin, onToast }) {
             </button>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            {esAdmin && (
-              <Sel label="Sede" value={sedeId} onChange={(e) => { setSedeId(e.target.value); setFarmId(""); setLote(""); setEgresoMovimientoId(""); }}>
-                {sedesActivas(catalogo).map((s) => <option key={s.id} value={s.id}>{s.short}</option>)}
-              </Sel>
-            )}
             <Sel label="Radiofármaco" value={farmId} onChange={(e) => { setFarmId(e.target.value); setLote(""); setEgresoMovimientoId(""); }}>
               <option value="">Seleccionar...</option>
               {farmsDeSede(catalogo, sedeId).map((f) => <option key={f.id} value={f.id}>{f.nombre}</option>)}
@@ -482,6 +494,11 @@ export function TabMarcacion({ catalogo, usuario, esAdmin, onToast }) {
         <ModalAnularActa
           acta={mAnular}
           resumen={`${mAnular.farmNombre} — ${mAnular.mciMarcacion} mCi (${mAnular.sedeNombre || catalogo.sedes[mAnular.sedeId]?.nombre})`}
+          notaExtra={
+            mAnular.sedeId === sedeId
+              ? "Después de confirmar se abre el formulario precargado con estos mismos datos para que corrijas sólo lo que estaba mal."
+              : `Es un registro de ${catalogo.sedes[mAnular.sedeId]?.nombre || "otra sede"} -- no se precarga ningún dato: la corrección se carga desde los libros de esa sede, no desde acá.`
+          }
           onConfirm={confirmarAnulacion}
           onClose={() => setMAnular(null)}
         />

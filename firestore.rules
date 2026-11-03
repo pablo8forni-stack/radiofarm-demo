@@ -5,40 +5,55 @@ rules_version = '2';
 // minúsculas (así lo devuelve Google para cuentas Gmail/Workspace estándar).
 //
 // Aislamiento entre sedes (decisión de Pablo, auditoría de aislamiento
-// 2026-11-03): cada sede es independiente de las demás, salvo para
+// 2026-11-03/04): cada sede es independiente de las demás, salvo para
 // intercambiar fármacos (transferencias) -- eso lo hace siempre un admin,
-// nunca un técnico. Un técnico sólo ve su propia sede, siempre, en
-// cualquier colección (movimientos/lotes/fichasDescartadas/actas/
+// nunca un técnico. Un técnico sólo ve y escribe su propia sede, siempre,
+// en cualquier colección (movimientos/lotes/fichasDescartadas/actas/
 // mibg_lote/fichasUsadas/turnos/pedidosSemanales).
 //
-// Pacientes y actas (actas, mibg_lote): el admin también ve UNA sede a la
-// vez -- la que esté auditando (roles/{email}.sedeAuditando, ver más
-// abajo), nunca varias mezcladas.
+// Dos conceptos DISTINTOS para el admin (2026-11-04):
+//   - Sede de trabajo (roles/{email}.sede): dónde el admin desempeña
+//     funciones (hoy todos en Central). Es la sede en la que escribe --
+//     TODO lo que registra (paciente/ficha, marcación, elución, ingreso,
+//     egreso, alta de lote MIBG/Lutecio, cada tipo de acta I-131) va a los
+//     libros de esta sede, nunca a otra.
+//   - Sede auditada (roles/{email}.sedeAuditando, Configuración): sólo
+//     para VER. Nunca determina dónde se escribe nada.
+// Excepciones a "todo lo que el admin registra va a su sede de trabajo":
+//   - Transferencias (movimientos tipo transferencia_salida/entrada): el
+//     admin elige origen y destino libremente, cualquiera de las dos
+//     puede no ser su sede -- así se mueve material entre sedes, por diseño.
+//   - Anular (movimientos y actas) y descartar/deshacer descarte de
+//     fichas: correctivos, se pueden hacer sobre cualquier sede (sujeto a
+//     que el admin pueda VERLA primero -- ver notas puntuales en cada
+//     match más abajo sobre qué eso implica en la práctica).
 //
-// fichasUsadas: EXCEPCIÓN CONOCIDA Y PENDIENTE, todavía sin cerrar -- el
-// admin hoy puede leer fichasUsadas de cualquier sede, sin pasar por
-// sedeAuditando (a diferencia de actas/mibg_lote). No es el mismo criterio
-// de logística de movimientos/lotes: fichasUsadas SÍ tiene datos de
-// paciente (pacienteNombre/pacienteDni, Fase 1B) y la intención es que
-// termine igual que actas/mibg_lote. Queda así a propósito, pendiente de
-// una decisión de Pablo sobre TabPacientes.jsx (selector admin "Guardar en
-// sede", ver nota en services/firestore/actas.js:52-61): ese selector deja
-// guardar un paciente en una sede distinta de la auditada, y el chequeo
-// previo al guardado (resolverFichaIntento/fechaFichaSiguiente/
-// obtenerUltimaFicha) lee fichasUsadas de esa sede elegida, no de
-// sedeAuditando -- cerrar esta regla tal cual rompería ese flujo (probado
-// real contra el emulador: ambas funciones tiran permission-denied cuando
-// la sede elegida no es la auditada).
+// fichasUsadas: CERRADO (2026-11-04) -- el admin lee su sede de trabajo
+// (necesaria porque el chequeo previo a guardar un N° de Ficha,
+// TabPacientes.jsx, siempre corre contra ella) y la que esté auditando
+// (necesaria para el cartel de huecos/control de fichas), nunca "todas".
 //
-// Logística (movimientos, lotes): excepción EXPLÍCITA y acotada a estas
-// dos colecciones -- el admin SÍ puede leer varias sedes a la vez, sin
-// pasar por sedeAuditando. Motivo: decidir transferencias y pedidos
-// (restock) requiere comparar stock/movimientos entre sedes, no auditar
-// una por una (VistaHistorial.jsx "Todas las sedes" + export CSV,
+// Protección TRANSITIVA, no una regla por colección (2026-11-04, para que
+// quede dicho sin vueltas): lotes, generadoresVistos y la ESCRITURA de
+// fichasUsadas NO tienen, ellas mismas, ningún chequeo de sede de trabajo
+// para admin -- siguen con isAdmin() sin más. La restricción real vive en
+// movimientoValido()/actaValida(), y alcanza a esas tres colecciones SÓLO
+// PORQUE el cliente las crea en el MISMO writeBatch/transacción que el
+// movimiento/acta principal (ver detalle en cada función). Un admin que
+// escriba DIRECTO a esas tres colecciones (SDK/consola, saltando el
+// batch) puede hacerlo en cualquier sede HOY MISMO, sin que ninguna regla
+// lo note -- no es un riesgo a futuro, es el estado actual.
+//
+// Logística (movimientos, lotes): excepción de LECTURA, EXPLÍCITA y
+// acotada a estas dos colecciones -- el admin SÍ puede leer varias sedes a
+// la vez, sin pasar por sedeAuditando. Motivo: decidir transferencias y
+// pedidos (restock) requiere comparar stock/movimientos entre sedes, no
+// auditar una por una (VistaHistorial.jsx "Todas las sedes" + export CSV,
 // VistaPedidos.jsx, TabCatalogo.jsx/TabSedesActivas.jsx -- Configuración).
-// No es un descuido ni una regla pendiente de cerrar: es la excepción que
-// Pablo aceptó a propósito, separada de la de técnico (que NUNCA tiene
-// esta excepción, ver las reglas de movimientos/lotes más abajo).
+// No es un descuido: es la excepción que Pablo aceptó a propósito,
+// separada de la de técnico (que NUNCA la tiene). Es sólo de LECTURA --
+// la ESCRITURA de movimientos sigue atada a la sede de trabajo salvo las
+// excepciones de arriba (transferencia/anulación).
 service cloud.firestore {
   match /databases/{database}/documents {
 
@@ -232,6 +247,19 @@ service cloud.firestore {
           request.resource.data.cantidad >= 0 &&
           request.resource.data.cantidad < resource.data.cantidad
         );
+        // Sede de trabajo del admin (2026-11-04): esta línea NO exige
+        // sedeId == miRol().sede para admin -- a propósito, no es un
+        // descuido. La restricción real de "ingreso sólo en tu sede" vive
+        // en movimientoValido() (ver match /movimientos), y alcanza acá
+        // SÓLO PORQUE ingresoBatch (services/firestore/stock.js) crea el
+        // lote y el movimiento de ingreso en el MISMO writeBatch atómico:
+        // si el movimiento se rechaza por sede, el batch entero se cae y
+        // el lote tampoco se crea. Es una protección TRANSITIVA por diseño
+        // del cliente, no una regla de esta colección. Un admin que escriba
+        // DIRECTO acá (SDK/consola, saltando ingresoBatch) puede crear o
+        // borrar un lote en cualquier sede hoy mismo, sin que esta regla lo
+        // note -- queda así a propósito en esta iteración, documentado para
+        // no asumir una protección que no existe a este nivel.
         allow create, delete: if isAdmin();
       }
     }
@@ -290,10 +318,27 @@ service cloud.firestore {
 
     // Valida contenido, no sólo permiso de escribir. Técnico sólo puede crear
     // 'egreso' (nunca ingreso, transferencia ni anulación) y siempre sobre su
-    // propia sede; admin no tiene esa restricción de tipo/sede -- pero SÍ
-    // queda sujeto, igual que el técnico, a la cláusula de cantidad == 1 de
-    // acá abajo: es una regla de negocio (qué es un egreso), no de permisos
-    // por rol.
+    // propia sede; admin no tiene esa restricción de tipo, pero SÍ queda
+    // sujeto, igual que el técnico, a la cláusula de cantidad == 1 de acá
+    // abajo: es una regla de negocio (qué es un egreso), no de permisos por
+    // rol.
+    //
+    // Sede de trabajo del admin (2026-11-04, decisión de Pablo): sedeAuditando
+    // es SÓLO para ver: lo que el admin registra va a los libros de su
+    // propia sede (roles/{email}.sede), nunca a la que esté auditando.
+    // tiposMovimiento() tiene 5 valores -- qué hace esta regla con cada uno,
+    // para el admin:
+    //   - 'ingreso'/'egreso': SÍ quedan atados a miRol().sede -- son
+    //     "lo que el admin registra" en el sentido de Pablo.
+    //   - 'transferencia_salida'/'transferencia_entrada': EXCEPTUADOS, sin
+    //     restricción -- el admin elige origen y destino libremente (así
+    //     es como se mueve material entre sedes, por diseño).
+    //   - 'anulacion': EXCEPTUADO, sin restricción -- anular es correctivo,
+    //     se puede hacer sobre un movimiento de cualquier sede (en la
+    //     práctica, sólo de las que el admin ya puede VER -- para
+    //     movimientos eso es todas, sin restricción, ver match de abajo).
+    // Para técnico no cambia nada: sigue siendo siempre su propia sede,
+    // para 'egreso' (el único tipo que puede crear).
     function movimientoValido() {
       let d = request.resource.data;
       return d.usuarioEmail == request.auth.token.email &&
@@ -302,7 +347,11 @@ service cloud.firestore {
         d.sedeId is string && d.sedeId.size() > 0 &&
         d.farmId is string && d.farmId.size() > 0 &&
         d.lote is string && d.lote.size() > 0 &&
-        (isAdmin() || miRol().sede == d.sedeId) &&
+        (isAdmin()
+          ? (d.tipo == 'anulacion' || d.tipo == 'transferencia_salida' || d.tipo == 'transferencia_entrada' ||
+             ('sede' in miRol() && miRol().sede == d.sedeId))
+          : miRol().sede == d.sedeId
+        ) &&
         (d.tipo == 'egreso' || isAdmin()) &&
         (!(d.tipo == 'ingreso' || d.tipo == 'egreso') || (d.loteId is string && d.loteId.size() > 0)) &&
         (!(d.tipo == 'transferencia_salida' || d.tipo == 'transferencia_entrada') ||
@@ -451,11 +500,15 @@ service cloud.firestore {
         ? intentoMasAltoActivo('lote_', loteId)
         : intentoMasAltoActivo('mibg_', loteId);
     }
+    // Sede de trabajo del admin (2026-11-04): el alta de un lote nuevo
+    // (MIBG/Lutecio-177) nunca es cross-sede, sin excepciones -- a
+    // diferencia de movimientos/actas, acá no hace falta distinguir por
+    // tipo.
     function mibgLoteValido() {
       let d = request.resource.data;
       return d.usuarioEmail == request.auth.token.email &&
         d.sedeId is string && d.sedeId.size() > 0 &&
-        (isAdmin() || miRol().sede == d.sedeId) &&
+        (isAdmin() ? ('sede' in miRol() && miRol().sede == d.sedeId) : miRol().sede == d.sedeId) &&
         d.numeroLote is string && d.numeroLote.size() > 0 &&
         d.proveedor is string && d.proveedor.size() > 0 &&
         d.actividadCalibrada is number && d.actividadCalibrada > 0 &&
@@ -647,12 +700,23 @@ service cloud.firestore {
     // crear un doc con forma válida pero fuera del id que exists()/allow
     // update:false usan para dar la garantía real (auditoría de seguridad,
     // hallazgos #1/#4).
+    // Sede de trabajo del admin (2026-11-04, decisión de Pablo): sedeAuditando
+    // es sólo para ver; todo lo que el admin registra -- paciente, marcación,
+    // elución, cada tipo I-131/MIBG/Lutecio-177 -- va a los libros de SU
+    // propia sede (roles/{email}.sede), nunca a la que esté auditando. La
+    // única excepción es 'anulacion': ya exige isAdmin() explícito en su
+    // propia rama de abajo, y es correctivo (se puede anular una acta de
+    // cualquier sede) -- por eso el chequeo de sede de acá arriba se salta
+    // para ese tipo, no para los otros 15.
     function actaValida(actaId) {
       let d = request.resource.data;
       return d.usuarioEmail == request.auth.token.email &&
         d.tipo in tiposActa() &&
         d.sedeId is string && d.sedeId.size() > 0 &&
-        (isAdmin() || miRol().sede == d.sedeId) &&
+        (d.tipo == 'anulacion'
+          ? isAdmin()
+          : (isAdmin() ? ('sede' in miRol() && miRol().sede == d.sedeId) : miRol().sede == d.sedeId)
+        ) &&
         (d.tipo == 'anulacion'
           ? (isAdmin() && d.anulaId is string && d.anulaId.size() > 0 &&
              actaId == 'anula_' + d.anulaId &&
@@ -960,6 +1024,16 @@ service cloud.firestore {
     // (b) que el id tenga el formato exacto sedeId_LOTE (mayúsculas). Sube el
     // costo de fabricar un marcador falso (hay que inventar un número
     // plausible Y acertar el id), pero no lo hace imposible sin backend.
+    // Sede de trabajo del admin (2026-11-04): (isAdmin() || ...) de acá
+    // abajo NO exige sedeId == miRol().sede para admin -- a propósito, no
+    // un descuido. La restricción real vive en actaValida() (tipo
+    // 'elucion'), y alcanza acá SÓLO PORQUE addActaElucion
+    // (services/firestore/actas.js) crea el acta y este marcador en el
+    // MISMO writeBatch: si el acta se rechaza por sede, el batch entero se
+    // cae. Protección TRANSITIVA por diseño del cliente, no una regla de
+    // esta colección -- un admin que escriba DIRECTO acá puede fabricar un
+    // marcador de cualquier sede hoy mismo, sin dato de paciente pero sin
+    // que esta regla lo note.
     function generadorValido(generadorId) {
       let d = request.resource.data;
       return d.sedeId is string && d.sedeId.size() > 0 &&
@@ -1188,6 +1262,16 @@ service cloud.firestore {
         // seguir creando fichas sin que esta regla lo rechace. Si el campo
         // viene, sí se valida su forma (string no vacío), igual que el resto.
         (!('pacienteDni' in d) || (d.pacienteDni is string && d.pacienteDni.size() > 0)) &&
+        // Sede de trabajo del admin (2026-11-04): (isAdmin() || ...) de acá
+        // NO exige sedeId == miRol().sede para admin -- a propósito. La
+        // restricción real vive en actaValida(), y alcanza acá SÓLO PORQUE
+        // crearActaConFicha/administrarMibgTransaction/administrarLutecioTransaction
+        // (actas.js/mibgLotes.js) crean la acta y este marcador en el MISMO
+        // batch/transacción: si la acta se rechaza por sede, tampoco se
+        // crea el marcador. Protección TRANSITIVA por diseño del cliente,
+        // no una regla de esta colección -- un admin que escriba DIRECTO
+        // acá puede crear un marcador de fichasUsadas (con nombre y DNI) de
+        // cualquier sede hoy mismo, sin que esta regla lo note.
         (isAdmin() || miRol().sede == d.sedeId) &&
         d.actaId is string && d.actaId.size() > 0 &&
         d.tipo is string && d.tipo.size() > 0 &&
@@ -1207,7 +1291,23 @@ service cloud.firestore {
       // se usó este número?" ANTES de que el marcador exista -- mismo
       // motivo que el resource==null de actas/mibg_lote. Sin esto, CUALQUIER
       // alta nueva (los 4 flujos) se rompía (confirmado probando).
-      allow read: if tieneAcceso() && (resource == null || isAdmin() || miRol().sede == resource.data.sedeId);
+      //
+      // Sede de trabajo del admin (2026-11-04): CERRADO -- ya no es
+      // `isAdmin()` sin más (eso era la excepción pendiente documentada en
+      // la cabecera del archivo). El admin ahora lee DOS sedes, nunca
+      // "todas": la suya propia (miRol().sede -- necesaria porque
+      // resolverFichaIntento/fechaFichaSiguiente/obtenerUltimaFicha,
+      // TabPacientes.jsx, SIEMPRE chequean contra ella, ya que es donde se
+      // va a guardar cualquier registro nuevo) y la que esté auditando
+      // (miRol().sedeAuditando -- necesaria para el cartel de huecos/
+      // control de fichas cuando audita una sede que no es la suya). Nunca
+      // una tercera.
+      allow read: if tieneAcceso() && (
+        resource == null ||
+        (isAdmin() && 'sede' in miRol() && resource.data.sedeId == miRol().sede) ||
+        (isAdmin() && 'sedeAuditando' in miRol() && resource.data.sedeId == miRol().sedeAuditando) ||
+        miRol().sede == resource.data.sedeId
+      );
       // Fase 1A: sólo admin/técnico pueden crear -- una ficha falsa de
       // administrativa bloquearía ese número para un técnico real.
       allow create: if tieneAcceso() && (isAdmin() || miRol().rol == 'tecnico') && fichaUsadaValida(id);

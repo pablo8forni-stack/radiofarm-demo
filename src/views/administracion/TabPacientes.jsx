@@ -14,7 +14,7 @@ import { descargarArchivo } from "../../helpers/descargarArchivo.js";
 import { parseQR } from "../../helpers/qr.js";
 import { prepararSonidoEscaneo } from "../../helpers/feedbackEscaneo.js";
 import { registrarLog } from "../../helpers/debugLog.js";
-import { sedesActivas, farmsDeSede } from "../../helpers/stock.js";
+import { farmsDeSede } from "../../helpers/stock.js";
 import { normalizarFicha, compararPorSedeYFichaDescendente } from "../../helpers/fichaPaciente.js";
 import { crearGuardDeSecuencia } from "../../helpers/guardSecuencia.js";
 import { TIPO_LABEL_I131 } from "../../constants/tipoI131.js";
@@ -223,9 +223,10 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
   const [modoManual, setModoManual] = useState(false);
   const mostrarFechaReal = atrasoDetectado || modoManual;
   const [fechaRealAtencion, setFechaRealAtencion] = useState("");
-  // Mismo patrón que fichaTocada: una vez que la técnica edita el campo a
-  // mano, la precarga automática (ver useEffect más abajo) nunca lo vuelve
-  // a pisar -- defensa en profundidad además del guard de secuencia de
+  // Mismo patrón "tocado a mano, no autopisar" que usa el resto del
+  // formulario: una vez que la técnica edita el campo a mano, la precarga
+  // automática (ver useEffect más abajo) nunca lo vuelve a pisar --
+  // defensa en profundidad además del guard de secuencia de
   // resolverYSetFichaEstado (bug real encontrado con evidencia de Firebase
   // Console: una respuesta tardía de una consulta vieja podía ocultar el
   // campo y, al reaparecer, se re-precargaba con "ahora" sobre el valor ya
@@ -243,16 +244,6 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
   // placeholder que casi nunca llega a verse (el campo siempre se precarga
   // con un valor real al abrir el form).
   const [ultimaFicha, setUltimaFicha] = useState(null);
-  // true apenas el campo de Ficha recibe un input REAL del usuario (ver
-  // onChange del Input más abajo) -- false cada vez que la propia app lo
-  // rellena (precarga, refresco al cambiar de sede, dato del QR, reintento
-  // post-anulación, o limpiarForm). Un <input> controlado sólo dispara su
-  // onChange ante una interacción real -- un setFichaNro(x) desde código
-  // nunca lo hace, así que el flag es tan simple como marcar true ahí y
-  // false en cada lugar que precarga el valor. Sirve para decidir, al
-  // cambiar de sede (banner "Guardar en sede"), si hay que REFRESCAR la
-  // sugerencia (valor todavía intacto) o sólo REVALIDAR lo ya tipeado.
-  const [fichaTocada, setFichaTocada] = useState(false);
   // isotopoId siempre presente al guardar (nunca ausente) -- "tc99m" es el
   // comportamiento por defecto sin selector visible (99% de los casos, cero
   // fricción). mostrarIsotopo sólo controla si el link "¿Es un caso
@@ -269,7 +260,13 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
   const [estudioOtro, setEstudioOtro] = useState("");
   const [farmId, setFarmId] = useState(""); const [lote, setLote] = useState("");
   const [obs, setObs] = useState("");
-  const [sedeId, setSedeId] = useState(usuario.sede);
+  // Sede de trabajo (2026-11, "sede de trabajo del admin"): ya NO es un
+  // selector -- un admin registra SIEMPRE en su propia sede (usuario.sede),
+  // nunca en la que esté auditando (sedeAuditando, sólo para ver). Antes
+  // había un selector "Guardar en sede" acá -- se sacó porque dejaba elegir
+  // cualquier sede, contradiciendo esa regla. Constante, no estado: nada
+  // dentro de este componente puede cambiarla.
+  const sedeId = usuario.sede;
   // Lista de lotes seleccionables (Tc-99m) -- por defecto SÓLO los
   // marcados hoy en Libro 1 (regla de negocio confirmada: el evento que
   // manda es la Marcación, no el Egreso/stock). "Ver todos los lotes en
@@ -462,17 +459,13 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
   // precargado: si el técnico nunca visita el campo, Guardar no debe
   // quedar esperando un blur que no va a llegar.
   //
-  // sedeIdDestino es OBLIGATORIO, nunca lee sedeId del estado -- mismo
-  // motivo de siempre (closure stale si se llama justo después de un
-  // setSedeId en el mismo handler síncrono, ver resolverYSetFichaEstado).
-  // Usa obtenerUltimaFicha (one-shot) en vez del ultimaFicha reactivo:
-  // tras un cambio de sede recién disparado, el listener de listenUltimaFicha
-  // (atado a [sedeId]) todavía no trajo el primer snapshot de la sede
-  // nueva -- ultimaFicha seguiría reflejando la sede VIEJA por un
-  // instante. Limpia el campo de una (sin dejar ver, ni un instante, el
-  // número de la sede vieja) mientras resuelve.
+  // sedeIdDestino explícito igual (sedeId es constante desde que se sacó
+  // el selector "Guardar en sede", pero mantiene el parámetro para no
+  // depender implícitamente de una variable de afuera). Usa
+  // obtenerUltimaFicha (one-shot) en vez del ultimaFicha reactivo: resuelve
+  // antes de que listenUltimaFicha traiga su primer snapshot.
   async function precargarSugerenciaFicha(sedeIdDestino) {
-    setFichaNro(""); setFichaTocada(false); setFichaEstado(null);
+    setFichaNro(""); setFichaEstado(null);
     // Cache de guardar() (ultimaFichaGuardadaRef) sólo si es de la MISMA
     // sede -- si cambió de sede o todavía no hay nada guardado esta sesión,
     // cae a la consulta de siempre (obtenerUltimaFicha, one-shot). Evita la
@@ -485,7 +478,6 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
     setUltimaFicha(ultima);
     const sugerida = ultima != null ? String(ultima + 1) : "";
     setFichaNro(sugerida);
-    setFichaTocada(false);
     resolverYSetFichaEstado(sedeIdDestino, sugerida);
   }
 
@@ -563,6 +555,22 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
       // usoPorLoteId/usoLutecioPorLoteId más arriba), listo para
       // reasignarlo con el dato de dosis corregido.
       await anularActaTransaction(acta, motivo, usuario);
+      setMAnular(null);
+      // Sede de trabajo (2026-11): hallazgo real de Pablo -- precargar
+      // ficha/nombre/DNI de un acta de OTRA sede en un registro nuevo de
+      // la sede de trabajo mezclaría N° de Ficha entre sedes (es
+      // correlativo POR SEDE, no global: ver fichaValida/fichaUsadaValida
+      // en firestore.rules). Sólo se puede ver un acta de otra sede
+      // auditándola (sedeAuditando), nunca trabajando ahí -- si eso pasó,
+      // NO se precarga nada: la corrección se carga desde los libros de
+      // esa otra sede, no desde acá.
+      if (acta.sedeId !== sedeId) {
+        onToast(
+          `Registro anulado. Era de ${catalogo.sedes[acta.sedeId]?.nombre || "otra sede"} -- la corrección se carga desde los libros de esa sede, no desde acá.`,
+          "info", 10000
+        );
+        return;
+      }
       const tieneLote = acta.mibgLoteId || acta.loteDosisUnicaId;
       onToast(
         tieneLote
@@ -570,22 +578,21 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
           : "Registro anulado",
         "info", tieneLote ? 10000 : 6000
       );
-      setMAnular(null);
       // Precarga el formulario con los mismos datos para corregir sólo lo
       // que estaba mal, en vez de tipear todo de nuevo. i131_mibg es el
       // primer subtipo de I-131 con botón Anular en Libro 2 (antes limitado
       // a tipo:"paciente") -- necesita su propia rama, no la reconoce el
       // criterio isotopoId de abajo (los 6 subtipos de I-131 no tienen ese
       // campo, distinguen por tipo).
-      setSedeId(acta.sedeId); setFichaNro(acta.pacienteFicha || ""); setFichaTocada(false); setNombre(acta.pacienteNombre); setDni(acta.pacienteDni);
+      setFichaNro(acta.pacienteFicha || ""); setNombre(acta.pacienteNombre); setDni(acta.pacienteDni);
       // Dispara el chequeo/resolución del intento siguiente de una (no
       // espera a que el técnico toque el campo) -- recién anulamos el
       // intento anterior arriba, así que este chequeo YA lo ve anulado y
       // resuelve el próximo libre. Sin esto, Guardar quedaría deshabilitado
       // hasta que el técnico clickeara el campo de Ficha y saliera de él.
-      // acta.sedeId directo (no el sedeId de estado): el setSedeId de arriba
-      // recién se aplica en el próximo render, closure stale si se leyera acá.
-      resolverYSetFichaEstado(acta.sedeId, acta.pacienteFicha || "");
+      // sedeId (constante) en vez de acta.sedeId -- la corrección se guarda
+      // en la sede de trabajo, no en la del acta original (ver nota arriba).
+      resolverYSetFichaEstado(sedeId, acta.pacienteFicha || "");
       setPeso(String(acta.peso ?? "")); setTalla(String(acta.talla ?? "")); setEstudio(acta.estudio || "");
       setObs(acta.observacion || "");
       if (acta.tipo === "i131_mibg") {
@@ -625,7 +632,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
       // el valor de estado es válido acá (sin el riesgo de closure stale
       // que sí aplica en confirmarAnulacion).
       const fichaDelQR = normalizarFicha(data.pacienteFicha);
-      if (fichaDelQR) { setFichaNro(fichaDelQR); setFichaTocada(false); resolverYSetFichaEstado(sedeId, fichaDelQR); }
+      if (fichaDelQR) { setFichaNro(fichaDelQR); resolverYSetFichaEstado(sedeId, fichaDelQR); }
       else precargarSugerenciaFicha(sedeId);
       setMostrarForm(true);
       onToast("Pulsera leída correctamente", "success");
@@ -637,11 +644,11 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
   }
 
   function limpiarForm() {
-    setFichaNro(""); setFichaTocada(false); setFichaEstado(null); setNombre(""); setDni(""); setPeso(""); setTalla(""); setEstudio(""); setEstudioOtro(""); setMci(""); setFarmId(""); setLote(""); setObs("");
+    setFichaNro(""); setFichaEstado(null); setNombre(""); setDni(""); setPeso(""); setTalla(""); setEstudio(""); setEstudioOtro(""); setMci(""); setFarmId(""); setLote(""); setObs("");
     setMostrarIsotopo(false); setIsotopoId("tc99m"); setMedicoResponsable("");
     setTipoI131("barrido"); setActividadAdministrada(""); setIndicacion(""); setDosisVinculada(""); setMibgLoteSeleccionado(""); setLutecioLoteSeleccionado("");
     setExtraccionVinculada(""); setSinExtraccionVial(false);
-    setSedeId(usuario.sede); setVerTodoElStock(false); setConfirmoSinMarcacion(false); setSinRadiofarmaco(false);
+    setVerTodoElStock(false); setConfirmoSinMarcacion(false); setSinRadiofarmaco(false);
     setAtrasoDetectado(false); setModoManual(false); setFechaRealAtencion(""); setFechaRealAtencionTocada(false);
   }
 
@@ -1362,40 +1369,16 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
             </button>
           </div>
-          {esAdmin && (
-            // Bug real en producción: un admin cambió "Ver registros de"
-            // (el filtro de arriba de la lista, sin relación con esto) y
-            // asumió que eso redirigía dónde se guarda un registro NUEVO.
-            // El N° de Ficha es único POR SEDE, así que guardar en la sede
-            // equivocada no tira ningún error -- queda una acta real
-            // atribuida a la sede que no era. Por eso este control vive acá
-            // arriba, ANTES de cualquier otro campo (no perdido en la
-            // grilla, no hay que scrollear para verlo) y con un tratamiento
-            // visual que no se confunde con un campo más del formulario.
-            <div className="mb-4 bg-amber-50 border border-amber-200 rounded-xl p-3 flex flex-col gap-1.5">
-              <Sel label="Guardar en sede" value={sedeId} onChange={(e) => {
-                const nuevaSede = e.target.value;
-                setSedeId(nuevaSede); setFarmId(""); setLote("");
-                // El N° de Ficha es único POR SEDE. Si el valor en el campo
-                // es todavía la sugerencia intacta (fichaTocada false, el
-                // admin nunca la tocó), no tiene sentido revalidarla contra
-                // la sede nueva -- se REFRESCA con el "último + 1" real de
-                // esa sede (ver precargarSugerenciaFicha). Si el admin ya
-                // tipeó algo a mano, se deja intacto y sólo se revalida
-                // (mismo principio de nunca autocompletar en silencio que
-                // rige el resto de este campo).
-                if (!fichaTocada) precargarSugerenciaFicha(nuevaSede);
-                else if (fichaNro.trim()) resolverYSetFichaEstado(nuevaSede, fichaNro);
-              }}>
-                {sedesActivas(catalogo).map((s) => <option key={s.id} value={s.id}>{s.short}</option>)}
-              </Sel>
-              <p className="text-sm text-amber-700">Este registro se guarda acá, sin importar el filtro "Ver registros de" de arriba.</p>
-            </div>
-          )}
+          {/* Sede de trabajo (2026-11): el selector "Guardar en sede" se
+              sacó -- un admin ya no puede elegir dónde guardar, siempre es
+              su propia sede (usuario.sede). El aviso "Ver registros de" de
+              arriba sigue siendo sólo un filtro de lectura (sedeAuditando),
+              sin relación con dónde se guarda un registro nuevo -- eso ya
+              no hace falta aclararlo porque no hay nada que elegir. */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <Input
               label="N° de Ficha" value={fichaNro}
-              onChange={(e) => { setFichaNro(e.target.value); setFichaTocada(true); setFichaEstado(null); }}
+              onChange={(e) => { setFichaNro(e.target.value); setFichaEstado(null); }}
               onBlur={chequearFicha}
               // Selecciona todo al enfocar: el valor ya viene precargado
               // (sugerencia, dato del QR, o reintento post-anulación, ver
@@ -1818,6 +1801,11 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
         <ModalAnularActa
           acta={mAnular}
           resumen={`${mAnular.pacienteNombre} (DNI ${mAnular.pacienteDni})`}
+          notaExtra={
+            mAnular.sedeId === sedeId
+              ? "Después de confirmar se abre el formulario precargado con estos mismos datos para que corrijas sólo lo que estaba mal."
+              : `Es un registro de ${catalogo.sedes[mAnular.sedeId]?.nombre || "otra sede"} -- no se precarga ningún dato: la corrección se carga desde los libros de esa sede, no desde acá.`
+          }
           onConfirm={confirmarAnulacion}
           onClose={() => setMAnular(null)}
         />

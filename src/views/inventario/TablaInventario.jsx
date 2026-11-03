@@ -25,6 +25,13 @@ export function TablaInventario({ sedeId, catalogo, usuario, esAdmin, onToast })
   const [busq, setBusq] = useState("");
   const sedeNombre = catalogo.sedes[sedeId]?.nombre;
   const farms = farmsDeSede(catalogo, sedeId).filter((f) => f.nombre.toLowerCase().includes(busq.toLowerCase()));
+  // Sede de trabajo (2026-11): el admin puede seguir mirando el stock de
+  // cualquier sede (pestañas, excepción de logística ya aceptada), pero
+  // Ingreso/Egreso -- "lo que el admin registra" -- sólo valen en SU sede.
+  // Para técnico esto es siempre true (sólo tiene su propia pestaña, ver
+  // VistaInventario.jsx#sedesVisibles), así que no hace falta distinguir
+  // por rol acá -- esSedePropia alcanza para los dos casos.
+  const esSedePropia = sedeId === usuario.sede;
 
   // Avisa antes de cerrar/recargar si hay ingresos cargados en la lista pero
   // todavía no confirmados -- no persisten en ningún lado hasta "Cargar
@@ -163,6 +170,11 @@ export function TablaInventario({ sedeId, catalogo, usuario, esAdmin, onToast })
             placeholder="Buscar..." value={busq} onChange={(e) => setBusq(e.target.value)} />
         </div>
       </div>
+      {esAdmin && !esSedePropia && (
+        <div className="mb-3 bg-amber-50 border border-amber-200 rounded-xl px-4 py-2.5 text-sm text-amber-700">
+          Estás viendo el stock de <strong>{sedeNombre}</strong> en modo lectura — Ingreso y Egreso sólo se registran en tu sede de trabajo, <strong>{catalogo.sedes[usuario.sede]?.nombre}</strong>. Podés transferir stock hacia o desde acá igual.
+        </div>
+      )}
       <BarraCarritoIngresos cantidad={carrito.length} onAbrir={() => setMostrarCarrito(true)} />
       <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-x-auto">
         {/* Desktop: tabla de siempre. */}
@@ -208,8 +220,10 @@ export function TablaInventario({ sedeId, catalogo, usuario, esAdmin, onToast })
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex gap-1.5 justify-end flex-wrap">
-                      {esAdmin && <Btn size="sm" variant="success" onClick={() => abrirNuevoIngreso(f)}>+ Ingreso</Btn>}
-                      <Btn size="sm" variant="ghost" onClick={() => setMEgreso(f)} disabled={tot === 0}>− Egreso</Btn>
+                      {esAdmin && (
+                        <Btn size="sm" variant="success" onClick={() => abrirNuevoIngreso(f)} disabled={!esSedePropia} title={esSedePropia ? undefined : "Sólo se registran ingresos en tu sede de trabajo"}>+ Ingreso</Btn>
+                      )}
+                      <Btn size="sm" variant="ghost" onClick={() => setMEgreso(f)} disabled={tot === 0 || !esSedePropia} title={esSedePropia ? undefined : "Sólo se registran egresos en tu sede de trabajo"}>− Egreso</Btn>
                       {esAdmin && <Btn size="sm" variant="teal" onClick={() => setMTransf(f)} disabled={tot === 0} title="Transferir a otra sede">⇄ Transf.</Btn>}
                       {esAdmin && (
                         <button onClick={() => setMReorden(f)} className="text-gray-400 hover:text-blue-500 rounded-lg hover:bg-blue-50 transition min-w-11 min-h-11 md:min-w-0 md:min-h-0 md:p-1.5 flex items-center justify-center" title="Stock mínimo">
@@ -260,8 +274,10 @@ export function TablaInventario({ sedeId, catalogo, usuario, esAdmin, onToast })
                   </div>
                 </div>
                 <div className="flex gap-1.5">
-                  {esAdmin && <Btn size="sm" variant="success" onClick={() => abrirNuevoIngreso(f)} className="flex-1">+ Ingreso</Btn>}
-                  <Btn size="sm" variant="ghost" onClick={() => setMEgreso(f)} disabled={tot === 0} className="flex-1">− Egreso</Btn>
+                  {esAdmin && (
+                    <Btn size="sm" variant="success" onClick={() => abrirNuevoIngreso(f)} disabled={!esSedePropia} className="flex-1">+ Ingreso</Btn>
+                  )}
+                  <Btn size="sm" variant="ghost" onClick={() => setMEgreso(f)} disabled={tot === 0 || !esSedePropia} className="flex-1">− Egreso</Btn>
                   {esAdmin && <Btn size="sm" variant="teal" onClick={() => setMTransf(f)} disabled={tot === 0} className="flex-1">⇄ Transf.</Btn>}
                   {esAdmin && (
                     <button onClick={() => setMReorden(f)} className="text-gray-400 hover:text-blue-500 rounded-lg hover:bg-blue-50 transition min-w-11 min-h-11 flex items-center justify-center flex-shrink-0" title="Stock mínimo">

@@ -26,7 +26,7 @@ export function ModalAnularActa({ acta, resumen, notaExtra, onConfirm, onClose }
           Vas a anular: <span className="font-bold">{resumen}</span>, registrada el {fmtTs(acta.fecha)}.
         </div>
         <div className="bg-gray-50 rounded-xl px-3 py-2 text-xs text-gray-600">
-          El acta original queda en el listado marcada como ANULADA junto con el motivo -- nunca se edita ni se borra. Después de confirmar se abre el formulario precargado con estos mismos datos para que corrijas sólo lo que estaba mal.
+          El acta original queda en el listado marcada como ANULADA junto con el motivo -- nunca se edita ni se borra.
         </div>
         {notaExtra && (
           <div className="bg-orange-50 border border-orange-100 rounded-xl px-3 py-2 text-xs text-orange-800">

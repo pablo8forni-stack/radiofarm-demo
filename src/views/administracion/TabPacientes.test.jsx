@@ -211,6 +211,71 @@ describe("TabPacientes -- reconciliación de campos Ficha/Nombre/DNI/Peso/Talla"
   });
 });
 
+// Hallazgo real de Pablo (sede de trabajo del admin, 2026-11): anular un
+// acta de OTRA sede (sólo visible auditándola, sedeAuditando) y precargar
+// sus datos en un registro nuevo de la sede de TRABAJO mezclaría N° de
+// Ficha entre sedes -- es correlativo por sede, no global. confirmarAnulacion
+// ahora corta antes de precargar si acta.sedeId !== sedeId (usuario.sede).
+describe("TabPacientes -- sede de trabajo del admin: anular un acta de OTRA sede no precarga el formulario", () => {
+  const catalogoDosSedes = {
+    ...catalogo,
+    sedes: {
+      ...catalogo.sedes,
+      italiano: { nombre: "C. Gamma Hospital Italiano", short: "Italiano", activo: true, principal: false, eliminada: false, farmIds: ["mibi"], puntosReorden: {} },
+    },
+  };
+  // sede (trabajo) == central, sedeAuditando == italiano -- exactamente el
+  // caso real: el admin sólo puede haber visto esta acta auditando italiano.
+  const usuarioAdmin = { nombre: "Admin Test", email: "admin@test.local", sede: "central", sedeAuditando: "italiano" };
+  // Control positivo: audita SU PROPIA sede -- el listado (filtrado por
+  // sedeEfectiva, ver TabPacientes.jsx) sólo muestra acta de central acá.
+  const usuarioAdminPropiaSede = { ...usuarioAdmin, sedeAuditando: "central" };
+
+  afterEach(() => { actasParaListado = []; });
+
+  test("acta de otra sede: Anular NO abre el formulario precargado, avisa con toast", async () => {
+    actasParaListado = [{
+      id: "acta-italiano", tipo: "paciente", sedeId: "italiano", sedeNombre: "C. Gamma Hospital Italiano",
+      pacienteFicha: "555", pacienteNombre: "Paciente Italiano", pacienteDni: "9988",
+      fecha: new Date().toISOString(), isotopoId: "tc99m", farmId: "mibi", lote: "LOTE-IT", mciAdministrados: 10,
+    }];
+    const onToast = vi.fn();
+    const user = userEvent.setup();
+    render(<TabPacientes catalogo={catalogoDosSedes} usuario={usuarioAdmin} esAdmin onToast={onToast} nav={null} />);
+
+    const botonesAnular = await screen.findAllByRole("button", { name: "Anular" });
+    await user.click(botonesAnular[0]);
+    await user.type(labelInput("Motivo de la anulación (obligatorio)"), "Test");
+    await user.click(screen.getByRole("button", { name: "Confirmar anulación" }));
+
+    // No se abre "Nuevo registro de paciente" con los datos precargados --
+    // el formulario queda cerrado (confirmarAnulacion corta con `return`
+    // antes de setMostrarForm(true)).
+    expect(screen.queryByText("Nuevo registro de paciente")).toBeNull();
+    expect(onToast).toHaveBeenCalledWith(expect.stringContaining("C. Gamma Hospital Italiano"), "info", 10000);
+  });
+
+  test("control positivo: acta de la PROPIA sede sí precarga el formulario", async () => {
+    actasParaListado = [{
+      id: "acta-central", tipo: "paciente", sedeId: "central", sedeNombre: "FUESMEN Central",
+      pacienteFicha: "777", pacienteNombre: "Paciente Central", pacienteDni: "1122",
+      fecha: new Date().toISOString(), isotopoId: "tc99m", farmId: "mibi", lote: "LOTE-C", mciAdministrados: 5,
+    }];
+    const onToast = vi.fn();
+    const user = userEvent.setup();
+    render(<TabPacientes catalogo={catalogoDosSedes} usuario={usuarioAdminPropiaSede} esAdmin onToast={onToast} nav={null} />);
+
+    const botonesAnular = await screen.findAllByRole("button", { name: "Anular" });
+    await user.click(botonesAnular[0]);
+    await user.type(labelInput("Motivo de la anulación (obligatorio)"), "Test");
+    await user.click(screen.getByRole("button", { name: "Confirmar anulación" }));
+
+    await screen.findByText("Nuevo registro de paciente");
+    expect(labelInput("N° de Ficha").value).toBe("777");
+    expect(labelInput("Apellido y nombre").value).toBe("Paciente Central");
+  });
+});
+
 // Regresión del bug real (confirmado con datos reales de Firestore --
 // el documento guardado queda limpio, es puramente de renderizado): en
 // filaPaciente (tabla de escritorio) y tarjetaPaciente (tarjeta mobile),
