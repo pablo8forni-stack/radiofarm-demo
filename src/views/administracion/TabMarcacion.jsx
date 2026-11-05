@@ -8,6 +8,7 @@ import { CasilleroExcepcion } from "../../components/ui/CasilleroExcepcion.jsx";
 import { ModalAnularActa } from "../../components/actas/ModalAnularActa.jsx";
 import { fmtF, fmtTs, fmtHora, fmtFechaISO, hoy, agruparPorFecha } from "../../helpers/formato.js";
 import { descargarArchivo } from "../../helpers/descargarArchivo.js";
+import { nombreArchivoLibro } from "../../helpers/nombreArchivoLibro.js";
 import { farmsDeSede } from "../../helpers/stock.js";
 import { egresosDisponiblesParaMarcar } from "../../helpers/egresosDisponiblesParaMarcar.js";
 import { listenActas, addActaMarcacion, actasPorRango, anularActaTransaction, listenAnulacionesActas } from "../../services/firestore/actas.js";
@@ -250,8 +251,13 @@ export function TabMarcacion({ catalogo, usuario, esAdmin, onToast }) {
     descargarArchivo(csv, nombreArchivo, "text/csv;charset=utf-8");
   }
 
+  // Nombre centralizado (nombreArchivoLibro, helpers/nombreArchivoLibro.js)
+  // -- PENDIENTE de confirmación de Pablo, ver diagnóstico del 4/11. Antes
+  // era `libro1_marcacion_${filtroFecha || hoy()}.csv`: sin sede, y el
+  // `|| hoy()` nunca se usaba en la práctica porque este botón sólo existe
+  // con filtroFecha ya puesto (ver el `{filtroFecha ? (...` más abajo).
   function exportarCSV() {
-    descargarCSV(actas, `libro1_marcacion_${filtroFecha || hoy()}.csv`);
+    descargarCSV(actas, nombreArchivoLibro({ libro: "libro1", extension: "csv", periodo: filtroFecha, sedeShort: catalogo.sedes[sedeEfectiva]?.short }));
     onToast("Libro 1 exportado");
   }
 
@@ -283,7 +289,7 @@ export function TabMarcacion({ catalogo, usuario, esAdmin, onToast }) {
 
   function descargarResultadoRango() {
     if (!resultadoRango?.length) return;
-    descargarCSV(resultadoRango, `libro1_marcacion_${rangoDesde}_a_${rangoHasta}.csv`);
+    descargarCSV(resultadoRango, nombreArchivoLibro({ libro: "libro1", extension: "csv", periodo: `${rangoDesde}_a_${rangoHasta}`, sedeShort: catalogo.sedes[sedeEfectiva]?.short }));
     onToast(`Libro 1 exportado: ${resultadoRango.length} registro${resultadoRango.length !== 1 ? "s" : ""}`);
   }
 

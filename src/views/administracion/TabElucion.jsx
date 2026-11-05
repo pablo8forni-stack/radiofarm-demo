@@ -5,6 +5,7 @@ import { Input } from "../../components/ui/Input.jsx";
 import { ModalAnularActa } from "../../components/actas/ModalAnularActa.jsx";
 import { fmtF, fmtTs, fmtHora, fmtFechaISO, hoy, agruparPorFecha } from "../../helpers/formato.js";
 import { descargarArchivo } from "../../helpers/descargarArchivo.js";
+import { nombreArchivoLibro } from "../../helpers/nombreArchivoLibro.js";
 import { normalizarLoteSeisDigitos } from "../../helpers/lote.js";
 import { listenActas, addActaElucion, actasPorRango, anularActaTransaction, listenAnulacionesActas, loteGeneradorYaRegistrado } from "../../services/firestore/actas.js";
 
@@ -258,8 +259,13 @@ export function TabElucion({ catalogo, usuario, esAdmin, onToast }) {
     descargarArchivo(csv, nombreArchivo, "text/csv;charset=utf-8");
   }
 
+  // Nombre centralizado (nombreArchivoLibro, helpers/nombreArchivoLibro.js)
+  // -- PENDIENTE de confirmación de Pablo, ver diagnóstico del 4/11. Antes
+  // era `libro3_elucion_${filtroFecha || hoy()}.csv`: sin sede, y el
+  // `|| hoy()` nunca se usaba en la práctica porque este botón sólo existe
+  // con filtroFecha ya puesto (ver el `{filtroFecha ? (...` más abajo).
   function exportarCSV() {
-    descargarCSV(actas, `libro3_elucion_${filtroFecha || hoy()}.csv`);
+    descargarCSV(actas, nombreArchivoLibro({ libro: "libro3", extension: "csv", periodo: filtroFecha, sedeShort: catalogo.sedes[sedeEfectiva]?.short }));
     onToast("Libro 3 exportado");
   }
 
@@ -285,7 +291,7 @@ export function TabElucion({ catalogo, usuario, esAdmin, onToast }) {
 
   function descargarResultadoRango() {
     if (!resultadoRango?.length) return;
-    descargarCSV(resultadoRango, `libro3_elucion_${rangoDesde}_a_${rangoHasta}.csv`);
+    descargarCSV(resultadoRango, nombreArchivoLibro({ libro: "libro3", extension: "csv", periodo: `${rangoDesde}_a_${rangoHasta}`, sedeShort: catalogo.sedes[sedeEfectiva]?.short }));
     onToast(`Libro 3 exportado: ${resultadoRango.length} registro${resultadoRango.length !== 1 ? "s" : ""}`);
   }
 

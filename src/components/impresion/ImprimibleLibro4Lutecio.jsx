@@ -4,21 +4,24 @@ import { claseFilaAnulada, claseCampoAnulado, LeyendaAnulado } from "./marcadoAn
 import { fmtFechaHora, textoConformidad } from "./actasFormatoImpresion.js";
 import { estadoMibgLote } from "../../helpers/mibgLote.js";
 
-// Una fila por lote llegado dentro del mes elegido -- si además fue
-// administrado DENTRO DEL MISMO MES, sus datos de uso (paciente/actividad/
-// técnico/fecha real de administración) van pegados a la misma fila, igual
-// que ya se ve en pantalla (TabLoteDosisUnica.jsx). En la práctica llegada
-// y administración son casi siempre el mismo día ("cada vial es una dosis
-// completa, se administra al llegar", ver comentario en ese archivo) -- el
-// caso borde de un lote administrado recién el mes siguiente al de su
-// llegada no queda reflejado acá (usoPorLoteId también está acotado al
-// mes); se vería en el documento de Libro 2 de ese mes siguiente igual,
-// donde si aparecen todas las administraciones de "paciente" del mes.
+// Una fila por lote de Lutecio-177 LLEGADO dentro del mes elegido (filtro
+// por fecha de llegada, ver lotesDelMes en helpers/mibgLote.js). Un lote
+// SIN fecha de llegada nunca llega acá -- lotesDelMes lo excluye de
+// cualquier mes (decisión de Pablo, 4/11: un libro regulatorio no puede
+// repetir el mismo lote cada mes); GenerarActasImpresion.jsx lo muestra
+// aparte, como aviso (avisoLotesSinFecha), no como fila de este libro. Su uso
+// (paciente/actividad/técnico/fecha real de administración), si lo tuvo, se
+// busca SIN acotar por fecha (usoActivoDeLote en services/firestore/
+// mibgLotes.js, por id determinístico del lote) -- así que acá se ve
+// correctamente aunque la administración haya quedado en un mes distinto
+// del de llegada (antes, cuando usoPorLoteId salía de las actas YA
+// recortadas al mes, esto mostraba "disponible" en cualquier mes que no
+// fuera el de uso real -- bug corregido, ver GenerarActasImpresion.jsx).
 //
-// anulaciones: Map anulaId -> doc (cubre TANTO lote anulado como
-// administración anulada -- son dos hechos independientes, mismo criterio
-// que estadoMibgLote). usosPorLoteId: Map loteId -> acta de administración
-// (ya excluye usos anulados, arma esto TabImpresionMensual.jsx).
+// anulaciones: Map anulaId -> doc, SIN acotar por fecha (cubre TANTO lote
+// anulado como administración anulada -- son dos hechos independientes,
+// mismo criterio que estadoMibgLote). usoPorLoteId: Map loteId -> acta de
+// administración (ya excluye usos anulados, los arma usoActivoDeLote).
 export function ImprimibleLibro4Lutecio({ lotes, anulaciones, usoPorLoteId, sedeNombre, mesTexto, nombreResponsable }) {
   return (
     <div className="p-6 text-black text-xs font-sans">

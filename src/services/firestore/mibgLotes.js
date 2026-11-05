@@ -1,4 +1,4 @@
-import { addDoc, collection, doc, getDocs, onSnapshot, query, runTransaction, serverTimestamp, where } from "firebase/firestore";
+import { addDoc, collection, doc, getDoc, getDocs, onSnapshot, query, runTransaction, serverTimestamp, where } from "firebase/firestore";
 import { db } from "../../firebase.js";
 import { conMensajeDeContingencia } from "../../helpers/erroresRed.js";
 import { fmtTs } from "../../helpers/formato.js";
@@ -36,8 +36,11 @@ export function listenMibgLotes(callback, { sedeId } = {}) {
 // Mismo dato que listenMibgLotes pero puntual (getDocs, no listener) -- para
 // la impresión mensual (ver components/impresion/), que arma el documento
 // una vez. Sin acotar por fecha -- el llamador filtra por mes/isótopo según
-// necesite (ver ImprimibleLibro2Pacientes, que busca por id sin importar
-// cuándo llegó el lote, e ImprimibleLibro4Lutecio, que sí filtra por mes).
+// necesite: ImprimibleLibro2Pacientes busca por id sin importar cuándo
+// llegó el lote (necesita encontrar CUALQUIER lote vinculado a una acta,
+// sea de este mes o no); GenerarActasImpresion.jsx filtra por mes recién
+// client-side, con lotesDelMes (helpers/mibgLote.js) -- este getDocs en sí
+// NUNCA filtró por fecha, pese a lo que decía antes este comentario.
 export async function lotesPorSede(sedeId) {
   const snap = await getDocs(query(mibgLoteCol, where("sedeId", "==", sedeId)));
   return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
@@ -72,6 +75,31 @@ export async function lotesPorSede(sedeId) {
 // confundirse con el de MIBG.
 const CAP_INTENTOS = 5;
 const CAP_FICHA_INTENTOS = 5;
+
+// Uso ACTIVO (no anulado) de UN lote de dosis única (MIBG o Lutecio-177),
+// sin acotar por fecha -- a diferencia de buscarlo adentro de un listado de
+// actas ya recortado a un mes (actasLibro2 en GenerarActasImpresion.jsx),
+// esto encuentra la administración real del lote sin importar en qué mes
+// haya pasado, cruzando contra el mismo id determinístico que ya usa
+// administrarLoteDosisUnicaTransaction (`${prefijo}${loteId}_${n}`, intentos
+// 1..CAP_INTENTOS) en vez de escanear toda la colección `actas` por tipo --
+// CAP_INTENTOS lecturas puntuales por lote, nunca una query sin límite.
+// anulaciones: Map anulaId -> doc, SIN acotar por fecha (ver
+// anulacionesPorSede) -- así un uso anulado en un mes distinto del mes que
+// se está imprimiendo también queda excluido acá, no sólo el anulado dentro
+// del mismo mes. No busca el id legacy sin sufijo `_n` (ver comentario más
+// abajo) -- INFERENCIA, no confirmada con datos reales: Lutecio-177 es un
+// namespace nuevo (`lote_`), nunca tuvo el esquema viejo sin sufijo, así que
+// no debería hacer falta para este caso.
+export async function usoActivoDeLote(loteId, { prefijo, anulaciones }) {
+  for (let n = 1; n <= CAP_INTENTOS; n++) {
+    const usoSnap = await getDoc(doc(actasCol, `${prefijo}${loteId}_${n}`));
+    if (usoSnap.exists() && !anulaciones.has(usoSnap.id)) {
+      return { id: usoSnap.id, ...usoSnap.data() };
+    }
+  }
+  return null;
+}
 
 function administrarLoteDosisUnicaTransaction(loteId, dataActa, { prefijo, tipo, campoLoteId }) {
   const loteRef = doc(mibgLoteCol, loteId);

@@ -10,8 +10,10 @@ import {
   prepararFixturesGlobales, buscarLotePorNumero, buscarMovimientos, cerrarConexiones,
 } from "./fixtures.mjs";
 import { egresoTransaction, ingresoBatch, transferenciaTransaction } from "../../src/services/firestore/stock.js";
-import { addMibgLote, administrarMibgTransaction, administrarLutecioTransaction } from "../../src/services/firestore/mibgLotes.js";
-import { addActaPaciente, addActaI131Barrido } from "../../src/services/firestore/actas.js";
+import { addMibgLote, administrarMibgTransaction, administrarLutecioTransaction, usoActivoDeLote } from "../../src/services/firestore/mibgLotes.js";
+import { addActaPaciente, addActaI131Barrido, anularActaTransaction, anulacionesPorSede } from "../../src/services/firestore/actas.js";
+import { lotesDelMes } from "../../src/helpers/mibgLote.js";
+import { setSedeAuditando } from "../../src/services/auth.js";
 import { FARMS_DEFAULT } from "../../src/constants/farmsSeed.js";
 import { uid } from "../../src/helpers/id.js";
 
@@ -431,4 +433,184 @@ test("Lutecio-177: SIN pacienteDni (cliente viejo), el marcador se crea igual", 
   const fichaSnap = await getDoc(doc(db, "fichasUsadas", `${SEDE_A}_${ficha}_1`));
   assert.ok(fichaSnap.exists());
   assert.equal(fichaSnap.data().pacienteDni, undefined);
+});
+
+// Libro 4 (4/11): bug real donde un lote de Lutecio-177 llegado y usado en
+// un mes aparecía "disponible" en la impresión de CUALQUIER otro mes,
+// porque el uso se buscaba adentro de actasLibro2 (ya recortada al mes que
+// se está imprimiendo) en vez de sin acotar por fecha. usoActivoDeLote
+// (mibgLotes.js) es el reemplazo -- estos tests lo ejercitan directo,
+// contra Firestore real (emulador), no con mocks.
+test("usoActivoDeLote: encuentra la administración real de un lote, sin acotar por fecha", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  const numeroLote = `TEST-LU-USO-${Date.now()}`;
+  const loteRef = await addMibgLote({
+    sedeId: SEDE_A, sedeNombre: "FUESMEN Central", isotopoId: "lutecio177",
+    numeroLote, proveedor: "Proveedor Test",
+    actividadCalibrada: 150, volumen: 10, fechaHoraCalibracion: new Date(),
+    fechaVencimiento: "2027-06-01", conformidad: true,
+    usuarioNombre: PERSONAS.tecnicoA.nombre, usuarioEmail: PERSONAS.tecnicoA.email, observacion: "",
+  });
+  const ficha = fichaDePrueba();
+  await administrarLutecioTransaction(loteRef.id, {
+    sedeId: SEDE_A, sedeNombre: "FUESMEN Central",
+    pacienteFicha: ficha, pacienteNombre: "Paciente Test Uso Activo", pacienteDni: "33333333",
+    peso: 70, talla: 170, mciAdministrados: 140, actividadCalibrada: 150,
+    isotopoId: "lu177", lote: numeroLote, medicoResponsable: "Dr. Test",
+    usuarioNombre: PERSONAS.tecnicoA.nombre, usuarioEmail: PERSONAS.tecnicoA.email, observacion: "",
+  });
+
+  const uso = await usoActivoDeLote(loteRef.id, { prefijo: "lote_", anulaciones: new Map() });
+  assert.ok(uso, "debería encontrar el uso");
+  assert.equal(uso.pacienteNombre, "Paciente Test Uso Activo");
+  assert.equal(uso.id, `lote_${loteRef.id}_1`);
+});
+
+test("usoActivoDeLote: lote sin administración -- null (disponible)", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  const loteRef = await addMibgLote({
+    sedeId: SEDE_A, sedeNombre: "FUESMEN Central", isotopoId: "lutecio177",
+    numeroLote: `TEST-LU-SINUSO-${Date.now()}`, proveedor: "Proveedor Test",
+    actividadCalibrada: 150, volumen: 10, fechaHoraCalibracion: new Date(),
+    fechaVencimiento: "2027-06-01", conformidad: true,
+    usuarioNombre: PERSONAS.tecnicoA.nombre, usuarioEmail: PERSONAS.tecnicoA.email, observacion: "",
+  });
+
+  const uso = await usoActivoDeLote(loteRef.id, { prefijo: "lote_", anulaciones: new Map() });
+  assert.equal(uso, null);
+});
+
+// Caso pedido por Pablo: una anulación es un acta APARTE con su propia
+// fecha, que puede caer en un mes distinto del de la administración que
+// anula -- acá se cruza con anulaciones armadas por una consulta REAL sin
+// acotar por fecha (anulacionesPorSede), igual que GenerarActasImpresion.jsx,
+// para confirmar que un uso anulado nunca queda como "usado" sin importar
+// en qué mes se haya anulado.
+test("usoActivoDeLote: uso ANULADO -- excluido, vuelve a estar disponible", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  const numeroLote = `TEST-LU-ANULADO-${Date.now()}`;
+  const loteRef = await addMibgLote({
+    sedeId: SEDE_A, sedeNombre: "FUESMEN Central", isotopoId: "lutecio177",
+    numeroLote, proveedor: "Proveedor Test",
+    actividadCalibrada: 150, volumen: 10, fechaHoraCalibracion: new Date(),
+    fechaVencimiento: "2027-06-01", conformidad: true,
+    usuarioNombre: PERSONAS.tecnicoA.nombre, usuarioEmail: PERSONAS.tecnicoA.email, observacion: "",
+  });
+  const ficha = fichaDePrueba();
+  await administrarLutecioTransaction(loteRef.id, {
+    sedeId: SEDE_A, sedeNombre: "FUESMEN Central",
+    pacienteFicha: ficha, pacienteNombre: "Paciente Test Uso Anulado", pacienteDni: "44444444",
+    peso: 70, talla: 170, mciAdministrados: 140, actividadCalibrada: 150,
+    isotopoId: "lu177", lote: numeroLote, medicoResponsable: "Dr. Test",
+    usuarioNombre: PERSONAS.tecnicoA.nombre, usuarioEmail: PERSONAS.tecnicoA.email, observacion: "",
+  });
+  const usoId = `lote_${loteRef.id}_1`;
+  const usoSnap = await getDoc(doc(db, "actas", usoId));
+  // Anular ACTAS es admin-only (actaValida en firestore.rules, d.tipo ==
+  // 'anulacion' exige isAdmin() siempre, a diferencia de movimientos donde
+  // el técnico también puede anular en su propia sede) -- PERSONAS.admin
+  // tiene la misma sede (SEDE_A) que el lote. Leer actas como admin exige
+  // sedeAuditando puesta (sedeAuditando = sede que el admin está MIRANDO
+  // ahora, distinto de sede = sede de trabajo donde registra -- ver
+  // firestore.rules) -- sin sedeAuditando puesta, anulacionesPorSede
+  // fallaría con permission-denied.
+  await loguearComo(PERSONAS.admin);
+  await setSedeAuditando(PERSONAS.admin.email, SEDE_A);
+  await anularActaTransaction({ id: usoId, ...usoSnap.data() }, "Error de carga", PERSONAS.admin);
+
+  const anulaciones = new Map((await anulacionesPorSede(SEDE_A)).map((a) => [a.anulaId, a]));
+  assert.ok(anulaciones.has(usoId), "la anulación debería estar en la consulta sin acotar por fecha");
+
+  const uso = await usoActivoDeLote(loteRef.id, { prefijo: "lote_", anulaciones });
+  assert.equal(uso, null, "un uso anulado no debe contar como administración activa");
+});
+
+// Pedido por Pablo: flujo de CORRECCIÓN completo -- administrar, anular esa
+// administración (error de carga real, no de lote), administrar de nuevo
+// (intentoNro 2) con el dato corregido. usoActivoDeLote tiene que devolver
+// el intento 2 (el paciente CORREGIDO), nunca null (el lote no está
+// "disponible", tiene una administración activa) ni el intento 1 anulado.
+test("usoActivoDeLote: flujo de corrección -- anular intento 1 y administrar intento 2 -- devuelve el intento 2 corregido", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  const numeroLote = `TEST-LU-CORRECCION-${Date.now()}`;
+  const loteRef = await addMibgLote({
+    sedeId: SEDE_A, sedeNombre: "FUESMEN Central", isotopoId: "lutecio177",
+    numeroLote, proveedor: "Proveedor Test",
+    actividadCalibrada: 150, volumen: 10, fechaHoraCalibracion: new Date(),
+    fechaVencimiento: "2027-06-01", conformidad: true,
+    usuarioNombre: PERSONAS.tecnicoA.nombre, usuarioEmail: PERSONAS.tecnicoA.email, observacion: "",
+  });
+
+  const fichaIntento1 = fichaDePrueba();
+  await administrarLutecioTransaction(loteRef.id, {
+    sedeId: SEDE_A, sedeNombre: "FUESMEN Central",
+    pacienteFicha: fichaIntento1, pacienteNombre: "Paciente MAL Tipeado", pacienteDni: "66666666",
+    peso: 70, talla: 170, mciAdministrados: 140, actividadCalibrada: 150,
+    isotopoId: "lu177", lote: numeroLote, medicoResponsable: "Dr. Test",
+    usuarioNombre: PERSONAS.tecnicoA.nombre, usuarioEmail: PERSONAS.tecnicoA.email, observacion: "",
+  });
+  const usoId1 = `lote_${loteRef.id}_1`;
+  const usoSnap1 = await getDoc(doc(db, "actas", usoId1));
+
+  await loguearComo(PERSONAS.admin);
+  await setSedeAuditando(PERSONAS.admin.email, SEDE_A);
+  await anularActaTransaction({ id: usoId1, ...usoSnap1.data() }, "Paciente mal tipeado", PERSONAS.admin);
+
+  await loguearComo(PERSONAS.tecnicoA);
+  const fichaIntento2 = fichaDePrueba();
+  await administrarLutecioTransaction(loteRef.id, {
+    sedeId: SEDE_A, sedeNombre: "FUESMEN Central",
+    pacienteFicha: fichaIntento2, pacienteNombre: "Paciente Corregido", pacienteDni: "77777777",
+    peso: 70, talla: 170, mciAdministrados: 140, actividadCalibrada: 150,
+    isotopoId: "lu177", lote: numeroLote, medicoResponsable: "Dr. Test",
+    usuarioNombre: PERSONAS.tecnicoA.nombre, usuarioEmail: PERSONAS.tecnicoA.email, observacion: "",
+  });
+
+  const anulaciones = new Map((await anulacionesPorSede(SEDE_A)).map((a) => [a.anulaId, a]));
+  const uso = await usoActivoDeLote(loteRef.id, { prefijo: "lote_", anulaciones });
+  assert.ok(uso, "debería encontrar una administración activa -- el lote NO está disponible");
+  assert.equal(uso.id, `lote_${loteRef.id}_2`, "debe ser el intento 2, no el 1 (anulado)");
+  assert.equal(uso.pacienteNombre, "Paciente Corregido");
+});
+
+// Pipeline real de Libro 4 (lotesDelMes + usoActivoDeLote juntos, como los
+// usa GenerarActasImpresion.jsx). No se puede backdatear `fecha` de un lote
+// (addMibgLote siempre pone serverTimestamp(), ver mibgLotes.js), así que
+// este test cubre "mismo mes" end-to-end contra Firestore real; el límite
+// de mes/zona horaria en sí ya está cubierto por separado en
+// src/helpers/mibgLote.test.js (lotesDelMes, sin necesitar Firestore).
+test("Libro 4 -- pipeline real: lote de este mes con uso activo sale 'usado', con lotesDelMes + usoActivoDeLote", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  const numeroLote = `TEST-LU-PIPELINE-${Date.now()}`;
+  const loteRef = await addMibgLote({
+    sedeId: SEDE_A, sedeNombre: "FUESMEN Central", isotopoId: "lutecio177",
+    numeroLote, proveedor: "Proveedor Test",
+    actividadCalibrada: 150, volumen: 10, fechaHoraCalibracion: new Date(),
+    fechaVencimiento: "2027-06-01", conformidad: true,
+    usuarioNombre: PERSONAS.tecnicoA.nombre, usuarioEmail: PERSONAS.tecnicoA.email, observacion: "",
+  });
+  const ficha = fichaDePrueba();
+  await administrarLutecioTransaction(loteRef.id, {
+    sedeId: SEDE_A, sedeNombre: "FUESMEN Central",
+    pacienteFicha: ficha, pacienteNombre: "Paciente Test Pipeline", pacienteDni: "55555555",
+    peso: 70, talla: 170, mciAdministrados: 140, actividadCalibrada: 150,
+    isotopoId: "lu177", lote: numeroLote, medicoResponsable: "Dr. Test",
+    usuarioNombre: PERSONAS.tecnicoA.nombre, usuarioEmail: PERSONAS.tecnicoA.email, observacion: "",
+  });
+
+  const hoy = new Date();
+  const desde = `${hoy.getFullYear()}-${String(hoy.getMonth() + 1).padStart(2, "0")}-01`;
+  const ultimoDia = new Date(hoy.getFullYear(), hoy.getMonth() + 1, 0).getDate();
+  const hasta = `${hoy.getFullYear()}-${String(hoy.getMonth() + 1).padStart(2, "0")}-${String(ultimoDia).padStart(2, "0")}`;
+  const todosLosLotes = [{ id: loteRef.id, isotopoId: "lutecio177", fecha: new Date() }];
+  const lotesLutecio = lotesDelMes(todosLosLotes, { desde, hasta });
+  assert.equal(lotesLutecio.length, 1, "el lote debería quedar dentro del mes actual");
+
+  const usoPorLoteId = new Map();
+  for (const l of lotesLutecio) {
+    const uso = await usoActivoDeLote(l.id, { prefijo: "lote_", anulaciones: new Map() });
+    if (uso) usoPorLoteId.set(l.id, uso);
+  }
+  assert.ok(usoPorLoteId.has(loteRef.id));
+  assert.equal(usoPorLoteId.get(loteRef.id).pacienteNombre, "Paciente Test Pipeline");
 });

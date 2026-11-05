@@ -16,3 +16,57 @@ export function estadoMibgLote(loteId, { anulaciones, usoPorLoteId }) {
   if (anulaciones.has(loteId)) return "anulado";
   return usoPorLoteId.has(loteId) ? "usado" : "disponible";
 }
+
+// Lotes de Lutecio-177 (Libro 4) del mes elegido -- filtra CLIENT-SIDE en
+// vez de agregar un where de fecha a lotesPorSede (mibgLotes.js), que no lo
+// necesita para ningún otro llamador y así se evita un índice compuesto
+// nuevo (sedeId+fecha). desde/hasta: "YYYY-MM-DD" (mismo shape que
+// primerYUltimoDiaMes). Límite de mes con hora LOCAL explícita
+// (00:00:00.000 / 23:59:59.999) -- mismo criterio que actasPorRango -- así
+// un lote que llega el último día del mes no se corre al mes siguiente por
+// comparar contra medianoche UTC.
+//
+// Un lote SIN campo fecha NO entra a NINGÚN mes (decisión de Pablo, 4/11,
+// tras verlo en staging real: 298 lotes de prueba sin fecha aparecían
+// repetidos en TODOS los libros mensuales -- un libro regulatorio no puede
+// repetir el mismo lote cada mes, eso no es un detalle menor). Ver
+// lotesSinFecha más abajo -- el llamador los muestra aparte, como aviso
+// para corregir (anulación + recarga del lote), nunca mezclados en un mes.
+export function lotesDelMes(lotes, { desde, hasta }) {
+  const d0 = new Date(`${desde}T00:00:00`);
+  const d1 = new Date(`${hasta}T23:59:59.999`);
+  return lotes.filter((l) => {
+    if (!l.fecha) return false;
+    const f = l.fecha?.toDate ? l.fecha.toDate() : new Date(l.fecha);
+    return f >= d0 && f <= d1;
+  });
+}
+
+// Lotes SIN fecha de llegada -- excluidos de lotesDelMes de arriba, para
+// CUALQUIER mes. No depende de desde/hasta: es un problema de dato
+// incompleto, no "de qué mes es". addMibgLote (mibgLotes.js) siempre pone
+// serverTimestamp(), así que esto no debería pasar por la app real -- pero
+// no hay garantía sobre datos viejos, corregidos a mano, o (caso real
+// encontrado en staging) escritos directo por un test harness que bypasea
+// el servicio. El llamador los muestra como aviso aparte -- la corrección
+// sigue siendo anulación + recarga del lote, no una edición directa.
+export function lotesSinFecha(lotes) {
+  return lotes.filter((l) => !l.fecha);
+}
+
+// Texto del aviso de Libro 4 para los lotes de lotesSinFecha -- lista como
+// mucho los primeros 5 numeroLote, "y N más" si hay más. Caso real que
+// obliga a esto: en staging llegó a haber 298 de una sola vez (datos de
+// prueba del test harness, ver mibgLotes.js) -- listarlos todos hubiera
+// sido un muro de texto en vez de un aviso legible. Separado de
+// lotesSinFecha (y testeable sin React) porque el corte en 5 es puramente
+// de presentación, no afecta qué lotes quedan excluidos de cada mes.
+export function avisoLotesSinFecha(lotes) {
+  if (lotes.length === 0) return "";
+  const TOPE = 5;
+  const numeros = lotes.slice(0, TOPE).map((l) => l.numeroLote || l.id);
+  const resto = lotes.length - numeros.length;
+  const lista = resto > 0 ? `${numeros.join(", ")} y ${resto} más` : numeros.join(", ");
+  const plural = lotes.length !== 1 ? "s" : "";
+  return `${lotes.length} lote${plural} de Lutecio-177 sin fecha de llegada, no incluido${plural} en ningún libro mensual: revisar -- ${lista}.`;
+}

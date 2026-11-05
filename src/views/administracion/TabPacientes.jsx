@@ -11,6 +11,7 @@ import { ModalAnularActa } from "../../components/actas/ModalAnularActa.jsx";
 import { CartelFichasFaltantes } from "../../components/actas/CartelFichasFaltantes.jsx";
 import { fmtF, fmtTs, fmtHora, fmtFechaISO, hoy, capitalizarPalabras, agruparPorFecha } from "../../helpers/formato.js";
 import { descargarArchivo } from "../../helpers/descargarArchivo.js";
+import { nombreArchivoLibro } from "../../helpers/nombreArchivoLibro.js";
 import { parseQR } from "../../helpers/qr.js";
 import { prepararSonidoEscaneo } from "../../helpers/feedbackEscaneo.js";
 import { registrarLog } from "../../helpers/debugLog.js";
@@ -1232,8 +1233,13 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
     descargarArchivo(csv, nombreArchivo, "text/csv;charset=utf-8");
   }
 
+  // Nombre centralizado (nombreArchivoLibro, helpers/nombreArchivoLibro.js)
+  // -- PENDIENTE de confirmación de Pablo, ver diagnóstico del 4/11. Antes
+  // era `libro2_pacientes_${filtroFecha || hoy()}.csv`: sin sede, y el
+  // `|| hoy()` nunca se usaba en la práctica porque este botón sólo existe
+  // con filtroFecha ya puesto (ver el `{filtroFecha ? (...` más abajo).
   function exportarCSV() {
-    descargarCSV(actas, `libro2_pacientes_${filtroFecha || hoy()}.csv`);
+    descargarCSV(actas, nombreArchivoLibro({ libro: "libro2", extension: "csv", periodo: filtroFecha, sedeShort: catalogo.sedes[sedeEfectiva]?.short }));
     onToast("Libro 2 exportado");
   }
 
@@ -1268,7 +1274,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
 
   function descargarResultadoRango() {
     if (!resultadoRango?.length) return;
-    descargarCSV(resultadoRango, `libro2_pacientes_${rangoDesde}_a_${rangoHasta}.csv`);
+    descargarCSV(resultadoRango, nombreArchivoLibro({ libro: "libro2", extension: "csv", periodo: `${rangoDesde}_a_${rangoHasta}`, sedeShort: catalogo.sedes[sedeEfectiva]?.short }));
     onToast(`Libro 2 exportado: ${resultadoRango.length} registro${resultadoRango.length !== 1 ? "s" : ""}`);
   }
 
