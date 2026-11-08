@@ -209,6 +209,19 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
   // no lo toca a propósito -- es memoria entre aperturas del form, no
   // estado del formulario en sí.
   const ultimaFichaGuardadaRef = useRef(null);
+  // Doble clic/doble tap sobre "Guardar registro" (MIBG/Lutecio-177) -- bug
+  // real encontrado por Pablo: con sólo el formulario quedando abierto
+  // durante la transacción (no antes), un segundo toque disparaba una
+  // SEGUNDA transacción real; la primera tenía éxito, la segunda rechazaba
+  // con "ya fue administrado" -- la técnica veía un error sobre algo que en
+  // realidad se guardó bien. transaccionEnCursoRef (no sólo el state) corta
+  // el segundo guardar() de forma SÍNCRONA, antes de que React llegue a
+  // re-renderizar con el botón disabled -- un doble tap real puede disparar
+  // los dos onClick en el mismo instante, sin que el primer re-render
+  // todavía haya pintado. guardandoTransaccionReal es sólo para la UI
+  // (deshabilitar visualmente + cambiar el texto del botón).
+  const transaccionEnCursoRef = useRef(false);
+  const [guardandoTransaccionReal, setGuardandoTransaccionReal] = useState(false);
   // Detección de carga tardía -- ver fechaFichaSiguiente (actas.js) para el
   // porqué de comparar contra N+1 y no N-1. Dos flags separados en vez de
   // uno solo: atrasoDetectado lo escribe SÓLO resolverYSetFichaEstado (la
@@ -842,12 +855,32 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
         if (!mibgLoteSeleccionado || !actividadAdministrada) return;
         const loteElegido = mibgLotes.find((l) => l.id === mibgLoteSeleccionado);
         if (!loteElegido) return;
+        // A diferencia del resto de esI131 (dosis/diagnostico/barrido, más
+        // abajo en la línea compartida), esto SÍ espera la transacción real
+        // antes de cerrar el formulario -- bug real encontrado por Pablo:
+        // limpiarForm()/setMostrarForm(false) corrían sin esperar la
+        // promesa, así que si el lote ya estaba usado (otra técnica se
+        // adelantó), el formulario se cerraba igual y el toast de error
+        // aparecía sobre una pantalla vacía -- el técnico tenía que volver a
+        // tipear todo para reintentar. Ahora, si falla, el formulario queda
+        // abierto con los datos cargados.
+        // Ver comentario de transaccionEnCursoRef más arriba -- corta un
+        // doble clic/tap ANTES de disparar una segunda transacción real.
+        if (transaccionEnCursoRef.current) return;
+        transaccionEnCursoRef.current = true;
+        setGuardandoTransaccionReal(true);
         administrarMibgTransaction(mibgLoteSeleccionado, {
           ...base, numeroLote: loteElegido.numeroLote, actividadCalibrada: loteElegido.actividadCalibrada, volumen: loteElegido.volumen,
           actividadAdministrada: parseFloat(actividadAdministrada) || 0,
         })
-          .then(() => { ultimaFichaGuardadaRef.current = { sedeId, numero: parseInt(fichaNormalizada, 10) }; onToast("MIBG registrado — consultalo en la pestaña Gestión I-131"); })
-          .catch((e) => onToast(e.message || "No se pudo registrar la administración de MIBG", "error"));
+          .then(() => {
+            ultimaFichaGuardadaRef.current = { sedeId, numero: parseInt(fichaNormalizada, 10) };
+            onToast("MIBG registrado — consultalo en la pestaña Gestión I-131");
+            limpiarForm(); setMostrarForm(false);
+          })
+          .catch((e) => onToast(e.message || "No se pudo registrar la administración de MIBG", "error"))
+          .finally(() => { transaccionEnCursoRef.current = false; setGuardandoTransaccionReal(false); });
+        return;
       } else {
         tipoI131Actual.fn(base)
           .then(() => { ultimaFichaGuardadaRef.current = { sedeId, numero: parseInt(fichaNormalizada, 10) }; })
@@ -868,6 +901,15 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
       if (!lutecioLoteSeleccionado || !medicoResponsable.trim() || !actividadAdministrada) return;
       const loteElegido = mibgLotes.find((l) => l.id === lutecioLoteSeleccionado);
       if (!loteElegido) return;
+      // Mismo motivo que MIBG (ver comentario equivalente más arriba): si la
+      // transacción falla (lote ya usado por otra técnica un instante
+      // antes), el formulario queda abierto con los datos cargados en vez
+      // de cerrarse igual sobre un toast de error.
+      // Ver comentario de transaccionEnCursoRef más arriba -- corta un doble
+      // clic/tap ANTES de disparar una segunda transacción real.
+      if (transaccionEnCursoRef.current) return;
+      transaccionEnCursoRef.current = true;
+      setGuardandoTransaccionReal(true);
       administrarLutecioTransaction(lutecioLoteSeleccionado, {
         sedeId, sedeNombre: catalogo.sedes[sedeId]?.nombre,
         pacienteFicha: fichaNormalizada, pacienteNombre: nombre.trim(), pacienteDni: dni.trim(),
@@ -877,9 +919,13 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
         medicoResponsable: medicoResponsable.trim(),
         usuarioNombre: usuario.nombre, usuarioEmail: usuario.email, observacion: obs.trim(),
       })
-        .then(() => { ultimaFichaGuardadaRef.current = { sedeId, numero: parseInt(fichaNormalizada, 10) }; onToast("Lutecio-177 registrado — consultalo en Libro 4"); })
-        .catch((e) => onToast(e.message || "No se pudo registrar la administración de Lutecio-177", "error"));
-      limpiarForm(); setMostrarForm(false);
+        .then(() => {
+          ultimaFichaGuardadaRef.current = { sedeId, numero: parseInt(fichaNormalizada, 10) };
+          onToast("Lutecio-177 registrado — consultalo en Libro 4");
+          limpiarForm(); setMostrarForm(false);
+        })
+        .catch((e) => onToast(e.message || "No se pudo registrar la administración de Lutecio-177", "error"))
+        .finally(() => { transaccionEnCursoRef.current = false; setGuardandoTransaccionReal(false); });
       return;
     }
     if (!mci || !estudio) return;
@@ -1371,7 +1417,15 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
         <div className="bg-white border border-blue-100 rounded-2xl p-5 shadow-sm">
           <div className="flex items-center justify-between mb-4">
             <h3 className="text-sm font-bold text-gray-800">Nuevo registro de paciente</h3>
-            <button onClick={() => { setMostrarForm(false); limpiarForm(); }} className="text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-100 transition min-w-11 min-h-11 md:min-w-0 md:min-h-0 flex items-center justify-center">
+            {/* Deshabilitada mientras guardandoTransaccionReal (MIBG/
+                Lutecio-177) -- bug real encontrado por Pablo: cerrar ESTE
+                formulario (Cancelar o la X) mientras la transacción vieja
+                todavía está en vuelo, abrir uno NUEVO y empezar a cargarlo,
+                y que .then() de la transacción vieja (que recién corre
+                después) termine borrando el formulario nuevo con
+                limpiarForm()/setMostrarForm(false) -- quedaba además con el
+                botón trabado en "Guardando..." al reabrir. */}
+            <button onClick={() => { setMostrarForm(false); limpiarForm(); }} disabled={guardandoTransaccionReal} className="text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-100 transition min-w-11 min-h-11 md:min-w-0 md:min-h-0 flex items-center justify-center disabled:opacity-40 disabled:cursor-not-allowed">
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
             </button>
           </div>
@@ -1733,8 +1787,9 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
             <Input label="Observación (opcional)" value={obs} onChange={(e) => setObs(e.target.value)} placeholder={esI131 && tipoI131 === "barrido" ? "Ej: hallazgos del barrido" : "Ej: paciente con marcapasos"} />
           </div>
           <div className="flex gap-2 justify-end mt-4">
-            <Btn variant="outline" onClick={() => { setMostrarForm(false); limpiarForm(); }}>Cancelar</Btn>
+            <Btn variant="outline" onClick={() => { setMostrarForm(false); limpiarForm(); }} disabled={guardandoTransaccionReal}>Cancelar</Btn>
             <Btn onClick={guardar} disabled={
+              guardandoTransaccionReal ||
               !normalizarFicha(fichaNro) || !nombre.trim() || !dni.trim() || fichaEstado?.tipo !== "ok" ||
               (esI131
                 ? ((tipoI131Actual.requierePermiso && !puedeCargarDosisI131) ||
@@ -1747,7 +1802,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
                   ? (!medicoResponsable.trim() || !lutecioLoteSeleccionado || !actividadAdministrada)
                   : (!mci || !estudio || (estudio === "Otro" && !estudioOtro.trim()) ||
                      (!sinRadiofarmaco && (!lote.trim() || !farmId || (loteSinMarcacion && !confirmoSinMarcacion)))))
-            }>Guardar registro</Btn>
+            }>{guardandoTransaccionReal ? "Guardando..." : "Guardar registro"}</Btn>
           </div>
         </div>
       )}

@@ -832,3 +832,294 @@ describe("TabPacientes -- aviso ámbar cuando faltan los isótopos base (I-131/L
     expect(screen.queryByText(/No se encontró el catálogo de isótopos base/)).toBeNull();
   });
 });
+
+// Bug real encontrado por Pablo (4/11): administrarMibgTransaction/
+// administrarLutecioTransaction son transacciones REALES (pueden fallar de
+// verdad si otra técnica usó el mismo lote un instante antes) -- pero
+// limpiarForm()/setMostrarForm(false) corrían SIN esperar la promesa, así
+// que el formulario se cerraba igual aunque la transacción fallara, dejando
+// sólo un toast de error sobre una pantalla vacía. Ahora esperan el
+// resultado: si falla, el formulario queda abierto con los datos cargados;
+// si tiene éxito, se cierra y limpia como siempre.
+describe("TabPacientes -- MIBG/Lutecio-177: el formulario espera la transacción antes de cerrarse", () => {
+  test("MIBG: si la transacción FALLA, el formulario queda abierto con los datos cargados", async () => {
+    const mibgLotesMod = await import("../../services/firestore/mibgLotes.js");
+    vi.spyOn(mibgLotesMod, "listenMibgLotes").mockImplementation((cb) => listenerCon(cb, [
+      { id: "lote-mibg-1", sedeId: "central", isotopoId: "mibg", numeroLote: "123-45678", proveedor: "IPEN", actividadCalibrada: 20, volumen: 2, fechaHoraCalibracion: new Date(), fecha: new Date() },
+    ]));
+    vi.spyOn(mibgLotesMod, "administrarMibgTransaction").mockRejectedValueOnce(new Error("Este lote ya fue administrado a otro paciente -- elegí otro."));
+
+    const user = userEvent.setup();
+    const onToast = vi.fn();
+    render(<TabPacientes catalogo={catalogo} usuario={usuario} esAdmin={false} onToast={onToast} nav={null} />);
+    await user.click(await screen.findByText("+ Manual"));
+    const fichaInput = labelInput("N° de Ficha");
+    await user.type(fichaInput, "999999");
+    fichaInput.blur();
+    await screen.findByText("Verificando N° de Ficha...");
+    await act(async () => {
+      resolverFichaIntentoDeferido.resolver({ intento: "1" });
+      await resolverFichaIntentoDeferido.promesa;
+    });
+    await user.type(labelInput("Apellido y nombre"), "Paciente MIBG Test");
+    await user.type(labelInput("DNI"), "12345678");
+    await user.click(screen.getByText("¿Es un caso distinto a Tc-99m?"));
+    await user.selectOptions(labelInput("Isótopo"), "i131");
+    await user.selectOptions(labelInput("Tipo de registro"), "mibg");
+    await user.selectOptions(labelInput("Lote de MIBG disponible"), "lote-mibg-1");
+    await user.type(labelInput("Dosis administrada (mCi)"), "10");
+
+    await user.click(screen.getByRole("button", { name: "Guardar registro" }));
+    await vi.waitFor(() => expect(onToast).toHaveBeenCalledWith(expect.stringContaining("ya fue administrado"), "error"));
+
+    // El formulario sigue abierto, con los datos todavía cargados, y el
+    // botón se volvió a habilitar (ya no dice "Guardando...").
+    const boton = screen.getByRole("button", { name: "Guardar registro" });
+    expect(boton).toBeTruthy();
+    expect(boton.disabled).toBe(false);
+    expect(labelInput("Apellido y nombre").value).toBe("Paciente MIBG Test");
+    expect(labelInput("DNI").value).toBe("12345678");
+  });
+
+  // Bug real encontrado por Pablo tras el fix anterior: con el formulario
+  // quedando abierto durante la transacción (en vez de cerrarse al
+  // instante), un doble clic/doble tap (frecuente desde el celular)
+  // disparaba DOS transacciones reales -- la primera tenía éxito, la
+  // segunda rechazaba con "ya fue administrado", y la técnica veía un error
+  // sobre algo que en realidad se guardó bien. transaccionEnCursoRef corta
+  // el segundo guardar() de forma SÍNCRONA (no sólo vía el state del
+  // botón), para cubrir un doble tap real que dispare los dos clics antes
+  // de que React re-renderice con el botón disabled.
+  test("MIBG: doble clic rápido invoca la transacción UNA sola vez", async () => {
+    const mibgLotesMod = await import("../../services/firestore/mibgLotes.js");
+    vi.spyOn(mibgLotesMod, "listenMibgLotes").mockImplementation((cb) => listenerCon(cb, [
+      { id: "lote-mibg-dc", sedeId: "central", isotopoId: "mibg", numeroLote: "123-45678", proveedor: "IPEN", actividadCalibrada: 20, volumen: 2, fechaHoraCalibracion: new Date(), fecha: new Date() },
+    ]));
+    let resolverTransaccion;
+    const espiaTransaccion = vi.spyOn(mibgLotesMod, "administrarMibgTransaction")
+      .mockImplementation(() => new Promise((resolve) => { resolverTransaccion = resolve; }));
+
+    const user = userEvent.setup();
+    render(<TabPacientes catalogo={catalogo} usuario={usuario} esAdmin={false} onToast={vi.fn()} nav={null} />);
+    await user.click(await screen.findByText("+ Manual"));
+    const fichaInput = labelInput("N° de Ficha");
+    await user.type(fichaInput, "999995");
+    fichaInput.blur();
+    await screen.findByText("Verificando N° de Ficha...");
+    await act(async () => {
+      resolverFichaIntentoDeferido.resolver({ intento: "1" });
+      await resolverFichaIntentoDeferido.promesa;
+    });
+    await user.type(labelInput("Apellido y nombre"), "Paciente Doble Clic");
+    await user.type(labelInput("DNI"), "99999991");
+    await user.click(screen.getByText("¿Es un caso distinto a Tc-99m?"));
+    await user.selectOptions(labelInput("Isótopo"), "i131");
+    await user.selectOptions(labelInput("Tipo de registro"), "mibg");
+    await user.selectOptions(labelInput("Lote de MIBG disponible"), "lote-mibg-dc");
+    await user.type(labelInput("Dosis administrada (mCi)"), "10");
+
+    const boton = screen.getByRole("button", { name: "Guardar registro" });
+    // Dos .click() nativos en el MISMO bloque act(), sin ningún await entre
+    // uno y el otro -- simula un doble tap real, donde los dos eventos
+    // pueden llegar antes de que React re-renderice con disabled=true.
+    await act(async () => {
+      boton.click();
+      boton.click();
+    });
+
+    expect(espiaTransaccion).toHaveBeenCalledTimes(1);
+    resolverTransaccion();
+  });
+
+  // Bug real encontrado por Pablo tras el fix del doble clic: con sólo el
+  // botón "Guardar registro" protegido, "Cancelar" (y la X de cerrar)
+  // seguían activos mientras la transacción vieja estaba en vuelo --
+  // Guardar, Cancelar, abrir un formulario NUEVO y empezar a cargarlo, y
+  // cuando la transacción vieja terminaba, su .then() ejecutaba
+  // limpiarForm()/setMostrarForm(false) y borraba el formulario nuevo, que
+  // además quedaba con el botón trabado en "Guardando..." al reabrir.
+  test("MIBG: 'Cancelar' queda deshabilitado mientras la transacción está pendiente, se habilita al resolverse", async () => {
+    const mibgLotesMod = await import("../../services/firestore/mibgLotes.js");
+    vi.spyOn(mibgLotesMod, "listenMibgLotes").mockImplementation((cb) => listenerCon(cb, [
+      { id: "lote-mibg-cancel", sedeId: "central", isotopoId: "mibg", numeroLote: "123-45678", proveedor: "IPEN", actividadCalibrada: 20, volumen: 2, fechaHoraCalibracion: new Date(), fecha: new Date() },
+    ]));
+    let resolverTransaccion;
+    vi.spyOn(mibgLotesMod, "administrarMibgTransaction")
+      .mockImplementation(() => new Promise((resolve) => { resolverTransaccion = resolve; }));
+
+    const user = userEvent.setup();
+    render(<TabPacientes catalogo={catalogo} usuario={usuario} esAdmin={false} onToast={vi.fn()} nav={null} />);
+    await user.click(await screen.findByText("+ Manual"));
+    const fichaInput = labelInput("N° de Ficha");
+    await user.type(fichaInput, "999993");
+    fichaInput.blur();
+    await screen.findByText("Verificando N° de Ficha...");
+    await act(async () => {
+      resolverFichaIntentoDeferido.resolver({ intento: "1" });
+      await resolverFichaIntentoDeferido.promesa;
+    });
+    await user.type(labelInput("Apellido y nombre"), "Paciente Cancelar Test");
+    await user.type(labelInput("DNI"), "99999993");
+    await user.click(screen.getByText("¿Es un caso distinto a Tc-99m?"));
+    await user.selectOptions(labelInput("Isótopo"), "i131");
+    await user.selectOptions(labelInput("Tipo de registro"), "mibg");
+    await user.selectOptions(labelInput("Lote de MIBG disponible"), "lote-mibg-cancel");
+    await user.type(labelInput("Dosis administrada (mCi)"), "10");
+
+    await user.click(screen.getByRole("button", { name: "Guardar registro" }));
+
+    // Transacción todavía PENDIENTE -- "Cancelar" tiene que estar
+    // deshabilitado (si no, el escenario de arriba es posible).
+    const botonCancelar = screen.getByRole("button", { name: "Cancelar" });
+    expect(botonCancelar.disabled).toBe(true);
+
+    await act(async () => {
+      resolverTransaccion();
+      await Promise.resolve();
+    });
+
+    // Resuelta -- el formulario se cerró (éxito), "Cancelar" ya no existe.
+    expect(screen.queryByRole("button", { name: "Cancelar" })).toBeNull();
+  });
+
+  test("MIBG: si la transacción tiene éxito, el formulario se cierra y limpia", async () => {
+    const mibgLotesMod = await import("../../services/firestore/mibgLotes.js");
+    vi.spyOn(mibgLotesMod, "listenMibgLotes").mockImplementation((cb) => listenerCon(cb, [
+      { id: "lote-mibg-2", sedeId: "central", isotopoId: "mibg", numeroLote: "123-45678", proveedor: "IPEN", actividadCalibrada: 20, volumen: 2, fechaHoraCalibracion: new Date(), fecha: new Date() },
+    ]));
+    vi.spyOn(mibgLotesMod, "administrarMibgTransaction").mockResolvedValueOnce();
+
+    const user = userEvent.setup();
+    const onToast = vi.fn();
+    render(<TabPacientes catalogo={catalogo} usuario={usuario} esAdmin={false} onToast={onToast} nav={null} />);
+    await user.click(await screen.findByText("+ Manual"));
+    const fichaInput = labelInput("N° de Ficha");
+    await user.type(fichaInput, "999998");
+    fichaInput.blur();
+    await screen.findByText("Verificando N° de Ficha...");
+    await act(async () => {
+      resolverFichaIntentoDeferido.resolver({ intento: "1" });
+      await resolverFichaIntentoDeferido.promesa;
+    });
+    await user.type(labelInput("Apellido y nombre"), "Paciente MIBG OK");
+    await user.type(labelInput("DNI"), "87654321");
+    await user.click(screen.getByText("¿Es un caso distinto a Tc-99m?"));
+    await user.selectOptions(labelInput("Isótopo"), "i131");
+    await user.selectOptions(labelInput("Tipo de registro"), "mibg");
+    await user.selectOptions(labelInput("Lote de MIBG disponible"), "lote-mibg-2");
+    await user.type(labelInput("Dosis administrada (mCi)"), "10");
+
+    await user.click(screen.getByRole("button", { name: "Guardar registro" }));
+    await vi.waitFor(() => expect(onToast).toHaveBeenCalledWith("MIBG registrado — consultalo en la pestaña Gestión I-131"));
+
+    expect(screen.queryByRole("button", { name: "Guardar registro" })).toBeNull();
+  });
+
+  test("Lutecio-177: si la transacción FALLA, el formulario queda abierto con los datos cargados", async () => {
+    const mibgLotesMod = await import("../../services/firestore/mibgLotes.js");
+    vi.spyOn(mibgLotesMod, "listenMibgLotes").mockImplementation((cb) => listenerCon(cb, [
+      { id: "lote-lu-1", sedeId: "central", isotopoId: "lutecio177", numeroLote: "LPS261101E-25", numeroVial: 5, proveedor: "Tecnonuclear", actividadCalibrada: 150, volumen: 10, fechaHoraCalibracion: new Date(), fecha: new Date() },
+    ]));
+    vi.spyOn(mibgLotesMod, "administrarLutecioTransaction").mockRejectedValueOnce(new Error("Este lote ya fue administrado a otro paciente -- elegí otro."));
+
+    const user = userEvent.setup();
+    const onToast = vi.fn();
+    render(<TabPacientes catalogo={catalogo} usuario={usuario} esAdmin={false} onToast={onToast} nav={null} />);
+    await user.click(await screen.findByText("+ Manual"));
+    const fichaInput = labelInput("N° de Ficha");
+    await user.type(fichaInput, "999997");
+    fichaInput.blur();
+    await screen.findByText("Verificando N° de Ficha...");
+    await act(async () => {
+      resolverFichaIntentoDeferido.resolver({ intento: "1" });
+      await resolverFichaIntentoDeferido.promesa;
+    });
+    await user.type(labelInput("Apellido y nombre"), "Paciente Lutecio Test");
+    await user.type(labelInput("DNI"), "11223344");
+    await user.click(screen.getByText("¿Es un caso distinto a Tc-99m?"));
+    await user.selectOptions(labelInput("Isótopo"), "lu177");
+    await user.type(labelInput("Médico responsable"), "Dr. Test");
+    await user.selectOptions(labelInput("Lote de Lutecio-177 disponible"), "lote-lu-1");
+    await user.type(labelInput("Dosis administrada (mCi)"), "1.5");
+
+    await user.click(screen.getByRole("button", { name: "Guardar registro" }));
+    await vi.waitFor(() => expect(onToast).toHaveBeenCalledWith(expect.stringContaining("ya fue administrado"), "error"));
+
+    const boton = screen.getByRole("button", { name: "Guardar registro" });
+    expect(boton).toBeTruthy();
+    expect(boton.disabled).toBe(false);
+    expect(labelInput("Apellido y nombre").value).toBe("Paciente Lutecio Test");
+    expect(labelInput("Médico responsable").value).toBe("Dr. Test");
+  });
+
+  test("Lutecio-177: doble clic rápido invoca la transacción UNA sola vez", async () => {
+    const mibgLotesMod = await import("../../services/firestore/mibgLotes.js");
+    vi.spyOn(mibgLotesMod, "listenMibgLotes").mockImplementation((cb) => listenerCon(cb, [
+      { id: "lote-lu-dc", sedeId: "central", isotopoId: "lutecio177", numeroLote: "LPS261101E-25", numeroVial: 7, proveedor: "Tecnonuclear", actividadCalibrada: 150, volumen: 10, fechaHoraCalibracion: new Date(), fecha: new Date() },
+    ]));
+    let resolverTransaccion;
+    const espiaTransaccion = vi.spyOn(mibgLotesMod, "administrarLutecioTransaction")
+      .mockImplementation(() => new Promise((resolve) => { resolverTransaccion = resolve; }));
+
+    const user = userEvent.setup();
+    render(<TabPacientes catalogo={catalogo} usuario={usuario} esAdmin={false} onToast={vi.fn()} nav={null} />);
+    await user.click(await screen.findByText("+ Manual"));
+    const fichaInput = labelInput("N° de Ficha");
+    await user.type(fichaInput, "999994");
+    fichaInput.blur();
+    await screen.findByText("Verificando N° de Ficha...");
+    await act(async () => {
+      resolverFichaIntentoDeferido.resolver({ intento: "1" });
+      await resolverFichaIntentoDeferido.promesa;
+    });
+    await user.type(labelInput("Apellido y nombre"), "Paciente Lutecio Doble Clic");
+    await user.type(labelInput("DNI"), "99999992");
+    await user.click(screen.getByText("¿Es un caso distinto a Tc-99m?"));
+    await user.selectOptions(labelInput("Isótopo"), "lu177");
+    await user.type(labelInput("Médico responsable"), "Dr. Test");
+    await user.selectOptions(labelInput("Lote de Lutecio-177 disponible"), "lote-lu-dc");
+    await user.type(labelInput("Dosis administrada (mCi)"), "1.5");
+
+    const boton = screen.getByRole("button", { name: "Guardar registro" });
+    await act(async () => {
+      boton.click();
+      boton.click();
+    });
+
+    expect(espiaTransaccion).toHaveBeenCalledTimes(1);
+    resolverTransaccion();
+  });
+
+  test("Lutecio-177: si la transacción tiene éxito, el formulario se cierra y limpia", async () => {
+    const mibgLotesMod = await import("../../services/firestore/mibgLotes.js");
+    vi.spyOn(mibgLotesMod, "listenMibgLotes").mockImplementation((cb) => listenerCon(cb, [
+      { id: "lote-lu-2", sedeId: "central", isotopoId: "lutecio177", numeroLote: "LPS261101E-25", numeroVial: 6, proveedor: "Tecnonuclear", actividadCalibrada: 150, volumen: 10, fechaHoraCalibracion: new Date(), fecha: new Date() },
+    ]));
+    vi.spyOn(mibgLotesMod, "administrarLutecioTransaction").mockResolvedValueOnce();
+
+    const user = userEvent.setup();
+    const onToast = vi.fn();
+    render(<TabPacientes catalogo={catalogo} usuario={usuario} esAdmin={false} onToast={onToast} nav={null} />);
+    await user.click(await screen.findByText("+ Manual"));
+    const fichaInput = labelInput("N° de Ficha");
+    await user.type(fichaInput, "999996");
+    fichaInput.blur();
+    await screen.findByText("Verificando N° de Ficha...");
+    await act(async () => {
+      resolverFichaIntentoDeferido.resolver({ intento: "1" });
+      await resolverFichaIntentoDeferido.promesa;
+    });
+    await user.type(labelInput("Apellido y nombre"), "Paciente Lutecio OK");
+    await user.type(labelInput("DNI"), "55667788");
+    await user.click(screen.getByText("¿Es un caso distinto a Tc-99m?"));
+    await user.selectOptions(labelInput("Isótopo"), "lu177");
+    await user.type(labelInput("Médico responsable"), "Dr. Test");
+    await user.selectOptions(labelInput("Lote de Lutecio-177 disponible"), "lote-lu-2");
+    await user.type(labelInput("Dosis administrada (mCi)"), "1.5");
+
+    await user.click(screen.getByRole("button", { name: "Guardar registro" }));
+    await vi.waitFor(() => expect(onToast).toHaveBeenCalledWith("Lutecio-177 registrado — consultalo en Libro 4"));
+
+    expect(screen.queryByRole("button", { name: "Guardar registro" })).toBeNull();
+  });
+});
