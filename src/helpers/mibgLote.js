@@ -84,6 +84,22 @@ export function normalizarNumeroLoteDosisUnica(numeroLote) {
   return (numeroLote || "").trim().toUpperCase().replace(/\s+/g, " ");
 }
 
+// Función PURA de validación del N° de vial -- separada para poder
+// testearla sin depender de cómo normalice un <input type="number"> del
+// navegador (esa normalización es responsabilidad del navegador, no de
+// esta función: acá sólo importa si el STRING recibido, tal cual, es un
+// entero positivo). "" (vacío) da false a propósito -- es responsabilidad
+// de quien llama decidir si "todavía no se tipeó nada" es válido o no
+// (ver numeroVialRequerido/numeroVialIngresado en TabLoteDosisUnica.jsx).
+// Number()/parseInt solos no alcanzan: parseInt("5.7",10) da 5 (trunca en
+// vez de rechazar); el regex de dígitos puros lo evita de raíz.
+export function numeroVialEsEnteroPositivo(valor) {
+  const texto = String(valor ?? "").trim();
+  if (!/^[0-9]+$/.test(texto)) return false;
+  const num = Number(texto);
+  return Number.isInteger(num) && num > 0;
+}
+
 // Aviso (NO bloqueante) de vial duplicado -- mismo numeroLote normalizado +
 // mismo numeroVial + misma sede, en un lote que no esté anulado. No exige
 // "disponible": un vial ya usado con ese mismo número también es indicio de

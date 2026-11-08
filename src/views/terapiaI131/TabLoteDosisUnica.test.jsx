@@ -87,21 +87,12 @@ describe("TabLoteDosisUnica -- N° de vial obligatorio sólo para Lutecio-177", 
     expect(botonGuardar().disabled).toBe(false);
   });
 
-  // Bug real encontrado por Pablo: parseInt("5.7",10) da 5 (trunca en vez de
-  // rechazar). El regex de dígitos puros lo rechaza -- Number.isInteger/>0
-  // solo no alcanza (Number("5.7") no es entero, pero sin el regex un
-  // string con puntos/signos no detectados por otra vía podría colarse).
-  //
-  // "1e2" NO está en esta lista a propósito -- confirmado en jsdom (y es el
-  // comportamiento real de <input type="number"> en cualquier navegador,
-  // no un detalle de testing): el campo normaliza el valor committeado a su
-  // forma decimal canónica ANTES de que este código lo vea -- `.value` nunca
-  // llega a ser el string "1e2", llega a ser "100" (ver test de abajo,
-  // "normaliza notación científica"). El problema que señaló Pablo
-  // (parseInt("1e2",10) da 1) describiría un bug real SI este fuera un
-  // input de texto libre -- en un type="number" nunca puede pasar, porque
-  // el navegador ya resolvió la notación científica a un número entero
-  // válido antes de que exista la posibilidad de parsear el string "1e2".
+  // La validación en sí (incluido el caso "1e2") está testeada como función
+  // PURA en mibgLote.test.js#numeroVialEsEnteroPositivo -- no depende de
+  // cómo normalice un <input type="number"> del navegador real (eso no se
+  // puede afirmar desde un test de componente en jsdom). Acá sólo se prueba
+  // que el componente deshabilita y avisa para valores claramente
+  // inválidos como string.
   test.each(["5.7", "0", "-1"])("Lutecio-177: N° de vial %s es inválido -- deshabilita y avisa", async (valorInvalido) => {
     const user = userEvent.setup();
     render(<TabLoteDosisUnica catalogo={catalogo} usuario={usuario} esAdmin={false} onToast={vi.fn()} isotopoId="lutecio177" titulo="Lutecio-177" descripcion="" placeholderLote="LPS..." />);
@@ -111,18 +102,6 @@ describe("TabLoteDosisUnica -- N° de vial obligatorio sólo para Lutecio-177", 
 
     expect(botonGuardar().disabled).toBe(true);
     expect(screen.getByText(/N° de vial tiene que ser un número entero mayor a 0/)).toBeTruthy();
-  });
-
-  test("Lutecio-177: N° de vial '1e2' -- el input type=number lo normaliza a '100' ANTES de llegar al validador, queda válido", async () => {
-    const user = userEvent.setup();
-    render(<TabLoteDosisUnica catalogo={catalogo} usuario={usuario} esAdmin={false} onToast={vi.fn()} isotopoId="lutecio177" titulo="Lutecio-177" descripcion="" placeholderLote="LPS..." />);
-    await user.click(screen.getByRole("button", { name: "+ Registrar lote nuevo" }));
-    await completarCamposComunes(user);
-    const input = labelInput("N° de vial");
-    await user.type(input, "1e2");
-
-    expect(input.value).toBe("100"); // confirmado: nunca "1e2", nunca "1"
-    expect(botonGuardar().disabled).toBe(false);
   });
 
   test("Lutecio-177: N° de vial '5' es válido -- habilita, sin aviso", async () => {

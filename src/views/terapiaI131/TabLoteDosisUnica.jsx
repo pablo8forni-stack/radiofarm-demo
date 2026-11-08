@@ -8,7 +8,7 @@ import { ModalAnularActa } from "../../components/actas/ModalAnularActa.jsx";
 import { fmtF, fmtTs } from "../../helpers/formato.js";
 import { listenActas, anularActaTransaction, listenAnulacionesActas } from "../../services/firestore/actas.js";
 import { addMibgLote, listenMibgLotes } from "../../services/firestore/mibgLotes.js";
-import { estadoMibgLote, normalizarNumeroLoteDosisUnica, loteVialYaExiste } from "../../helpers/mibgLote.js";
+import { estadoMibgLote, normalizarNumeroLoteDosisUnica, loteVialYaExiste, numeroVialEsEnteroPositivo } from "../../helpers/mibgLote.js";
 import { actividadCalibradaHaciaAtras } from "../../helpers/decaimientoLu177.js";
 
 // concentracionCalibracion/actividadAdministracion/fechaHoraAdministracion y
@@ -164,17 +164,11 @@ export function TabLoteDosisUnica({ catalogo, usuario, esAdmin, onToast, isotopo
   // opcional pero si se tipea igual tiene que ser entero positivo.
   const numeroVialRequerido = isotopoId === "lutecio177";
   const numeroVialIngresado = form.numeroVial.trim() !== "";
-  // Number()/parseInt tienen trampas reales con este input (bug encontrado
-  // por Pablo): parseInt("5.7",10) da 5 (trunca en vez de rechazar) y
-  // parseInt("1e2",10) da 1 (corta en la "e" en vez de leer notación
-  // científica). El regex de dígitos puros rechaza las dos cosas de raíz --
-  // Number.isInteger/>0 solo, sin el regex, no alcanza (Number("1e2") es
-  // 100, un entero positivo válido matemáticamente, pero no es la forma en
-  // que alguien tipea un N° de vial real).
+  // Validación pura, testeada aparte (numeroVialEsEnteroPositivo,
+  // helpers/mibgLote.js) -- no depende de cómo normalice el navegador un
+  // <input type="number"> (eso lo decide el navegador, no este código).
   const numeroVialNum = numeroVialIngresado ? Number(form.numeroVial) : null;
-  const numeroVialEsValido = !numeroVialIngresado || (
-    /^[0-9]+$/.test(form.numeroVial.trim()) && Number.isInteger(numeroVialNum) && numeroVialNum > 0
-  );
+  const numeroVialEsValido = !numeroVialIngresado || numeroVialEsEnteroPositivo(form.numeroVial);
 
   // Aviso NO bloqueante -- mismo numeroLote normalizado + mismo numeroVial +
   // misma sede, en un lote no anulado. Comparación local (lotesTodos no

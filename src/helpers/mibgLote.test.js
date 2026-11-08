@@ -1,5 +1,5 @@
 import { describe, test, expect } from "vitest";
-import { estadoMibgLote, lotesDelMes, lotesSinFecha, avisoLotesSinFecha, normalizarNumeroLoteDosisUnica, loteVialYaExiste } from "./mibgLote.js";
+import { estadoMibgLote, lotesDelMes, lotesSinFecha, avisoLotesSinFecha, normalizarNumeroLoteDosisUnica, loteVialYaExiste, numeroVialEsEnteroPositivo } from "./mibgLote.js";
 
 const ts = (iso) => ({ toDate: () => new Date(iso) });
 
@@ -185,6 +185,46 @@ describe("normalizarNumeroLoteDosisUnica", () => {
   test("vacío o ausente -- no rompe", () => {
     expect(normalizarNumeroLoteDosisUnica("")).toBe("");
     expect(normalizarNumeroLoteDosisUnica(undefined)).toBe("");
+  });
+});
+
+// Función PURA -- no depende de cómo un navegador real normalice
+// <input type="number"> (eso lo decide el navegador, Pablo lo verifica en
+// staging). Acá sólo importa qué hace esta función con un string dado,
+// tal cual, sin pasar por ningún DOM.
+describe("numeroVialEsEnteroPositivo", () => {
+  test("'100' -- válido", () => {
+    expect(numeroVialEsEnteroPositivo("100")).toBe(true);
+  });
+
+  test("'5' -- válido", () => {
+    expect(numeroVialEsEnteroPositivo("5")).toBe(true);
+  });
+
+  // Caso puntual pedido por Pablo: como STRING, "1e2" no es dígitos puros
+  // -- inválido para esta función, sin importar que Number("1e2") dé 100.
+  test("'1e2' -- inválido (no son dígitos puros, sin importar su valor numérico)", () => {
+    expect(numeroVialEsEnteroPositivo("1e2")).toBe(false);
+  });
+
+  test("'5.7' -- inválido (no es entero)", () => {
+    expect(numeroVialEsEnteroPositivo("5.7")).toBe(false);
+  });
+
+  test("'0' -- inválido (no es > 0)", () => {
+    expect(numeroVialEsEnteroPositivo("0")).toBe(false);
+  });
+
+  test("'-1' -- inválido (signo, no son dígitos puros)", () => {
+    expect(numeroVialEsEnteroPositivo("-1")).toBe(false);
+  });
+
+  test("vacío -- inválido (responsabilidad de quien llama decidir si eso bloquea o no)", () => {
+    expect(numeroVialEsEnteroPositivo("")).toBe(false);
+  });
+
+  test("con espacios de sobra -- se recortan antes de validar", () => {
+    expect(numeroVialEsEnteroPositivo("  5  ")).toBe(true);
   });
 });
 
