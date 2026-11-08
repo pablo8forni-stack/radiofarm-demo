@@ -4,7 +4,7 @@
 // (campo opcional en firestore.rules, sin cambios ahí). Estos tests cubren
 // sólo esa regla de UI, no el servicio real (mockeado).
 import { describe, test, expect, vi, afterEach } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { TabLoteDosisUnica } from "./TabLoteDosisUnica.jsx";
 
@@ -213,6 +213,65 @@ describe("TabLoteDosisUnica -- payload real que recibe addMibgLote", () => {
     expect(addMibgLote).toHaveBeenCalledTimes(1);
     const payload = addMibgLote.mock.calls[0][0];
     expect("numeroVial" in payload).toBe(false);
+  });
+});
+
+// Bug real encontrado por Pablo (parpadeo del aviso justo al tocar "Guardar
+// lote"): listenMibgLotes es un onSnapshot EN VIVO -- Firestore lo dispara
+// con el lote recién escrito (ya en el caché local) ANTES de que la
+// promesa de addMibgLote resuelva. En ese instante, form.numeroLote/
+// numeroVialNum todavía tienen lo recién tipeado (setForm(VACIO) corre
+// después del await, al terminar guardar()), así que el lote que se está
+// guardando se comparaba contra sí mismo y disparaba el aviso.
+describe("TabLoteDosisUnica -- el aviso de vial duplicado no parpadea contra el propio lote que se está guardando", () => {
+  test("control positivo: SIN guardado en curso, un lote YA existente con el mismo lote+vial sí muestra el aviso", async () => {
+    const mibgLotesMod = await import("../../services/firestore/mibgLotes.js");
+    vi.spyOn(mibgLotesMod, "listenMibgLotes").mockImplementation((cb) => listenerCon(cb, [
+      { id: "existente", sedeId: "central", isotopoId: "lutecio177", numeroLote: "LPS261101E-25", numeroVial: 5, fecha: new Date() },
+    ]));
+
+    const user = userEvent.setup();
+    render(<TabLoteDosisUnica catalogo={catalogo} usuario={usuario} esAdmin={false} onToast={vi.fn()} isotopoId="lutecio177" titulo="Lutecio-177" descripcion="" placeholderLote="LPS..." />);
+    await user.click(screen.getByRole("button", { name: "+ Registrar lote nuevo" }));
+    await completarCamposComunes(user);
+    await user.type(labelInput("N° de vial"), "5");
+
+    expect(screen.getByText(/Ya existe un lote activo con el mismo N° de lote y N° de vial/)).toBeTruthy();
+  });
+
+  test("mientras guardando=true, el propio lote recién escrito (ya visible vía el listener en vivo) NO dispara el aviso", async () => {
+    let callbackEnVivo;
+    const mibgLotesMod = await import("../../services/firestore/mibgLotes.js");
+    vi.spyOn(mibgLotesMod, "listenMibgLotes").mockImplementation((cb) => {
+      callbackEnVivo = cb;
+      cb([]);
+      return () => {};
+    });
+    let resolverGuardado;
+    vi.spyOn(mibgLotesMod, "addMibgLote").mockImplementation(() => new Promise((resolve) => { resolverGuardado = resolve; }));
+
+    const user = userEvent.setup();
+    render(<TabLoteDosisUnica catalogo={catalogo} usuario={usuario} esAdmin={false} onToast={vi.fn()} isotopoId="lutecio177" titulo="Lutecio-177" descripcion="" placeholderLote="LPS..." />);
+    await user.click(screen.getByRole("button", { name: "+ Registrar lote nuevo" }));
+    await completarCamposComunes(user);
+    await user.type(labelInput("N° de vial"), "5");
+    await user.click(botonGuardar()); // addMibgLote queda PENDIENTE -- guardando=true
+
+    // Simula lo que hace Firestore de verdad: el onSnapshot en vivo entrega
+    // el lote recién escrito, ya en caché local, ANTES de que la promesa
+    // de addMibgLote resuelva. act() fuerza a React a procesar el
+    // setLotesTodos() y re-renderizar antes del assert de abajo -- sin
+    // esto, el test podía pasar "de prestado" sin haber llegado a
+    // recalcular vialDuplicado todavía.
+    act(() => {
+      callbackEnVivo([
+        { id: "recien-guardado", sedeId: "central", isotopoId: "lutecio177", numeroLote: "LPS261101E-25", numeroVial: 5, fecha: new Date() },
+      ]);
+    });
+
+    expect(screen.queryByText(/Ya existe un lote activo con el mismo N° de lote y N° de vial/)).toBeNull();
+
+    resolverGuardado();
   });
 });
 

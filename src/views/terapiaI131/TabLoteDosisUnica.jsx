@@ -173,10 +173,20 @@ export function TabLoteDosisUnica({ catalogo, usuario, esAdmin, onToast, isotopo
   // Aviso NO bloqueante -- mismo numeroLote normalizado + mismo numeroVial +
   // misma sede, en un lote no anulado. Comparación local (lotesTodos no
   // tiene límite ni filtro de isótopo todavía), sin ninguna lectura nueva.
+  //
+  // guardando: bug real encontrado por Pablo (parpadeo justo al tocar
+  // "Guardar lote") -- listenMibgLotes es un onSnapshot EN VIVO, que
+  // Firestore dispara con el lote recién escrito (ya en el caché local)
+  // ANTES de que la promesa de addMibgLote resuelva -- en ese instante,
+  // form.numeroLote/numeroVialNum todavía tienen lo recién tipeado
+  // (setForm(VACIO) corre después del await, al terminar guardar()), así
+  // que el lote que se está guardando se compara contra sí mismo y matchea.
+  // No mostrar el aviso mientras guardando sea true evita ese falso
+  // positivo momentáneo.
   const vialDuplicado = useMemo(() => {
-    if (!numeroVialEsValido || !numeroVialNum) return false;
+    if (guardando || !numeroVialEsValido || !numeroVialNum) return false;
     return loteVialYaExiste(lotesTodos, { numeroLote: form.numeroLote, numeroVial: numeroVialNum, sedeId: sedeEfectiva, anulaciones });
-  }, [lotesTodos, form.numeroLote, numeroVialNum, numeroVialEsValido, sedeEfectiva, anulaciones]);
+  }, [lotesTodos, form.numeroLote, numeroVialNum, numeroVialEsValido, sedeEfectiva, anulaciones, guardando]);
 
   // Exigir > 0 (no sólo "truthy") en actividad calibrada y volumen -- antes
   // guardar() hacía return silencioso con un negativo/cero (el botón
