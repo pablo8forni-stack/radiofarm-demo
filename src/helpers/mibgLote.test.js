@@ -1,5 +1,5 @@
 import { describe, test, expect } from "vitest";
-import { estadoMibgLote, lotesDelMes, lotesSinFecha, avisoLotesSinFecha } from "./mibgLote.js";
+import { estadoMibgLote, lotesDelMes, lotesSinFecha, avisoLotesSinFecha, normalizarNumeroLoteDosisUnica, loteVialYaExiste } from "./mibgLote.js";
 
 const ts = (iso) => ({ toDate: () => new Date(iso) });
 
@@ -173,5 +173,63 @@ describe("avisoLotesSinFecha", () => {
   test("sin numeroLote -- usa el id como respaldo", () => {
     const lotes = [{ id: "idSinNumero" }];
     expect(avisoLotesSinFecha(lotes)).toContain("idSinNumero");
+  });
+});
+
+describe("normalizarNumeroLoteDosisUnica", () => {
+  test("mayúscula + trim + espacios de sobra colapsados", () => {
+    expect(normalizarNumeroLoteDosisUnica("  lps261101e-25  ")).toBe("LPS261101E-25");
+    expect(normalizarNumeroLoteDosisUnica("lps 261101e - 25")).toBe("LPS 261101E - 25");
+  });
+
+  test("vacío o ausente -- no rompe", () => {
+    expect(normalizarNumeroLoteDosisUnica("")).toBe("");
+    expect(normalizarNumeroLoteDosisUnica(undefined)).toBe("");
+  });
+});
+
+// Caso real de Pablo (4/11): vial 5 y vial 6 de LPS261101E-25 eran
+// indistinguibles en el picker -- este aviso (NO bloqueante) es lo que
+// permite detectarlo al cargar.
+describe("loteVialYaExiste", () => {
+  const anulaciones = new Map();
+
+  test("mismo lote (normalizado) + mismo vial + misma sede -- true", () => {
+    const lotes = [{ id: "L1", sedeId: "central", numeroLote: "LPS261101E-25", numeroVial: 5 }];
+    expect(loteVialYaExiste(lotes, { numeroLote: "LPS261101E-25", numeroVial: 5, sedeId: "central", anulaciones })).toBe(true);
+  });
+
+  // El caso pedido explícitamente: el lote NUEVO se tipea en minúscula, el
+  // VIEJO ya está guardado en mayúscula (create-only, nunca se migra) --
+  // tienen que seguir matcheando los dos lados.
+  test("nuevo en minúscula contra uno viejo guardado en mayúscula -- siguen matcheando", () => {
+    const lotes = [{ id: "L1", sedeId: "central", numeroLote: "LPS261101E-25", numeroVial: 5 }];
+    expect(loteVialYaExiste(lotes, { numeroLote: "lps261101e-25", numeroVial: 5, sedeId: "central", anulaciones })).toBe(true);
+  });
+
+  test("mismo lote, VIAL distinto -- false (vial 6 no choca con vial 5)", () => {
+    const lotes = [{ id: "L1", sedeId: "central", numeroLote: "LPS261101E-25", numeroVial: 5 }];
+    expect(loteVialYaExiste(lotes, { numeroLote: "LPS261101E-25", numeroVial: 6, sedeId: "central", anulaciones })).toBe(false);
+  });
+
+  test("mismo lote y vial, pero el existente está ANULADO -- false", () => {
+    const lotes = [{ id: "L1", sedeId: "central", numeroLote: "LPS261101E-25", numeroVial: 5 }];
+    const anuladoMap = new Map([["L1", { motivo: "error de carga" }]]);
+    expect(loteVialYaExiste(lotes, { numeroLote: "LPS261101E-25", numeroVial: 5, sedeId: "central", anulaciones: anuladoMap })).toBe(false);
+  });
+
+  test("mismo lote y vial, pero OTRA sede -- false", () => {
+    const lotes = [{ id: "L1", sedeId: "italiano", numeroLote: "LPS261101E-25", numeroVial: 5 }];
+    expect(loteVialYaExiste(lotes, { numeroLote: "LPS261101E-25", numeroVial: 5, sedeId: "central", anulaciones })).toBe(false);
+  });
+
+  test("lote viejo SIN numeroVial -- nunca choca (undefined !== cualquier número)", () => {
+    const lotes = [{ id: "L1", sedeId: "central", numeroLote: "LPS261101E-25" }];
+    expect(loteVialYaExiste(lotes, { numeroLote: "LPS261101E-25", numeroVial: 5, sedeId: "central", anulaciones })).toBe(false);
+  });
+
+  test("sin numeroVial tipeado todavía (null) -- false, no hay nada que comparar", () => {
+    const lotes = [{ id: "L1", sedeId: "central", numeroLote: "LPS261101E-25", numeroVial: 5 }];
+    expect(loteVialYaExiste(lotes, { numeroLote: "LPS261101E-25", numeroVial: null, sedeId: "central", anulaciones })).toBe(false);
   });
 });

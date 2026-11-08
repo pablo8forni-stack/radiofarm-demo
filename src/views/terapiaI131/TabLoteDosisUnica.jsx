@@ -8,7 +8,7 @@ import { ModalAnularActa } from "../../components/actas/ModalAnularActa.jsx";
 import { fmtF, fmtTs } from "../../helpers/formato.js";
 import { listenActas, anularActaTransaction, listenAnulacionesActas } from "../../services/firestore/actas.js";
 import { addMibgLote, listenMibgLotes } from "../../services/firestore/mibgLotes.js";
-import { estadoMibgLote } from "../../helpers/mibgLote.js";
+import { estadoMibgLote, normalizarNumeroLoteDosisUnica, loteVialYaExiste } from "../../helpers/mibgLote.js";
 import { actividadCalibradaHaciaAtras } from "../../helpers/decaimientoLu177.js";
 
 // concentracionCalibracion/actividadAdministracion/fechaHoraAdministracion y
@@ -19,7 +19,7 @@ import { actividadCalibradaHaciaAtras } from "../../helpers/decaimientoLu177.js"
 // remanente), ahí se diseña la trazabilidad completa del cálculo con ese
 // panorama entero a la vista -- no antes, a medias, sin saber qué necesita.
 const VACIO = {
-  numeroLote: "", proveedor: "", actividadCalibrada: "", volumen: "", fechaHoraCalibracion: "", fechaVencimiento: "", conformidad: null, obs: "",
+  numeroLote: "", numeroVial: "", proveedor: "", actividadCalibrada: "", volumen: "", fechaHoraCalibracion: "", fechaVencimiento: "", conformidad: null, obs: "",
   concentracionCalibracion: "", actividadAdministracion: "", fechaHoraAdministracion: "", calibradaTocada: false,
 };
 
@@ -156,21 +156,68 @@ export function TabLoteDosisUnica({ catalogo, usuario, esAdmin, onToast, isotopo
   const difierenMucho = cruzadaMCi != null && actividadCalibradaActual > 0 &&
     Math.abs(cruzadaMCi - actividadCalibradaActual) > actividadCalibradaActual * 0.15;
 
+  // N° de vial: distingue viales de un mismo lote de producción (ej. vial 5
+  // y vial 6 de LPS261101E-25, caso real de Pablo, 4/11 -- sin esto eran
+  // indistinguibles en el picker de TabPacientes.jsx). Obligatorio para
+  // Lutecio-177 en el formulario (el servidor no lo exige -- campo opcional
+  // en firestore.rules, ver mibgLoteValido, sin cambios ahí); para MIBG es
+  // opcional pero si se tipea igual tiene que ser entero positivo.
+  const numeroVialRequerido = isotopoId === "lutecio177";
+  const numeroVialIngresado = form.numeroVial.trim() !== "";
+  // Number()/parseInt tienen trampas reales con este input (bug encontrado
+  // por Pablo): parseInt("5.7",10) da 5 (trunca en vez de rechazar) y
+  // parseInt("1e2",10) da 1 (corta en la "e" en vez de leer notación
+  // científica). El regex de dígitos puros rechaza las dos cosas de raíz --
+  // Number.isInteger/>0 solo, sin el regex, no alcanza (Number("1e2") es
+  // 100, un entero positivo válido matemáticamente, pero no es la forma en
+  // que alguien tipea un N° de vial real).
+  const numeroVialNum = numeroVialIngresado ? Number(form.numeroVial) : null;
+  const numeroVialEsValido = !numeroVialIngresado || (
+    /^[0-9]+$/.test(form.numeroVial.trim()) && Number.isInteger(numeroVialNum) && numeroVialNum > 0
+  );
+
+  // Aviso NO bloqueante -- mismo numeroLote normalizado + mismo numeroVial +
+  // misma sede, en un lote no anulado. Comparación local (lotesTodos no
+  // tiene límite ni filtro de isótopo todavía), sin ninguna lectura nueva.
+  const vialDuplicado = useMemo(() => {
+    if (!numeroVialEsValido || !numeroVialNum) return false;
+    return loteVialYaExiste(lotesTodos, { numeroLote: form.numeroLote, numeroVial: numeroVialNum, sedeId: sedeEfectiva, anulaciones });
+  }, [lotesTodos, form.numeroLote, numeroVialNum, numeroVialEsValido, sedeEfectiva, anulaciones]);
+
+  // Exigir > 0 (no sólo "truthy") en actividad calibrada y volumen -- antes
+  // guardar() hacía return silencioso con un negativo/cero (el botón
+  // quedaba habilitado igual, el usuario tocaba y no pasaba nada, sin
+  // ningún aviso). Ahora deshabilita el botón y avisa, mismo patrón que el
+  // N° de vial. Sólo se considera "inválido" si HAY algo tipeado -- vacío ya
+  // deshabilita el botón por el chequeo de abajo, sin necesitar este aviso.
+  const actividadCalibradaInvalida = form.actividadCalibrada !== "" && !(parseFloat(form.actividadCalibrada) > 0);
+  const volumenInvalido = form.volumen !== "" && !(parseFloat(form.volumen) > 0);
+
   async function guardar() {
     if (!form.numeroLote.trim() || !form.proveedor.trim() || !form.actividadCalibrada || !form.volumen || !form.fechaHoraCalibracion || !form.fechaVencimiento) return;
     if (form.conformidad === null) return;
     if (!form.conformidad && !form.obs.trim()) return;
+    if (numeroVialRequerido && !numeroVialIngresado) return;
+    if (!numeroVialEsValido) return;
+    const actividadCalibradaNum = parseFloat(form.actividadCalibrada);
+    const volumenNum = parseFloat(form.volumen);
+    if (!(actividadCalibradaNum > 0) || !(volumenNum > 0)) return;
     setGuardando(true);
     try {
       await addMibgLote({
         sedeId: usuario.sede, sedeNombre: catalogo.sedes[usuario.sede]?.nombre,
-        isotopoId, numeroLote: form.numeroLote.trim(), proveedor: form.proveedor.trim(),
-        actividadCalibrada: parseFloat(form.actividadCalibrada) || 0,
-        volumen: parseFloat(form.volumen) || 0,
+        isotopoId,
+        // Normalizado OTRA VEZ acá (no sólo al tipear/salir del campo) --
+        // defensivo, mismo criterio que normalizarLoteSeisDigitos en
+        // stock.js/actas.js, por si algo lo saltó del lado del formulario.
+        numeroLote: normalizarNumeroLoteDosisUnica(form.numeroLote), proveedor: form.proveedor.trim(),
+        actividadCalibrada: actividadCalibradaNum,
+        volumen: volumenNum,
         fechaHoraCalibracion: new Date(form.fechaHoraCalibracion),
         fechaVencimiento: form.fechaVencimiento,
         conformidad: form.conformidad,
         usuarioNombre: usuario.nombre, usuarioEmail: usuario.email, observacion: form.obs.trim(),
+        ...(numeroVialNum != null ? { numeroVial: numeroVialNum } : {}),
       });
       onToast("Lote registrado");
       setMostrarForm(false);
@@ -214,7 +261,22 @@ export function TabLoteDosisUnica({ catalogo, usuario, esAdmin, onToast, isotopo
             </button>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <Input label="N° de lote" value={form.numeroLote} onChange={(e) => setForm((f) => ({ ...f, numeroLote: e.target.value }))} placeholder={placeholderLote} />
+            {/* Mayúsculas EN VIVO (onChange) -- .toUpperCase() nunca cambia
+                la longitud del string, así que el cursor nunca se corre, sin
+                necesitar tocar selectionStart. El trim/recorte de espacios
+                (que SÍ cambia la longitud) queda para onBlur y para
+                guardar() -- mismo patrón ya probado en ModalIngreso.jsx con
+                normalizarLoteSeisDigitos, sólo que acá el normalizador es el
+                propio (normalizarNumeroLoteDosisUnica, helpers/mibgLote.js). */}
+            <Input label="N° de lote" value={form.numeroLote}
+              onChange={(e) => setForm((f) => ({ ...f, numeroLote: e.target.value.toUpperCase() }))}
+              onBlur={() => setForm((f) => ({ ...f, numeroLote: normalizarNumeroLoteDosisUnica(f.numeroLote) }))}
+              placeholder={placeholderLote} />
+            {/* Obligatorio para Lutecio-177 (distingue viales del mismo lote
+                de producción, ver comentario en guardar()) -- opcional para
+                MIBG, pero si se tipea igual tiene que ser entero positivo. */}
+            <Input label={`N° de vial${numeroVialRequerido ? "" : " (opcional)"}`} type="number" min={1} step={1}
+              value={form.numeroVial} onChange={(e) => setForm((f) => ({ ...f, numeroVial: e.target.value }))} placeholder="5" />
             <Input label="Proveedor" value={form.proveedor} onChange={(e) => setForm((f) => ({ ...f, proveedor: e.target.value }))} placeholder="Ej: IPEN" />
             <Input label="Actividad calibrada (mCi)" type="number" min={0} step={0.1} value={form.actividadCalibrada}
               onChange={(e) => setForm((f) => ({ ...f, actividadCalibrada: e.target.value, calibradaTocada: true }))} placeholder={placeholderActividad} />
@@ -222,6 +284,26 @@ export function TabLoteDosisUnica({ catalogo, usuario, esAdmin, onToast, isotopo
             <Input label="Fecha/hora de calibración" type="datetime-local" value={form.fechaHoraCalibracion} onChange={(e) => setForm((f) => ({ ...f, fechaHoraCalibracion: e.target.value }))} />
             <Input label="Fecha de vencimiento" type="date" value={form.fechaVencimiento} onChange={(e) => setForm((f) => ({ ...f, fechaVencimiento: e.target.value }))} />
           </div>
+          {!numeroVialEsValido && (
+            <div className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-1.5">
+              El N° de vial tiene que ser un número entero mayor a 0.
+            </div>
+          )}
+          {actividadCalibradaInvalida && (
+            <div className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-1.5">
+              La actividad calibrada tiene que ser mayor a 0.
+            </div>
+          )}
+          {volumenInvalido && (
+            <div className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-1.5">
+              El volumen tiene que ser mayor a 0.
+            </div>
+          )}
+          {vialDuplicado && (
+            <div className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-1.5">
+              Ya existe un lote activo con el mismo N° de lote y N° de vial en esta sede -- revisá que no sea un error de tipeo.
+            </div>
+          )}
 
           {isotopoId === "lutecio177" && (
             <div className="border border-gray-100 rounded-xl p-3 flex flex-col gap-3 bg-gray-50/50">
@@ -263,7 +345,8 @@ export function TabLoteDosisUnica({ catalogo, usuario, esAdmin, onToast, isotopo
             <Btn variant="outline" onClick={() => setMostrarForm(false)} disabled={guardando}>Cancelar</Btn>
             <Btn onClick={guardar} disabled={
               guardando || !form.numeroLote.trim() || !form.proveedor.trim() || !form.actividadCalibrada || !form.volumen ||
-              !form.fechaHoraCalibracion || !form.fechaVencimiento || form.conformidad === null || (!form.conformidad && !form.obs.trim())
+              !form.fechaHoraCalibracion || !form.fechaVencimiento || form.conformidad === null || (!form.conformidad && !form.obs.trim()) ||
+              (numeroVialRequerido && !numeroVialIngresado) || !numeroVialEsValido || actividadCalibradaInvalida || volumenInvalido
             }>
               {guardando ? "Guardando..." : "Guardar lote"}
             </Btn>
@@ -284,7 +367,7 @@ export function TabLoteDosisUnica({ catalogo, usuario, esAdmin, onToast, isotopo
             return (
               <div key={l.id} className={`p-4 flex flex-col gap-1.5 ${anulacion ? "opacity-50" : ""}`}>
                 <div className="flex items-center justify-between gap-2 flex-wrap">
-                  <div className="text-sm font-semibold text-gray-800">{l.numeroLote}</div>
+                  <div className="text-sm font-semibold text-gray-800">{l.numeroLote}{l.numeroVial ? ` · Vial ${l.numeroVial}` : ""}</div>
                   <Badge color={estado.color}>{estado.label}</Badge>
                 </div>
                 <div className="text-xs text-gray-500">

@@ -1609,7 +1609,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
                 <Sel label="Lote de MIBG disponible" value={mibgLoteSeleccionado} onChange={(e) => setMibgLoteSeleccionado(e.target.value)}>
                   <option value="">Seleccionar lote...</option>
                   {lotesMibgDisponibles.map((l) => (
-                    <option key={l.id} value={l.id}>{l.numeroLote} · {l.actividadCalibrada} mCi en {l.volumen} mL (llegada) · Calibrado {fmtTs(l.fechaHoraCalibracion)}</option>
+                    <option key={l.id} value={l.id}>{l.numeroLote}{l.numeroVial ? ` · Vial ${l.numeroVial}` : ""} · {l.actividadCalibrada} mCi en {l.volumen} mL (llegada) · Calibrado {fmtTs(l.fechaHoraCalibracion)}</option>
                   ))}
                 </Sel>
                 {lotesMibgDisponibles.length === 0 && (
@@ -1631,7 +1631,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
                 <Sel label="Lote de Lutecio-177 disponible" value={lutecioLoteSeleccionado} onChange={(e) => setLutecioLoteSeleccionado(e.target.value)}>
                   <option value="">Seleccionar lote...</option>
                   {lotesLutecioDisponibles.map((l) => (
-                    <option key={l.id} value={l.id}>{l.numeroLote} · {l.actividadCalibrada} mCi en {l.volumen} mL (llegada) · Calibrado {fmtTs(l.fechaHoraCalibracion)}</option>
+                    <option key={l.id} value={l.id}>{l.numeroLote}{l.numeroVial ? ` · Vial ${l.numeroVial}` : ""} · {l.actividadCalibrada} mCi en {l.volumen} mL (llegada) · Calibrado {fmtTs(l.fechaHoraCalibracion)}</option>
                   ))}
                 </Sel>
                 {lotesLutecioDisponibles.length === 0 && (

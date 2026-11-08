@@ -70,3 +70,33 @@ export function avisoLotesSinFecha(lotes) {
   const plural = lotes.length !== 1 ? "s" : "";
   return `${lotes.length} lote${plural} de Lutecio-177 sin fecha de llegada, no incluido${plural} en ningún libro mensual: revisar -- ${lista}.`;
 }
+
+// Un solo normalizador para numeroLote de lotes de dosis única (MIBG y
+// Lutecio-177) -- mayúsculas + espacios de sobra recortados. Deliberadamente
+// más simple que normalizarLoteSeisDigitos (helpers/lote.js): ese otro es el
+// formato específico de 6 dígitos de BACON (generadores/radiofármacos de
+// stock), que no aplica acá -- acá sólo hace falta mayúscula+trim para que
+// "lps261101e-25", "LPS261101E-25" y " LPS261101E-25 " comparen igual.
+// Usarlo en los DOS lados de cualquier comparación (no sólo al guardar) es
+// lo que permite que un lote viejo guardado en minúscula (de antes de este
+// cambio, create-only, nunca se migra) siga matcheando contra uno nuevo.
+export function normalizarNumeroLoteDosisUnica(numeroLote) {
+  return (numeroLote || "").trim().toUpperCase().replace(/\s+/g, " ");
+}
+
+// Aviso (NO bloqueante) de vial duplicado -- mismo numeroLote normalizado +
+// mismo numeroVial + misma sede, en un lote que no esté anulado. No exige
+// "disponible": un vial ya usado con ese mismo número también es indicio de
+// error de tipeo real (ver caso de Pablo, vial 5 y vial 6 de
+// LPS261101E-25). `lotes` son los YA cargados en memoria (listenMibgLotes
+// no tiene límite) -- esto es pura comparación local, sin lecturas nuevas.
+export function loteVialYaExiste(lotes, { numeroLote, numeroVial, sedeId, anulaciones }) {
+  const loteNorm = normalizarNumeroLoteDosisUnica(numeroLote);
+  if (!loteNorm || !numeroVial) return false;
+  return lotes.some((l) =>
+    l.sedeId === sedeId &&
+    normalizarNumeroLoteDosisUnica(l.numeroLote) === loteNorm &&
+    l.numeroVial === numeroVial &&
+    !anulaciones.has(l.id)
+  );
+}
