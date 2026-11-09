@@ -33,6 +33,50 @@ export function listenActas(tipo, callback, { sedeId } = {}) {
   });
 }
 
+// Sin el limit(PAGINA) de arriba -- para tipos de acta donde el volumen real
+// es chico (I-131: viales de Stock, Parte A -- "entran pocos por semana",
+// confirmado con Pablo, 9/11) y por eso el límite de 150 no es una
+// optimización, es directamente un bug: un vial viejo (fuera de las 150
+// actas más recientes DE CUALQUIER tipo i131_vial de la sede) desaparecía
+// del listado principal y de "Combinar viales", sin aviso. NO usar esto para
+// tipos de volumen real alto (paciente/marcacion) -- ahí el límite sigue
+// siendo necesario, ver listenActas arriba.
+export function listenActasSinLimite(tipo, callback, { sedeId } = {}) {
+  const q = query(actasCol, where("tipo", "==", tipo), where("sedeId", "==", sedeId), orderBy("fecha", "desc"));
+  return onSnapshot(q, (snap) => {
+    callback(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+  });
+}
+
+// Acotada por TIEMPO (fecha >= desde), nunca por cantidad -- a diferencia de
+// listenActas/listenActasSinLimite de arriba. Pensada para los casos donde
+// hace falta estar seguro de no perder ningún acta relevante sin leer la
+// colección entera: "desde" tiene que ser una cota que, por construcción,
+// cubra todo lo relevante (ver decaidoPorTeorica + fechaMenosMargenDias en
+// decaimientoI131.js -- ahí está la demostración de por qué una ventana de
+// tiempo, bien elegida, nunca excluye un acta que importe, sin importar
+// cuántas haya). Mismo índice compuesto que ya usa listenActasMarcacionHoy
+// (tipo, sedeId, fecha), ver firestore.indexes.json -- no hace falta uno
+// nuevo. onSnapshot (no getDocs): esto alimenta vistas que deben actualizarse
+// solas si otra sesión escribe mientras están abiertas (ver TabStockViales.jsx,
+// TabPacientes.jsx).
+export function listenActasDesdeFecha(tipo, callback, { sedeId, desde }) {
+  const q = query(actasCol, where("tipo", "==", tipo), where("sedeId", "==", sedeId), where("fecha", ">=", desde));
+  return onSnapshot(q, (snap) => {
+    callback(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+  });
+}
+
+// Misma consulta que listenActasDesdeFecha, pero puntual (getDocs, no
+// listener) -- para el detalle de un vial YA decaído (VialDetalle.jsx): ahí
+// no hace falta quedar escuchando en vivo (nada debería seguir extrayendo de
+// un vial decaído), sólo traer el historial completo una vez, al abrir el
+// detalle ("a pedido", pedido explícito de Pablo).
+export async function actasDesdeFecha(tipo, { sedeId, desde }) {
+  const snap = await getDocs(query(actasCol, where("tipo", "==", tipo), where("sedeId", "==", sedeId), where("fecha", ">=", desde)));
+  return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+}
+
 // Sólo las marcaciones (Libro 1) de HOY, de una sede -- fuente del selector
 // de lote en Libro 2 (TabPacientes.jsx): el lote que un técnico puede
 // elegir para un paciente es el que efectivamente se marcó hoy, no lo que

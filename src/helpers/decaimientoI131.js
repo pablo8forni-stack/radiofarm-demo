@@ -6,7 +6,7 @@
 export const VIDA_MEDIA_I131_DIAS = 8.02;
 export const LAMBDA_I131_POR_DIA = Math.log(2) / VIDA_MEDIA_I131_DIAS;
 
-function aFecha(valor) {
+export function aFecha(valor) {
   return valor?.toDate ? valor.toDate() : new Date(valor);
 }
 
@@ -62,4 +62,72 @@ export function calcularDesglosePorVial(vial, mlExtraidos, hasta = new Date()) {
     fechaCalibracion: vial.fechaCalibracion, diasTranscurridos: dias,
     concentracionMCiPorMl: concentracion, mCiCalculado: concentracion * mlExtraidos,
   };
+}
+
+// ===========================================================================
+// "Decaído" (9/11, decisión de Pablo) -- un vial/extracción de I-131 está
+// decaído cuando su actividad restante calculada es MENOR a 0,5 mCi (un solo
+// umbral, terapéutico y diagnóstico por igual). Puede quedar volumen y estar
+// decaído igual -- NO es lo mismo que "agotado por volumen" (eso ya lo cubre
+// volumenRestante <= 0, sin cambios). La fecha de vencimiento es sólo
+// informativa -- nunca entra en ninguna de estas funciones.
+// ===========================================================================
+export const UMBRAL_DECAIDO_I131_MCI = 0.5;
+
+// Margen de seguridad (9/11, ajuste C de Pablo) para las ventanas de tiempo
+// que acotan las consultas de extracciones/vinculaciones (ver actas.js y
+// TabStockViales.jsx/TabPacientes.jsx) -- `fecha` de una extracción/acta es
+// SIEMPRE serverTimestamp() (ver addActaI131Extraccion, actas.js), nunca
+// tipeada ni retroactiva; `fechaCalibracion` de un vial, en cambio, SÍ es un
+// datetime-local tipeado por la técnica (ver TabStockViales.jsx#guardarVial)
+// -- puede quedar, por error de tipeo, con una hora del mismo día posterior
+// al momento real en que se registró el vial o se hizo una extracción same-
+// day. Sin este margen, una extracción legítima del mismo día de la
+// calibración podría quedar excluida de la ventana por pura diferencia de
+// horario tipeado vs. servidor.
+export const MARGEN_VENTANA_DIAS_I131 = 1;
+
+export function fechaMenosMargenDias(fecha, dias = MARGEN_VENTANA_DIAS_I131) {
+  return new Date(aFecha(fecha).getTime() - dias * 24 * 60 * 60 * 1000);
+}
+
+// Cota superior de la actividad real SIN leer ninguna extracción -- nunca
+// hace falta para decidir que un vial YA está decaído. Demostración: la
+// actividad real es concentración(días) × volumenRestante, y
+// volumenRestante <= volumenInicial siempre (nunca se extrae más de lo que
+// había) -- por lo tanto actividadRestante <= concentración(días) ×
+// volumenInicial = actividadTeorica(actividadCalibrada, días). Si la
+// teórica (que asume volumen INTACTO, el caso más favorable posible) ya
+// cruzó el umbral, la real también, sin excepción. Esto es lo que permite
+// clasificar la mayoría de los viales viejos como decaídos con cero
+// lecturas de extracciones (ver TabStockViales.jsx).
+export function decaidoPorTeorica(vial, ahora = new Date()) {
+  return actividadTeorica(vial.actividadCalibrada, diasTranscurridos(vial.fechaCalibracion, ahora)) < UMBRAL_DECAIDO_I131_MCI;
+}
+
+// Función única (9/11) que reemplaza las 3 copias idénticas que existían en
+// TabStockViales.jsx (tabla desktop, tarjeta mobile) y VialDetalle.jsx --
+// mismo cálculo exacto, solo centralizado y con el booleano de decaimiento
+// ya resuelto. `extracciones` tiene que venir YA acotado a una ventana que
+// cubra desde antes de vial.fechaCalibracion (ver fechaMenosMargenDias) --
+// esta función no lo verifica, confía en quien la llama (ver comentario de
+// listenActasDesdeFecha en actas.js).
+export function estadoDecaimientoVial(vial, extracciones, ahora = new Date()) {
+  const volumenRestante = Math.max(0, vial.volumenInicial - volumenExtraidoDe(vial.id, extracciones));
+  const actividad = actividadRestante(vial, volumenRestante, ahora);
+  return { volumenRestante, actividadRestante: actividad, estaDecaido: actividad < UMBRAL_DECAIDO_I131_MCI };
+}
+
+// Extracción SIN dosis vinculada -- decae desde su propia actividad
+// congelada al momento de extraerla, sin depender del vial de origen ni de
+// ninguna otra extracción (cero lecturas nuevas). Prioriza actividadMedida
+// (el dato real del activímetro) sobre actividadCalculada (la guía teórica,
+// ver DesgloseCalculo.jsx) -- si tiene las dos, la medida es la que manda.
+// Si no tiene NINGUNA de las dos (dato viejo/malformado), falla ABIERTO
+// (nunca decaída) -- pedido explícito de Pablo: más vale mostrarla de más
+// que ocultar por error una extracción real que hace falta vincular.
+export function estaDecaidaExtraccion(extraccion, ahora = new Date()) {
+  const actividadBase = extraccion.actividadMedida ?? extraccion.actividadCalculada;
+  if (!actividadBase) return false;
+  return actividadTeorica(actividadBase, diasTranscurridos(extraccion.fecha, ahora)) < UMBRAL_DECAIDO_I131_MCI;
 }

@@ -82,6 +82,19 @@ vi.mock("../../services/firestore/actas.js", () => ({
     cb(actasI131PorTipo[tipo] || []);
     return () => { actasI131Callbacks[tipo] = (actasI131Callbacks[tipo] || []).filter((c) => c !== cb); };
   },
+  // Ajuste D (9/11, decaído I-131): mismo mock que listenActas de arriba --
+  // ignora `desde` a propósito (los tests de este archivo prueban la
+  // MECÁNICA de vinculación/decaimiento con fixtures chicas, no la ventana
+  // de tiempo en sí -- eso está cubierto en scripts/testing/*.mjs contra el
+  // emulador real y en decaimientoI131.test.js). Comparte actasI131PorTipo/
+  // actasI131Callbacks con listenActas -- un mismo tipo (ej. i131_ablativa)
+  // puede estar escuchado por las dos funciones a la vez, ambas ven el
+  // mismo fixture.
+  listenActasDesdeFecha: (tipo, cb) => {
+    (actasI131Callbacks[tipo] ||= []).push(cb);
+    cb(actasI131PorTipo[tipo] || []);
+    return () => { actasI131Callbacks[tipo] = (actasI131Callbacks[tipo] || []).filter((c) => c !== cb); };
+  },
   listenAnulacionesActas: (cb) => listenerCon(cb, anulacionesParaTest),
   listenActasMarcacionHoy: (_sedeId, cb) => {
     marcacionesHoyCallbacks.push(cb);
@@ -439,6 +452,76 @@ describe("TabPacientes -- Gestión I-131, vínculo a Extracción (Dosis ablativa
 
     expect(labelInput("Extracción relacionada").value).toBe("");
     expect(labelInput("Extracción relacionada").disabled).toBe(true);
+  });
+});
+
+// Ajuste D (9/11, plan "decaído" de I-131): "Extracción relacionada" ya NO
+// sólo excluye vinculadas -- también excluye decaídas, por la actividad
+// PROPIA de la extracción (nunca por el estado del vial de origen, que acá
+// ni se calcula). La mecánica de "ya vinculada" acotada por tiempo (en vez
+// de los 3 listeners limitados a 150) está probada contra el emulador real
+// en scripts/testing/transacciones.test.mjs -- acá sólo la DECISIÓN de
+// qué se oculta y por qué.
+describe("TabPacientes -- 'Extracción relacionada' también oculta las decaídas (ajuste D)", () => {
+  async function abrirPickerExtraccion(user) {
+    render(<TabPacientes catalogo={catalogo} usuario={usuarioConAccesoI131} esAdmin={false} onToast={vi.fn()} nav={null} />);
+    await user.click(await screen.findByText("+ Manual"));
+    await user.click(screen.getByText("¿Es un caso distinto a Tc-99m?"));
+    await user.selectOptions(labelInput("Isótopo"), "i131");
+    await user.selectOptions(labelInput("Tipo de registro"), "dosis_barrido");
+  }
+
+  beforeEach(() => { actasI131PorTipo.i131_vial = []; });
+  afterEach(() => { actasI131PorTipo = {}; actasI131Callbacks = {}; anulacionesParaTest = []; });
+
+  test("decaída (actividad medida chica, hace muchos días) -- no aparece, aunque nunca fue vinculada", async () => {
+    actasI131PorTipo.i131_extraccion = [{
+      id: "ex-decaida", tipo: "i131_extraccion", fecha: new Date(Date.now() - 100 * 24 * 60 * 60 * 1000),
+      actividadMedida: 2, actividadCalculada: 2, viales: [],
+    }];
+    const user = userEvent.setup();
+    await abrirPickerExtraccion(user);
+
+    expect(screen.queryByRole("option", { name: /mCi medido/ })).toBeNull();
+  });
+
+  test("reciente, con actividad alta -- SÍ aparece", async () => {
+    actasI131PorTipo.i131_extraccion = [{
+      id: "ex-vigente", tipo: "i131_extraccion", fecha: new Date(),
+      actividadMedida: 50, actividadCalculada: 50, viales: [],
+    }];
+    const user = userEvent.setup();
+    await abrirPickerExtraccion(user);
+
+    expect(screen.getByRole("option", { name: /mCi medido/ })).toBeTruthy();
+  });
+
+  // Fail-open explícito (pedido de Pablo): sin actividadMedida NI
+  // actividadCalculada (dato viejo/malformado), nunca se oculta por error.
+  test("sin actividadMedida ni actividadCalculada -- NO se oculta (falla abierto)", async () => {
+    actasI131PorTipo.i131_extraccion = [{
+      id: "ex-sin-dato", tipo: "i131_extraccion", fecha: new Date(Date.now() - 300 * 24 * 60 * 60 * 1000), viales: [],
+    }];
+    const user = userEvent.setup();
+    await abrirPickerExtraccion(user);
+
+    expect(screen.getByRole("option", { name: /0\.00 mCi medido/ })).toBeTruthy();
+  });
+
+  // No es un vial decaído lo que oculta la extracción -- es la actividad
+  // PROPIA de la extracción. Esta pantalla ni siquiera calcula el
+  // decaimiento del vial de origen -- este test deja constancia de que el
+  // criterio correcto (actividad propia) es el único que puede aplicar.
+  test("extracción reciente con actividad alta -- se muestra sin importar cuán viejo sea el vial de origen", async () => {
+    actasI131PorTipo.i131_vial = [{ id: "vial-viejo", sedeId: "central", lote: "I131-VIAL-VIEJO", fechaCalibracion: new Date(Date.now() - 200 * 24 * 60 * 60 * 1000) }];
+    actasI131PorTipo.i131_extraccion = [{
+      id: "ex-de-vial-viejo", tipo: "i131_extraccion", fecha: new Date(),
+      actividadMedida: 80, actividadCalculada: 80, viales: [{ vialId: "vial-viejo", mlExtraidos: 1 }],
+    }];
+    const user = userEvent.setup();
+    await abrirPickerExtraccion(user);
+
+    expect(screen.getByText(/I131-VIAL-VIEJO/)).toBeTruthy();
   });
 });
 

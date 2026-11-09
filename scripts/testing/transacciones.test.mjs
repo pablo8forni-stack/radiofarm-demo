@@ -11,7 +11,7 @@ import {
 } from "./fixtures.mjs";
 import { egresoTransaction, ingresoBatch, transferenciaTransaction } from "../../src/services/firestore/stock.js";
 import { addMibgLote, administrarMibgTransaction, administrarLutecioTransaction, usoActivoDeLote, estadoPorLoteDosisUnica, lotesDisponiblesParaAdministrar, listenMibgLotes, estadoDeUnLoteListado, estadoListadoLoteDosisUnica } from "../../src/services/firestore/mibgLotes.js";
-import { addActaPaciente, addActaI131Barrido, anularActaTransaction, anulacionesPorSede } from "../../src/services/firestore/actas.js";
+import { addActaPaciente, addActaI131Barrido, addActaI131Vial, listenActasSinLimite, listenActasDesdeFecha, anularActaTransaction, anulacionesPorSede } from "../../src/services/firestore/actas.js";
 import { lotesDelMes } from "../../src/helpers/mibgLote.js";
 import { setSedeAuditando } from "../../src/services/auth.js";
 import { hoy } from "../../src/helpers/formato.js";
@@ -1369,4 +1369,76 @@ test("estadoListadoLoteDosisUnica: batch mixto (anulado/usado/vencido-sin-uso) -
   assert.equal(mapa.get(loteUsado.id).estado, "usado");
   assert.equal(mapa.get(loteVencSinUso.id).estado, "vencido-sin-uso");
   assert.equal(lecturas, 1 + 5, "anulado=0 + usado=1 (intento vigente) + vencido-sin-uso=5 (agota CAP_INTENTOS) = 6 lecturas en total para los 3 lotes del batch");
+});
+
+// ===========================================================================
+// Ajuste A del plan "decaído" de I-131 (9/11) -- listenActasSinLimite NO
+// pierde un vial viejo, a diferencia de listenActas (limit 150). Reproduce
+// el mismo patrón de prueba real ya usado para MIBG/Lutecio-177 (160 actas
+// de ruido) pero para i131_vial.
+// ===========================================================================
+test("listenActasSinLimite (i131_vial): un vial viejo sigue apareciendo con 160 viales más nuevos de por medio -- listenActas (limit 150) lo perdería", async () => {
+  await loguearComo(PERSONAS.admin);
+  const loteViejo = `I131-VIAL-VIEJO-${Date.now()}`;
+  await addActaI131Vial({
+    sedeId: SEDE_A, sedeNombre: NOMBRE_SEDE[SEDE_A], lote: loteViejo, categoria: "terapeutico",
+    fechaCalibracion: new Date(), actividadCalibrada: 1000, volumenInicial: 10,
+    usuarioNombre: PERSONAS.admin.nombre, usuarioEmail: PERSONAS.admin.email, observacion: "",
+  });
+
+  for (let i = 0; i < 160; i++) {
+    await addActaI131Vial({
+      sedeId: SEDE_A, sedeNombre: NOMBRE_SEDE[SEDE_A], lote: `I131-VIAL-RUIDO-${Date.now()}-${i}`, categoria: "terapeutico",
+      fechaCalibracion: new Date(), actividadCalibrada: 1000, volumenInicial: 10,
+      usuarioNombre: PERSONAS.admin.nombre, usuarioEmail: PERSONAS.admin.email, observacion: "",
+    });
+  }
+
+  let unsub;
+  const primeraEmision = new Promise((resolve, reject) => {
+    const timeoutId = setTimeout(() => reject(new Error("timeout esperando la emisión")), 15000);
+    unsub = listenActasSinLimite("i131_vial", (viales) => {
+      clearTimeout(timeoutId);
+      resolve(viales);
+    }, { sedeId: SEDE_A });
+  });
+
+  const viales = await primeraEmision;
+  unsub();
+  assert.ok(viales.length > 150, `tienen que ser más de 150 viales reales en la sede (hay ${viales.length}) -- si no, este test no prueba nada`);
+  assert.ok(viales.some((v) => v.lote === loteViejo), "el vial viejo (el primero creado, ahora fuera de los 150 más recientes) tiene que seguir apareciendo -- listenActas(limit 150) lo hubiera perdido");
+});
+
+test("listenActasDesdeFecha: excluye lo anterior a 'desde', incluye lo posterior, SIN límite de cantidad", async () => {
+  await loguearComo(PERSONAS.admin);
+  const loteAntes = `I131-VIAL-ANTES-${Date.now()}`;
+  await addActaI131Vial({
+    sedeId: SEDE_A, sedeNombre: NOMBRE_SEDE[SEDE_A], lote: loteAntes, categoria: "terapeutico",
+    fechaCalibracion: new Date(), actividadCalibrada: 1000, volumenInicial: 10,
+    usuarioNombre: PERSONAS.admin.nombre, usuarioEmail: PERSONAS.admin.email, observacion: "",
+  });
+
+  const desde = new Date(); // corte -- todo lo creado ANTES de este instante queda afuera
+  await new Promise((r) => setTimeout(r, 50)); // margen real contra el reloj del emulador
+
+  const loteDespues = `I131-VIAL-DESPUES-${Date.now()}`;
+  await addActaI131Vial({
+    sedeId: SEDE_A, sedeNombre: NOMBRE_SEDE[SEDE_A], lote: loteDespues, categoria: "terapeutico",
+    fechaCalibracion: new Date(), actividadCalibrada: 1000, volumenInicial: 10,
+    usuarioNombre: PERSONAS.admin.nombre, usuarioEmail: PERSONAS.admin.email, observacion: "",
+  });
+
+  let unsub;
+  const primeraEmision = new Promise((resolve, reject) => {
+    const timeoutId = setTimeout(() => reject(new Error("timeout esperando la emisión")), 15000);
+    unsub = listenActasDesdeFecha("i131_vial", (viales) => {
+      const tieneElDeDespues = viales.some((v) => v.lote === loteDespues);
+      if (tieneElDeDespues) { clearTimeout(timeoutId); resolve(viales); }
+    }, { sedeId: SEDE_A, desde });
+  });
+
+  const viales = await primeraEmision;
+  unsub();
+  assert.ok(viales.some((v) => v.lote === loteDespues), "el vial creado DESPUÉS de 'desde' tiene que estar incluido");
+  assert.ok(!viales.some((v) => v.lote === loteAntes), "el vial creado ANTES de 'desde' tiene que quedar excluido");
 });

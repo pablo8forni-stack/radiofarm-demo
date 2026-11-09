@@ -29,6 +29,9 @@ import {
 } from "../../services/firestore/actas.js";
 import { listenMibgLotes, administrarMibgTransaction, administrarLutecioTransaction } from "../../services/firestore/mibgLotes.js";
 import { useLotesDisponibles } from "../../hooks/useLotesDisponibles.js";
+import { useActasDesdeFecha } from "../../hooks/useActasDesdeFecha.js";
+import { useAhoraAlVolverVisible } from "../../hooks/useAhoraAlVolverVisible.js";
+import { aFecha, estaDecaidaExtraccion, fechaMenosMargenDias } from "../../helpers/decaimientoI131.js";
 
 const TIMEOUT_BUSQUEDA_MS = 20000;
 const MSJ_TIMEOUT_BUSQUEDA = "La consulta tardó demasiado, puede haber un problema de conexión -- intentá cerrar las otras pestañas de RadioFarm que tengas abiertas y reintentá.";
@@ -812,18 +815,57 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
   // después) -- este filtro de cliente alcanza, mismo nivel de guardrail
   // que el combinado de viales en VialDetalle.jsx.
   const vialesI131PorId = useMemo(() => new Map(vialesI131.map((v) => [v.id, v])), [vialesI131]);
+
+  // ===========================================================================
+  // Ajuste D (9/11, plan "decaído" de I-131) -- "ya vinculada" deja de salir
+  // de ablativaI131/dosisI131/dosisBarridoI131 (los MISMOS 3 listeners de
+  // arriba, limitados a 150 cada uno -- esos NO se tocan, siguen
+  // alimentando dosisParaVincular y el listado principal sin cambios). Para
+  // el chequeo de vinculación se abren 3 listeners APARTE, acotados por
+  // TIEMPO (no por cantidad) desde la fecha de la extracción NO decaída más
+  // vieja -- ninguna dosis puede vincular una extracción con fecha anterior
+  // a la propia extracción (no se puede administrar algo que todavía no se
+  // extrajo), así que esta ventana nunca excluye una vinculación real, sin
+  // importar cuántas actas de ese tipo haya después. Sólo hace falta
+  // verificar vinculación de las NO decaídas -- una decaída se oculta
+  // igual por el criterio B (ver extraccionesDisponibles), vinculada o no.
+  // ===========================================================================
+  const ahoraVinculaciones = useAhoraAlVolverVisible();
+  const extraccionesNoDecaidas = useMemo(
+    () => extraccionesI131.filter((e) => !estaDecaidaExtraccion(e, ahoraVinculaciones)),
+    [extraccionesI131, ahoraVinculaciones]
+  );
+  const fechaMinimaVinculaciones = useMemo(() => {
+    if (extraccionesNoDecaidas.length === 0) return null;
+    const minima = extraccionesNoDecaidas.reduce((min, e) => {
+      const f = aFecha(e.fecha);
+      return !min || f < min ? f : min;
+    }, null);
+    return fechaMenosMargenDias(minima);
+  }, [extraccionesNoDecaidas]);
+  const ablativaParaVinculacion = useActasDesdeFecha("i131_ablativa", { sedeId: sedeEfectiva, desde: fechaMinimaVinculaciones });
+  const dosisParaVinculacion = useActasDesdeFecha("i131_dosis", { sedeId: sedeEfectiva, desde: fechaMinimaVinculaciones });
+  const dosisBarridoParaVinculacion = useActasDesdeFecha("i131_dosis_barrido", { sedeId: sedeEfectiva, desde: fechaMinimaVinculaciones });
   const extraccionesYaVinculadasIds = useMemo(() => {
-    const todas = [...ablativaI131, ...dosisI131, ...dosisBarridoI131];
+    const todas = [...ablativaParaVinculacion, ...dosisParaVinculacion, ...dosisBarridoParaVinculacion];
     return new Set(todas.filter((a) => a.extraccionId && !anulaciones.has(a.id)).map((a) => a.extraccionId));
-  }, [ablativaI131, dosisI131, dosisBarridoI131, anulaciones]);
+  }, [ablativaParaVinculacion, dosisParaVinculacion, dosisBarridoParaVinculacion, anulaciones]);
   const extraccionesDisponibles = useMemo(() => {
     return extraccionesI131
-      .filter((e) => !anulaciones.has(e.id) && !extraccionesYaVinculadasIds.has(e.id))
+      .filter((e) => !anulaciones.has(e.id) && !extraccionesYaVinculadasIds.has(e.id) && !estaDecaidaExtraccion(e, ahoraVinculaciones))
       .sort((a, b) => tsMillis(b.fecha) - tsMillis(a.fecha));
-  }, [extraccionesI131, anulaciones, extraccionesYaVinculadasIds]);
+  }, [extraccionesI131, anulaciones, extraccionesYaVinculadasIds, ahoraVinculaciones]);
   function etiquetaExtraccion(e) {
     const lotes = (e.viales || []).map((p) => vialesI131PorId.get(p.vialId)?.lote || "?").join(", ");
-    return `${lotes} · ${e.actividadMedida.toFixed(2)} mCi medido · ${fmtTs(e.fecha)}`;
+    // Ajuste D (9/11): mismo fallback que estaDecaidaExtraccion
+    // (decaimientoI131.js) -- una extracción sin actividadMedida NUNCA se
+    // oculta por error (falla abierto), así que esta etiqueta tiene que
+    // poder mostrarla igual, sin reventar. En la práctica real
+    // actividadMedida siempre existe (firestore.rules lo exige > 0 al
+    // crear) -- esto es defensivo para el mismo caso borde que ya contempla
+    // el filtro de decaimiento.
+    const actividad = e.actividadMedida ?? e.actividadCalculada ?? 0;
+    return `${lotes} · ${actividad.toFixed(2)} mCi medido · ${fmtTs(e.fecha)}`;
   }
 
   // Al tildar "cápsula sellada": respalda la extracción vinculada antes de

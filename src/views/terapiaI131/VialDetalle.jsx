@@ -1,11 +1,11 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Badge } from "../../components/ui/Badge.jsx";
 import { Btn } from "../../components/ui/Btn.jsx";
 import { Input } from "../../components/ui/Input.jsx";
 import { Sel } from "../../components/ui/Sel.jsx";
 import { fmtF, fmtTs } from "../../helpers/formato.js";
-import { addActaI131Extraccion } from "../../services/firestore/actas.js";
-import { diasTranscurridos, actividadRestante, volumenExtraidoDe, calcularDesglosePorVial } from "../../helpers/decaimientoI131.js";
+import { addActaI131Extraccion, actasDesdeFecha } from "../../services/firestore/actas.js";
+import { diasTranscurridos, actividadRestante, volumenExtraidoDe, calcularDesglosePorVial, fechaMenosMargenDias } from "../../helpers/decaimientoI131.js";
 import { DesgloseCalculo, AvisoGuiaNoOficial } from "./DesgloseCalculo.jsx";
 import { CurvaDecaimiento } from "./CurvaDecaimiento.jsx";
 import { CATEGORIA_VIAL_LABEL, categoriaVial, TIPO_LABEL_I131 } from "../../constants/tipoI131.js";
@@ -18,29 +18,65 @@ const LINEA_VACIA = () => ({ vialId: "", ml: "" });
 // "completan 150 mCi con lote 241"). El aviso de "guía, no reemplaza al
 // activímetro" va siempre visible acá, no en un modal que se cierra y se
 // olvida.
-export function VialDetalle({ vial, anulacionVial, todosLosViales, extracciones, extraccionesVinculadas, anulaciones, catalogo, usuario, esAdmin, onToast, onVolver, onAnular }) {
+//
+// estaDecaido (9/11, ajuste B del plan): el vial decaído NO está cubierto
+// por la ventana de "vigentes" del padre (TabStockViales.jsx, a propósito --
+// ver fechaMinimaVigentes ahí) -- `extracciones` (prop) puede no incluir ni
+// una sola extracción de ESTE vial si decayó hace mucho. Por eso, sólo para
+// este caso, se pide acá mismo el historial COMPLETO una vez al abrir el
+// detalle (getDocs, no listener -- "a pedido", nada debería seguir
+// extrayendo de un vial decaído). `todosLosViales` (para Combinar viales) ya
+// llega filtrado a vigentes desde el padre -- un vial decaído nunca se
+// ofrece para combinar, pero la línea 0 (el vial actual) sigue siendo él
+// mismo sin importar si está en esa lista o no.
+export function VialDetalle({ vial, estaDecaido, anulacionVial, todosLosViales, extracciones, extraccionesVinculadas, anulaciones, catalogo, usuario, esAdmin, onToast, onVolver, onAnular }) {
   const [mostrarForm, setMostrarForm] = useState(false);
   const [lineas, setLineas] = useState([{ vialId: vial.id, ml: "" }]);
   const [actividadMedida, setActividadMedida] = useState("");
   const [pacienteFicha, setPacienteFicha] = useState("");
   const [obs, setObs] = useState("");
   const [guardando, setGuardando] = useState(false);
+  // [] por default (no null) -- así extraccionesDeEsteVial nunca necesita
+  // armar un array nuevo con `?? []` en cada render (eso disparaba el
+  // useMemo de abajo de más, sin ningún cambio real de datos).
+  const [extraccionesPropias, setExtraccionesPropias] = useState([]);
+  const [cargandoHistorialDecaido, setCargandoHistorialDecaido] = useState(false);
+
+  useEffect(() => {
+    if (!estaDecaido) { setExtraccionesPropias([]); setCargandoHistorialDecaido(false); return; }
+    let activo = true;
+    setCargandoHistorialDecaido(true);
+    actasDesdeFecha("i131_extraccion", { sedeId: vial.sedeId, desde: fechaMenosMargenDias(vial.fechaCalibracion) })
+      .then((todas) => { if (activo) setExtraccionesPropias(todas); })
+      // Fallar CERRADO -- sin poder confirmar el historial real, mejor
+      // mostrar "sin extracciones" (y dejar ver el aviso de carga fallida más
+      // abajo) que inventar un remanente de más.
+      .catch(() => { if (activo) setExtraccionesPropias([]); })
+      .finally(() => { if (activo) setCargandoHistorialDecaido(false); });
+    return () => { activo = false; };
+  }, [estaDecaido, vial.id, vial.sedeId, vial.fechaCalibracion]);
+
+  // Vigente: usa la ventana compartida del padre (ya completa para
+  // vigentes). Decaído: usa SU propio historial recién pedido -- nunca la
+  // ventana de vigentes, que a propósito puede no cubrir su fecha.
+  const extraccionesDeEsteVial = estaDecaido ? extraccionesPropias : extracciones;
 
   const extraccionesDelVial = useMemo(
-    () => extracciones.filter((e) => (e.viales || []).some((p) => p.vialId === vial.id)),
-    [extracciones, vial.id]
+    () => extraccionesDeEsteVial.filter((e) => (e.viales || []).some((p) => p.vialId === vial.id)),
+    [extraccionesDeEsteVial, vial.id]
   );
 
   // Guardrail sólo client-side (confirmado, sin validación server-side): al
   // combinar viales en una misma extracción, sólo se ofrecen otros de la
   // MISMA categoría que el actual -- mezclar mL de un vial terapéutico con
   // uno diagnóstico en una sola extracción no tiene sentido clínico.
+  // Decaídos nunca entran acá (ver comentario de todosLosViales arriba).
   const vialesParaCombinar = useMemo(
     () => todosLosViales.filter((v) => categoriaVial(v) === categoriaVial(vial)),
     [todosLosViales, vial]
   );
 
-  const volumenExtraido = volumenExtraidoDe(vial.id, extracciones);
+  const volumenExtraido = volumenExtraidoDe(vial.id, extraccionesDeEsteVial);
   const volumenRestante = Math.max(0, vial.volumenInicial - volumenExtraido);
   const dias = diasTranscurridos(vial.fechaCalibracion);
   const actRestante = actividadRestante(vial, volumenRestante);
@@ -66,10 +102,18 @@ export function VialDetalle({ vial, anulacionVial, todosLosViales, extracciones,
   // de más -- aviso nada más, sin bloqueo duro (ver nota en TabStockViales
   // sobre por qué no hay transacción acá).
   const previaLineas = lineas.map((l) => {
-    const v = todosLosViales.find((x) => x.id === l.vialId);
+    // La línea 0 es siempre EL vial actual, exista o no en todosLosViales
+    // (un vial decaído ya no aparece ahí a propósito -- ver comentario de
+    // todosLosViales más arriba, pero sigue siendo el vial de esta pantalla).
+    const v = l.vialId === vial.id ? vial : todosLosViales.find((x) => x.id === l.vialId);
     const ml = parseFloat(l.ml);
     if (!v || !ml || ml <= 0) return { ...l, valido: false };
-    const volDisponible = Math.max(0, v.volumenInicial - volumenExtraidoDe(v.id, extracciones));
+    // Cada vial usa SU propia fuente de extracciones correcta: el actual
+    // (línea 0) puede estar decaído y tener su propio historial completo
+    // recién pedido; los combinados (líneas 1+) son siempre vigentes, ya
+    // cubiertos por la ventana compartida del padre.
+    const extraccionesDeV = v.id === vial.id ? extraccionesDeEsteVial : extracciones;
+    const volDisponible = Math.max(0, v.volumenInicial - volumenExtraidoDe(v.id, extraccionesDeV));
     const desglose = calcularDesglosePorVial(v, ml);
     return { ...l, valido: true, vial: v, desglose, excedeVolumen: ml > volDisponible, volDisponible };
   });
@@ -118,6 +162,7 @@ export function VialDetalle({ vial, anulacionVial, todosLosViales, extracciones,
             <div className="flex items-center gap-2">
               <span className="font-mono font-bold text-gray-800 text-lg">{vial.lote}</span>
               <Badge color={CATEGORIA_VIAL_LABEL[categoriaVial(vial)].color}>{CATEGORIA_VIAL_LABEL[categoriaVial(vial)].label}</Badge>
+              {estaDecaido && <Badge color="gray">Decaído</Badge>}
             </div>
             <div className="text-xs text-gray-400">{catalogo.sedes[vial.sedeId]?.short || "—"}</div>
           </div>
@@ -129,6 +174,9 @@ export function VialDetalle({ vial, anulacionVial, todosLosViales, extracciones,
         </div>
         {anulacionVial && (
           <div className="text-xs text-orange-500 font-semibold mb-3">ANULADO: {anulacionVial.motivo}</div>
+        )}
+        {cargandoHistorialDecaido && (
+          <div className="text-xs text-gray-400 mb-3">Cargando historial completo de extracciones…</div>
         )}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs mb-4">
           <div><div className="text-gray-400">Calibración</div><div className="font-semibold text-gray-700">{fmtTs(vial.fechaCalibracion)}</div></div>

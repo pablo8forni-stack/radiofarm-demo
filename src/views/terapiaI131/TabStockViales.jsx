@@ -5,13 +5,73 @@ import { Input } from "../../components/ui/Input.jsx";
 import { Sel } from "../../components/ui/Sel.jsx";
 import { ModalAnularActa } from "../../components/actas/ModalAnularActa.jsx";
 import { fmtF, fmtTs, diasV } from "../../helpers/formato.js";
-import { listenActas, addActaI131Vial, anularActaTransaction, listenAnulacionesActas } from "../../services/firestore/actas.js";
-import { diasTranscurridos, actividadRestante, volumenExtraidoDe } from "../../helpers/decaimientoI131.js";
+import { listenActas, listenActasSinLimite, addActaI131Vial, anularActaTransaction, listenAnulacionesActas } from "../../services/firestore/actas.js";
+import {
+  aFecha, diasTranscurridos, actividadTeorica,
+  decaidoPorTeorica, estadoDecaimientoVial, fechaMenosMargenDias,
+} from "../../helpers/decaimientoI131.js";
+import { useActasDesdeFecha } from "../../hooks/useActasDesdeFecha.js";
+import { useAhoraAlVolverVisible } from "../../hooks/useAhoraAlVolverVisible.js";
 import { AvisoGuiaNoOficial } from "./DesgloseCalculo.jsx";
 import { VialDetalle } from "./VialDetalle.jsx";
 import { CATEGORIA_VIAL_LABEL, categoriaVial } from "../../constants/tipoI131.js";
 
 const VACIO_VIAL = { lote: "", categoria: "terapeutico", fechaCalibracion: "", actividadCalibrada: "", volumenInicial: "", fechaVencimiento: "", obs: "" };
+
+// Una fila por vial, compartida entre vigentes y el grupo plegado "Ver
+// anteriores" (9/11) -- sólo cambia el prop `decaido` (badge "Decaído" +
+// Vol. restante "—" si no se leyó dato real, ver TabStockViales#decaidos).
+function FilaVialDesktop({ v, anulacion, catalogo, onClick, decaido = false }) {
+  const diasVenc = v.fechaVencimiento ? diasV(v.fechaVencimiento) : null;
+  return (
+    <tr className={`border-b border-gray-50 last:border-0 hover:bg-gray-50/30 cursor-pointer ${anulacion ? "opacity-50" : ""}`} onClick={onClick}>
+      <td className="px-3 py-2.5 font-semibold text-gray-800 text-xs font-mono">
+        {v.lote}
+        {anulacion && <div className="text-xs text-orange-500 font-semibold">ANULADO: {anulacion.motivo}</div>}
+      </td>
+      <td className="px-3 py-2.5 flex items-center gap-1">
+        <Badge color={CATEGORIA_VIAL_LABEL[categoriaVial(v)].color}>{CATEGORIA_VIAL_LABEL[categoriaVial(v)].label}</Badge>
+        {decaido && <Badge color="gray">Decaído</Badge>}
+      </td>
+      <td className="px-3 py-2.5 text-xs text-gray-600">{catalogo.sedes[v.sedeId]?.short || "—"}</td>
+      <td className="px-3 py-2.5 text-xs text-gray-500">{fmtTs(v.fechaCalibracion)}</td>
+      <td className="px-3 py-2.5 text-xs text-gray-700">{v.actividadCalibrada} mCi</td>
+      <td className="px-3 py-2.5 text-xs text-gray-700">{v.volumenInicial} mL</td>
+      <td className="px-3 py-2.5 text-xs text-gray-700">{v._remanente.volumenRestante == null ? "—" : `${v._remanente.volumenRestante.toFixed(1)} mL`}</td>
+      <td className="px-3 py-2.5"><span className="font-bold text-blue-700 text-sm">{v._remanente.actividadRestante.toFixed(1)}</span><span className="text-xs text-gray-400 ml-1">mCi</span></td>
+      <td className="px-3 py-2.5 text-xs">
+        {/* Sólo informativa (decisión de Pablo, 9/11) -- nunca determina
+            "Decaído", nunca oculta ni deshabilita nada. */}
+        {diasVenc == null ? <span className="text-gray-300">—</span>
+          : diasVenc < 0 ? <Badge color="red">Vencido</Badge>
+          : diasVenc <= 5 ? <Badge color="orange">Vence {diasVenc}d</Badge>
+          : <span className="text-gray-500">{fmtF(v.fechaVencimiento)}</span>}
+      </td>
+      <td className="px-3 py-2.5 text-right text-xs text-blue-600 font-semibold">Ver →</td>
+    </tr>
+  );
+}
+
+function FilaVialMobile({ v, anulacion, catalogo, onClick, decaido = false }) {
+  return (
+    <button onClick={onClick} className={`w-full text-left p-4 flex flex-col gap-1.5 ${anulacion ? "opacity-50" : ""}`}>
+      <div className="flex items-center justify-between gap-2">
+        <span className="font-semibold text-gray-800 text-sm font-mono">{v.lote}</span>
+        <span className="text-xs text-blue-600 font-semibold">Ver →</span>
+      </div>
+      <div className="flex items-center gap-1">
+        <Badge color={CATEGORIA_VIAL_LABEL[categoriaVial(v)].color}>{CATEGORIA_VIAL_LABEL[categoriaVial(v)].label}</Badge>
+        {decaido && <Badge color="gray">Decaído</Badge>}
+      </div>
+      <div className="text-xs text-gray-500">{catalogo.sedes[v.sedeId]?.short || "—"} · Calibrado {fmtTs(v.fechaCalibracion)}</div>
+      <div className="text-xs text-gray-700">
+        Restante: <span className="font-bold text-blue-700">{v._remanente.actividadRestante.toFixed(1)} mCi</span>
+        {v._remanente.volumenRestante != null && <> en {v._remanente.volumenRestante.toFixed(1)} mL</>}
+      </div>
+      {anulacion && <div className="text-xs text-orange-500 font-semibold">ANULADO: {anulacion.motivo}</div>}
+    </button>
+  );
+}
 
 // Stock de viales I-131 -- Parte A del "espacio de cálculo": digitaliza la
 // planilla "Yodo-131 Recibido" en papel. Toda la pestaña (lectura y
@@ -21,7 +81,6 @@ const VACIO_VIAL = { lote: "", categoria: "terapeutico", fechaCalibracion: "", a
 // de atención puntual como el resto de Gestión I-131.
 export function TabStockViales({ catalogo, usuario, esAdmin, onToast }) {
   const [viales, setViales] = useState([]);
-  const [extracciones, setExtracciones] = useState([]);
   const [anulacionesRaw, setAnulacionesRaw] = useState([]);
   // Sólo para el índice inverso extraccionId -> acta de dosis (ver
   // extraccionesVinculadas más abajo) -- este vínculo se guarda en Libro 2
@@ -37,9 +96,20 @@ export function TabStockViales({ catalogo, usuario, esAdmin, onToast }) {
   const [mostrarFormVial, setMostrarFormVial] = useState(false);
   const [formVial, setFormVial] = useState(VACIO_VIAL);
   const [guardandoVial, setGuardandoVial] = useState(false);
+  // "Ver anteriores" (decaídos) -- plegado por defecto, SIN persistir la
+  // preferencia (decisión de Pablo, 9/11): vuelve a plegarse en cada visita.
+  const [mostrarAnteriores, setMostrarAnteriores] = useState(false);
+  const ahora = useAhoraAlVolverVisible();
 
-  useEffect(() => { if (sedeEfectiva) return listenActas("i131_vial", setViales, { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
-  useEffect(() => { if (sedeEfectiva) return listenActas("i131_extraccion", setExtracciones, { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
+  // Ajuste A (9/11): listenActasSinLimite, NO listenActas -- los viales de
+  // I-131 entran pocos por semana (confirmado con Pablo), así que el límite
+  // de 150 acá era puro bug, no una optimización real: un vial viejo (fuera
+  // de las 150 actas i131_vial más recientes de la sede) desaparecía del
+  // listado principal Y de "Combinar viales" sin aviso. Con "Ver anteriores"
+  // (más abajo) prometiendo acceso a TODO el historial, hacía falta
+  // corregir esto primero -- un listado "completo" que en realidad sigue
+  // limitado a 150 sería mentira.
+  useEffect(() => { if (sedeEfectiva) return listenActasSinLimite("i131_vial", setViales, { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
   useEffect(() => { if (sedeEfectiva) return listenActas("i131_ablativa", setAblativaI131, { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
   useEffect(() => { if (sedeEfectiva) return listenActas("i131_dosis", setDosisI131, { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
   useEffect(() => { if (sedeEfectiva) return listenActas("i131_dosis_barrido", setDosisBarridoI131, { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
@@ -56,11 +126,68 @@ export function TabStockViales({ catalogo, usuario, esAdmin, onToast }) {
     return new Map(todas.filter((a) => a.extraccionId && !anulaciones.has(a.id)).map((a) => [a.extraccionId, a]));
   }, [ablativaI131, dosisI131, dosisBarridoI131, anulaciones]);
 
-  const vialesFiltrados = useMemo(
-    () => viales.filter((v) => (!sedeEfectiva || v.sedeId === sedeEfectiva) && (!filtroCategoria || categoriaVial(v) === filtroCategoria))
-      .sort((a, b) => diasTranscurridos(a.fechaCalibracion) - diasTranscurridos(b.fechaCalibracion)),
-    [viales, sedeEfectiva, filtroCategoria]
+  const vialesPropios = useMemo(() => viales.filter((v) => !sedeEfectiva || v.sedeId === sedeEfectiva), [viales, sedeEfectiva]);
+
+  // Paso 1, GRATIS (sin leer ninguna extracción) -- ver decaidoPorTeorica,
+  // decaimientoI131.js, para la demostración de por qué esto nunca da un
+  // falso "vigente". La mayoría de los viales viejos se resuelven acá,
+  // cero lecturas.
+  const candidatosVigentesPorTeorica = useMemo(
+    () => vialesPropios.filter((v) => !decaidoPorTeorica(v, ahora)),
+    [vialesPropios, ahora]
   );
+
+  // Ventana de tiempo (ajuste C: 1 día de margen) desde la calibración MÁS
+  // VIEJA entre los candidatos vigentes -- ninguna extracción de ESOS
+  // viales puede tener fecha anterior a la propia calibración del vial
+  // (ver demostración completa en el reporte de la Fase 1). null si no hay
+  // ningún candidato -- ahí no hace falta ninguna lectura de extracciones.
+  const fechaMinimaVigentes = useMemo(() => {
+    if (candidatosVigentesPorTeorica.length === 0) return null;
+    const minima = candidatosVigentesPorTeorica.reduce((min, v) => {
+      const f = aFecha(v.fechaCalibracion);
+      return !min || f < min ? f : min;
+    }, null);
+    return fechaMenosMargenDias(minima);
+  }, [candidatosVigentesPorTeorica]);
+
+  // Ajuste E: listener en vivo (onSnapshot vía useActasDesdeFecha), NUNCA
+  // getDocs -- esta lista alimenta "Combinar viales" y el remanente en
+  // pantalla; si otra sesión extrae mientras esta pantalla está abierta,
+  // tiene que reflejarse sola. Acotada por TIEMPO, sin límite de cantidad --
+  // inmune al bug de la ventana de 150 (ver reporte de la Fase 1).
+  const extraccionesVigentes = useActasDesdeFecha("i131_extraccion", { sedeId: sedeEfectiva, desde: fechaMinimaVigentes });
+
+  // Paso 2: de los candidatos "vigentes por teórica", cuáles son REALMENTE
+  // vigentes una vez descontadas las extracciones de verdad -- acá sí puede
+  // aparecer un decaído de más (teórica alta pero mucho volumen ya
+  // extraído). vigentes/decaidos quedan con viales "enriquecidos"
+  // (_remanente) para no recalcular de nuevo en el render.
+  const { vigentes, decaidos } = useMemo(() => {
+    const vig = [], dec = [];
+    vialesPropios.forEach((v) => {
+      if (decaidoPorTeorica(v, ahora)) {
+        // Decaído gratis -- no hay lectura real de SU remanente (puede
+        // estar fuera de la ventana de extraccionesVigentes a propósito,
+        // ver fechaMinimaVigentes). Se muestra la cota teórica (siempre
+        // < umbral en esta rama) en vez de pedir una lectura sólo para una
+        // fila plegada -- volumen real queda sin dato (null), nunca inventado.
+        const dias = diasTranscurridos(v.fechaCalibracion, ahora);
+        dec.push({ ...v, _remanente: { volumenRestante: null, actividadRestante: actividadTeorica(v.actividadCalibrada, dias), estaDecaido: true } });
+        return;
+      }
+      const remanente = estadoDecaimientoVial(v, extraccionesVigentes, ahora);
+      (remanente.estaDecaido ? dec : vig).push({ ...v, _remanente: remanente });
+    });
+    return { vigentes: vig, decaidos: dec };
+  }, [vialesPropios, extraccionesVigentes, ahora]);
+
+  function porCategoriaYOrden(lista, categoria) {
+    return lista.filter((v) => !categoria || categoriaVial(v) === categoria)
+      .sort((a, b) => diasTranscurridos(a.fechaCalibracion) - diasTranscurridos(b.fechaCalibracion));
+  }
+  const vigentesFiltrados = useMemo(() => porCategoriaYOrden(vigentes, filtroCategoria), [vigentes, filtroCategoria]);
+  const decaidosFiltrados = useMemo(() => porCategoriaYOrden(decaidos, filtroCategoria), [decaidos, filtroCategoria]);
 
   async function confirmarAnulacion(acta, motivo) {
     try {
@@ -100,7 +227,10 @@ export function TabStockViales({ catalogo, usuario, esAdmin, onToast }) {
     }
   }
 
-  const vialSeleccionado = vialSeleccionadoId ? viales.find((v) => v.id === vialSeleccionadoId) : null;
+  // Del listado enriquecido (vigentes/decaidos), no de `viales` crudo -- así
+  // el detalle ya sabe si el vial elegido está decaído (vialSeleccionado.
+  // _remanente.estaDecaido) sin tener que recalcularlo de nuevo.
+  const vialSeleccionado = vialSeleccionadoId ? [...vigentes, ...decaidos].find((v) => v.id === vialSeleccionadoId) : null;
 
   // Antes esto era un `if (vialSeleccionado) return <VialDetalle .../>` --
   // un return temprano separado del resto del JSX. Eso dejaba
@@ -114,9 +244,14 @@ export function TabStockViales({ catalogo, usuario, esAdmin, onToast }) {
       <div className="flex flex-col gap-4">
         <VialDetalle
           vial={vialSeleccionado}
+          estaDecaido={vialSeleccionado._remanente.estaDecaido}
           anulacionVial={anulaciones.get(vialSeleccionado.id)}
-          todosLosViales={viales.filter((v) => v.sedeId === vialSeleccionado.sedeId && !anulaciones.get(v.id))}
-          extracciones={extracciones}
+          // Combinar viales (más abajo, VialDetalle.jsx) ya NO ofrece
+          // decaídos -- se filtra ACÁ, pasando sólo vigentes, en vez de en
+          // VialDetalle (que tendría que recalcular el estado de cada uno
+          // de nuevo). Ver ajuste del plan "Combinar viales sin decaídos".
+          todosLosViales={vigentes.filter((v) => v.sedeId === vialSeleccionado.sedeId && !anulaciones.get(v.id))}
+          extracciones={extraccionesVigentes}
           extraccionesVinculadas={extraccionesVinculadas}
           anulaciones={anulaciones}
           catalogo={catalogo}
@@ -200,7 +335,7 @@ export function TabStockViales({ catalogo, usuario, esAdmin, onToast }) {
       <div className="bg-white rounded-2xl shadow-sm border border-gray-100">
         <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
           <span className="text-xs font-bold text-gray-500 uppercase tracking-wide">Viales</span>
-          <Badge color="blue">{vialesFiltrados.length}</Badge>
+          <Badge color="blue">{vigentesFiltrados.length}</Badge>
         </div>
         {/* Desktop: tabla. */}
         <div className="hidden md:block overflow-x-auto">
@@ -213,63 +348,37 @@ export function TabStockViales({ catalogo, usuario, esAdmin, onToast }) {
               </tr>
             </thead>
             <tbody>
-              {vialesFiltrados.map((v) => {
-                const anulacion = anulaciones.get(v.id);
-                const volExtraido = volumenExtraidoDe(v.id, extracciones);
-                const volRestante = Math.max(0, v.volumenInicial - volExtraido);
-                const actRestante = actividadRestante(v, volRestante);
-                const diasVenc = v.fechaVencimiento ? diasV(v.fechaVencimiento) : null;
-                return (
-                  <tr key={v.id} className={`border-b border-gray-50 last:border-0 hover:bg-gray-50/30 cursor-pointer ${anulacion ? "opacity-50" : ""}`} onClick={() => setVialSeleccionadoId(v.id)}>
-                    <td className="px-3 py-2.5 font-semibold text-gray-800 text-xs font-mono">
-                      {v.lote}
-                      {anulacion && <div className="text-xs text-orange-500 font-semibold">ANULADO: {anulacion.motivo}</div>}
-                    </td>
-                    <td className="px-3 py-2.5"><Badge color={CATEGORIA_VIAL_LABEL[categoriaVial(v)].color}>{CATEGORIA_VIAL_LABEL[categoriaVial(v)].label}</Badge></td>
-                    <td className="px-3 py-2.5 text-xs text-gray-600">{catalogo.sedes[v.sedeId]?.short || "—"}</td>
-                    <td className="px-3 py-2.5 text-xs text-gray-500">{fmtTs(v.fechaCalibracion)}</td>
-                    <td className="px-3 py-2.5 text-xs text-gray-700">{v.actividadCalibrada} mCi</td>
-                    <td className="px-3 py-2.5 text-xs text-gray-700">{v.volumenInicial} mL</td>
-                    <td className="px-3 py-2.5 text-xs text-gray-700">{volRestante.toFixed(1)} mL</td>
-                    <td className="px-3 py-2.5"><span className="font-bold text-blue-700 text-sm">{actRestante.toFixed(1)}</span><span className="text-xs text-gray-400 ml-1">mCi</span></td>
-                    <td className="px-3 py-2.5 text-xs">
-                      {diasVenc == null ? <span className="text-gray-300">—</span>
-                        : diasVenc < 0 ? <Badge color="red">Vencido</Badge>
-                        : diasVenc <= 5 ? <Badge color="orange">Vence {diasVenc}d</Badge>
-                        : <span className="text-gray-500">{fmtF(v.fechaVencimiento)}</span>}
-                    </td>
-                    <td className="px-3 py-2.5 text-right text-xs text-blue-600 font-semibold">Ver →</td>
-                  </tr>
-                );
-              })}
+              {vigentesFiltrados.map((v) => (
+                <FilaVialDesktop key={v.id} v={v} anulacion={anulaciones.get(v.id)} catalogo={catalogo} onClick={() => setVialSeleccionadoId(v.id)} />
+              ))}
+              {mostrarAnteriores && decaidosFiltrados.map((v) => (
+                <FilaVialDesktop key={v.id} v={v} anulacion={anulaciones.get(v.id)} catalogo={catalogo} onClick={() => setVialSeleccionadoId(v.id)} decaido />
+              ))}
             </tbody>
           </table>
         </div>
         {/* Mobile: tarjeta por vial. */}
         <div className="md:hidden divide-y divide-gray-50">
-          {vialesFiltrados.map((v) => {
-            const anulacion = anulaciones.get(v.id);
-            const volExtraido = volumenExtraidoDe(v.id, extracciones);
-            const volRestante = Math.max(0, v.volumenInicial - volExtraido);
-            const actRestante = actividadRestante(v, volRestante);
-            return (
-              <button key={v.id} onClick={() => setVialSeleccionadoId(v.id)} className={`w-full text-left p-4 flex flex-col gap-1.5 ${anulacion ? "opacity-50" : ""}`}>
-                <div className="flex items-center justify-between gap-2">
-                  <span className="font-semibold text-gray-800 text-sm font-mono">{v.lote}</span>
-                  <span className="text-xs text-blue-600 font-semibold">Ver →</span>
-                </div>
-                <div><Badge color={CATEGORIA_VIAL_LABEL[categoriaVial(v)].color}>{CATEGORIA_VIAL_LABEL[categoriaVial(v)].label}</Badge></div>
-                <div className="text-xs text-gray-500">{catalogo.sedes[v.sedeId]?.short || "—"} · Calibrado {fmtTs(v.fechaCalibracion)}</div>
-                <div className="text-xs text-gray-700">
-                  Restante: <span className="font-bold text-blue-700">{actRestante.toFixed(1)} mCi</span> en {volRestante.toFixed(1)} mL
-                </div>
-                {anulacion && <div className="text-xs text-orange-500 font-semibold">ANULADO: {anulacion.motivo}</div>}
-              </button>
-            );
-          })}
+          {vigentesFiltrados.map((v) => (
+            <FilaVialMobile key={v.id} v={v} anulacion={anulaciones.get(v.id)} catalogo={catalogo} onClick={() => setVialSeleccionadoId(v.id)} />
+          ))}
+          {mostrarAnteriores && decaidosFiltrados.map((v) => (
+            <FilaVialMobile key={v.id} v={v} anulacion={anulaciones.get(v.id)} catalogo={catalogo} onClick={() => setVialSeleccionadoId(v.id)} decaido />
+          ))}
         </div>
-        {vialesFiltrados.length === 0 && (
+        {vigentesFiltrados.length === 0 && decaidosFiltrados.length === 0 && (
           <div className="text-center py-12 text-gray-400 text-sm">Sin viales registrados todavía.</div>
+        )}
+        {/* "Ver anteriores" (9/11) -- plegado por defecto, SIN persistir la
+            preferencia. El listado nunca OCULTA un vial decaído del todo --
+            siempre queda accesible (ver y anular) con un clic, sólo no
+            compite visualmente con los vigentes. */}
+        {decaidosFiltrados.length > 0 && (
+          <div className="border-t border-gray-100 px-4 py-3">
+            <button onClick={() => setMostrarAnteriores((m) => !m)} className="text-xs text-blue-600 hover:text-blue-800 font-semibold min-h-11 md:min-h-0">
+              {mostrarAnteriores ? "Ocultar anteriores" : `Ver anteriores (${decaidosFiltrados.length})`}
+            </button>
+          </div>
         )}
       </div>
 
