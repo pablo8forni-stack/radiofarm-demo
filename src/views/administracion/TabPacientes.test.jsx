@@ -513,7 +513,12 @@ describe("TabPacientes -- 'Extracción relacionada' también oculta las decaída
   // decaimiento del vial de origen -- este test deja constancia de que el
   // criterio correcto (actividad propia) es el único que puede aplicar.
   test("extracción reciente con actividad alta -- se muestra sin importar cuán viejo sea el vial de origen", async () => {
-    actasI131PorTipo.i131_vial = [{ id: "vial-viejo", sedeId: "central", lote: "I131-VIAL-VIEJO", fechaCalibracion: new Date(Date.now() - 200 * 24 * 60 * 60 * 1000) }];
+    // actividadCalibrada real (1000 mCi) a propósito -- sin esto, un vial
+    // "decaído por fórmula" mal implementado (si alguna vez alguien
+    // filtrara por el vial en vez de por la extracción) no se notaría:
+    // decaidoPorTeorica(actividadCalibrada=undefined) da NaN, nunca
+    // "decaído", y este test no probaría nada real.
+    actasI131PorTipo.i131_vial = [{ id: "vial-viejo", sedeId: "central", lote: "I131-VIAL-VIEJO", fechaCalibracion: new Date(Date.now() - 200 * 24 * 60 * 60 * 1000), actividadCalibrada: 1000, volumenInicial: 10 }];
     actasI131PorTipo.i131_extraccion = [{
       id: "ex-de-vial-viejo", tipo: "i131_extraccion", fecha: new Date(),
       actividadMedida: 80, actividadCalculada: 80, viales: [{ vialId: "vial-viejo", mlExtraidos: 1 }],
