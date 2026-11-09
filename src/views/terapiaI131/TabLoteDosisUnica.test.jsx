@@ -294,3 +294,82 @@ describe("TabLoteDosisUnica -- lotes viejos sin numeroVial no se rompen", () => 
     expect(screen.queryByText(/Vial undefined|Vial null/)).toBeNull();
   });
 });
+
+// Caso real reportado por Pablo (9/11, staging): dos lotes cargados como
+// admin de Central con fechaHoraCalibracion FUTURA (27/11/2026, cargados el
+// 9/11/2026). Verificado leyendo el código (TabLoteDosisUnica.jsx, el
+// propio `lotesFiltrados`): filtra sólo por sede y ordena por `fecha`
+// (serverTimestamp, cuándo se cargó) -- fechaHoraCalibracion no se usa para
+// filtrar, agrupar ni ordenar en ningún lado de este listado. Este test lo
+// confirma con datos reales: ambos lotes (uno con calibración futura, otro
+// con calibración de hoy) tienen que aparecer en la lista.
+describe("TabLoteDosisUnica -- fechaHoraCalibracion futura no saca al lote del listado", () => {
+  test("lote con calibración FUTURA (27/11) y lote con calibración de HOY -- los dos entran al listado", async () => {
+    const mibgLotesMod = await import("../../services/firestore/mibgLotes.js");
+    vi.spyOn(mibgLotesMod, "listenMibgLotes").mockImplementation((cb) => listenerCon(cb, [
+      { id: "lote-futuro", sedeId: "central", sedeNombre: "FUESMEN Central", isotopoId: "lutecio177",
+        numeroLote: "LPS-FUTURO-25", numeroVial: 1, proveedor: "Tecnonuclear", actividadCalibrada: 150, volumen: 10,
+        fechaHoraCalibracion: new Date("2026-11-27T00:00:00"), fechaVencimiento: "2026-11-28",
+        conformidad: true, usuarioNombre: "Admin Test", fecha: new Date("2026-11-09T10:00:00") },
+      { id: "lote-hoy", sedeId: "central", sedeNombre: "FUESMEN Central", isotopoId: "lutecio177",
+        numeroLote: "LPS-HOY-25", numeroVial: 2, proveedor: "Tecnonuclear", actividadCalibrada: 150, volumen: 10,
+        fechaHoraCalibracion: new Date("2026-11-09T10:00:00"), fechaVencimiento: "2026-11-10",
+        conformidad: true, usuarioNombre: "Admin Test", fecha: new Date("2026-11-09T09:00:00") },
+    ]));
+
+    render(<TabLoteDosisUnica catalogo={catalogo} usuario={usuario} esAdmin={false} onToast={vi.fn()} isotopoId="lutecio177" titulo="Lutecio-177" descripcion="" placeholderLote="LPS..." />);
+
+    expect(await screen.findByText(/LPS-FUTURO-25/)).toBeTruthy();
+    expect(screen.getByText(/LPS-HOY-25/)).toBeTruthy();
+  });
+});
+
+// Orden de carga (decisión de Pablo, 9/11): el último cargado primero,
+// incluido el caso de un lote recién guardado cuyo `fecha` (serverTimestamp)
+// todavía es null en el snapshot local -- ver ordenarLotesPorCarga,
+// helpers/mibgLote.js, y el test "más abajo" ahí mismo (función pura). Acá
+// se confirma que el componente de verdad renderiza en ese orden.
+describe("TabLoteDosisUnica -- orden de carga (el más nuevo arriba)", () => {
+  test("tres lotes cargados en distinto orden se renderizan del más nuevo al más viejo", async () => {
+    const mibgLotesMod = await import("../../services/firestore/mibgLotes.js");
+    // A propósito en un orden que NO coincide con ningún criterio obvio
+    // (ni por fecha ni por id) -- si el componente no ordenara nada, el
+    // test fallaría igual que si ordenara al revés.
+    vi.spyOn(mibgLotesMod, "listenMibgLotes").mockImplementation((cb) => listenerCon(cb, [
+      { id: "L-vieja", sedeId: "central", isotopoId: "lutecio177", numeroLote: "LOTE-VIEJO", numeroVial: 1,
+        proveedor: "Tecnonuclear", actividadCalibrada: 150, volumen: 10, fechaHoraCalibracion: new Date("2026-11-01T10:00:00"),
+        fechaVencimiento: "2026-11-02", conformidad: true, usuarioNombre: "Técnica Test", fecha: new Date("2026-11-01T10:00:00") },
+      { id: "L-nueva", sedeId: "central", isotopoId: "lutecio177", numeroLote: "LOTE-NUEVO", numeroVial: 2,
+        proveedor: "Tecnonuclear", actividadCalibrada: 150, volumen: 10, fechaHoraCalibracion: new Date("2026-11-09T10:00:00"),
+        fechaVencimiento: "2026-11-10", conformidad: true, usuarioNombre: "Técnica Test", fecha: new Date("2026-11-09T10:00:00") },
+      { id: "L-media", sedeId: "central", isotopoId: "lutecio177", numeroLote: "LOTE-MEDIO", numeroVial: 3,
+        proveedor: "Tecnonuclear", actividadCalibrada: 150, volumen: 10, fechaHoraCalibracion: new Date("2026-11-05T10:00:00"),
+        fechaVencimiento: "2026-11-06", conformidad: true, usuarioNombre: "Técnica Test", fecha: new Date("2026-11-05T10:00:00") },
+    ]));
+
+    render(<TabLoteDosisUnica catalogo={catalogo} usuario={usuario} esAdmin={false} onToast={vi.fn()} isotopoId="lutecio177" titulo="Lutecio-177" descripcion="" placeholderLote="LPS..." />);
+
+    const nombres = (await screen.findAllByText(/^LOTE-/)).map((el) => el.textContent);
+    expect(nombres).toEqual(["LOTE-NUEVO · Vial 2", "LOTE-MEDIO · Vial 3", "LOTE-VIEJO · Vial 1"]);
+  });
+
+  test("un lote recién guardado con fecha null (serverTimestamp todavía sin confirmar) aparece primero, no al final", async () => {
+    const mibgLotesMod = await import("../../services/firestore/mibgLotes.js");
+    vi.spyOn(mibgLotesMod, "listenMibgLotes").mockImplementation((cb) => listenerCon(cb, [
+      { id: "ya-existia", sedeId: "central", isotopoId: "lutecio177", numeroLote: "LOTE-EXISTENTE", numeroVial: 1,
+        proveedor: "Tecnonuclear", actividadCalibrada: 150, volumen: 10, fechaHoraCalibracion: new Date("2026-11-08T10:00:00"),
+        fechaVencimiento: "2026-11-09", conformidad: true, usuarioNombre: "Técnica Test", fecha: new Date("2026-11-08T10:00:00") },
+      // fecha: null -- exactamente lo que entrega el onSnapshot en vivo
+      // mientras el serverTimestamp() de addMibgLote todavía no fue
+      // confirmado por el servidor (ver addMibgLote, mibgLotes.js).
+      { id: "recien-guardado", sedeId: "central", isotopoId: "lutecio177", numeroLote: "LOTE-RECIEN", numeroVial: 2,
+        proveedor: "Tecnonuclear", actividadCalibrada: 150, volumen: 10, fechaHoraCalibracion: new Date("2026-11-09T10:00:00"),
+        fechaVencimiento: "2026-11-10", conformidad: true, usuarioNombre: "Técnica Test", fecha: null },
+    ]));
+
+    render(<TabLoteDosisUnica catalogo={catalogo} usuario={usuario} esAdmin={false} onToast={vi.fn()} isotopoId="lutecio177" titulo="Lutecio-177" descripcion="" placeholderLote="LPS..." />);
+
+    const nombres = (await screen.findAllByText(/^LOTE-/)).map((el) => el.textContent);
+    expect(nombres).toEqual(["LOTE-RECIEN · Vial 2", "LOTE-EXISTENTE · Vial 1"]);
+  });
+});

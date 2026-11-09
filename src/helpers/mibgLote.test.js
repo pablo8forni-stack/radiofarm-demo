@@ -1,5 +1,5 @@
 import { describe, test, expect } from "vitest";
-import { estadoMibgLote, lotesDelMes, lotesSinFecha, avisoLotesSinFecha, normalizarNumeroLoteDosisUnica, loteVialYaExiste, numeroVialEsEnteroPositivo } from "./mibgLote.js";
+import { estadoMibgLote, lotesDelMes, lotesSinFecha, avisoLotesSinFecha, normalizarNumeroLoteDosisUnica, loteVialYaExiste, numeroVialEsEnteroPositivo, ordenarLotesPorCarga } from "./mibgLote.js";
 
 const ts = (iso) => ({ toDate: () => new Date(iso) });
 
@@ -100,6 +100,26 @@ describe("lotesDelMes", () => {
       { id: "L2", fecha: "2026-10-16T12:00:00" },
     ];
     expect(lotesDelMes(lotes, MES_OCTUBRE).map((l) => l.id)).toEqual(["L1", "L2"]);
+  });
+
+  // Caso real reportado por Pablo (9/11, staging): dos lotes cargados con
+  // fechaHoraCalibracion FUTURA (27/11, cargados el 9/11). Verificado leyendo
+  // el código (líneas 35-43 de este archivo): lotesDelMes SOLO mira `fecha`
+  // (serverTimestamp, cuándo se cargó) -- fechaHoraCalibracion no aparece en
+  // ningún lado de esta función. Libro 4 NO tiene el mismo problema que tuvo
+  // el límite de 150: una calibración futura no saca ni mete ningún lote de
+  // ningún mes, porque esta función nunca la mira.
+  test("fechaHoraCalibracion FUTURA no afecta en absoluto -- lotesDelMes sólo mira `fecha`", () => {
+    const lotes = [
+      { id: "L1", fecha: ts("2026-11-09T10:00:00"), fechaHoraCalibracion: ts("2026-11-27T00:00:00") },
+    ];
+    // Cargado el 9/11 (fecha) -- entra a noviembre, sin importar que la
+    // calibración (27/11) todavía no haya pasado.
+    expect(lotesDelMes(lotes, { desde: "2026-11-01", hasta: "2026-11-30" }).map((l) => l.id)).toEqual(["L1"]);
+    // Y NO entra a octubre, aunque alguien mirara (equivocadamente) la
+    // calibración en vez de `fecha` -- confirma que el mes se decide
+    // exclusivamente por `fecha`.
+    expect(lotesDelMes(lotes, { desde: "2026-10-01", hasta: "2026-10-31" })).toEqual([]);
   });
 });
 
@@ -271,5 +291,71 @@ describe("loteVialYaExiste", () => {
   test("sin numeroVial tipeado todavía (null) -- false, no hay nada que comparar", () => {
     const lotes = [{ id: "L1", sedeId: "central", numeroLote: "LPS261101E-25", numeroVial: 5 }];
     expect(loteVialYaExiste(lotes, { numeroLote: "LPS261101E-25", numeroVial: null, sedeId: "central", anulaciones })).toBe(false);
+  });
+});
+
+// Caso real reportado por Pablo (9/11): dos lotes recién guardados aparecían
+// "más abajo" en vez de arriba -- el sort viejo comparaba new Date(null)
+// (fecha todavía pendiente de confirmar por el servidor), que da el epoch
+// 1/1/1970, no NaN -- el lote más nuevo se trataba como el más viejo.
+describe("ordenarLotesPorCarga", () => {
+  test("fechas reales distintas -- la más reciente primero", () => {
+    const lotes = [
+      { id: "L1", fecha: ts("2026-11-01T10:00:00") },
+      { id: "L2", fecha: ts("2026-11-05T10:00:00") },
+      { id: "L3", fecha: ts("2026-11-03T10:00:00") },
+    ];
+    expect(ordenarLotesPorCarga(lotes).map((l) => l.id)).toEqual(["L2", "L3", "L1"]);
+  });
+
+  test("fechas reales IGUALES -- desempate estable y determinístico por id", () => {
+    const mismaFecha = ts("2026-11-05T10:00:00");
+    const lotes = [
+      { id: "L9", fecha: mismaFecha },
+      { id: "L2", fecha: mismaFecha },
+      { id: "L5", fecha: mismaFecha },
+    ];
+    const orden1 = ordenarLotesPorCarga(lotes).map((l) => l.id);
+    const orden2 = ordenarLotesPorCarga([...lotes].reverse()).map((l) => l.id);
+    expect(orden1).toEqual(["L2", "L5", "L9"]);
+    expect(orden2).toEqual(orden1);
+  });
+
+  test("fecha null/pendiente (serverTimestamp todavía sin confirmar) -- va ARRIBA de todo, no abajo ni como NaN", () => {
+    const lotes = [
+      { id: "viejo", fecha: ts("2026-11-01T10:00:00") },
+      { id: "nuevo-pendiente", fecha: null },
+      { id: "otro-viejo", fecha: ts("2026-11-05T10:00:00") },
+    ];
+    expect(ordenarLotesPorCarga(lotes).map((l) => l.id)).toEqual(["nuevo-pendiente", "otro-viejo", "viejo"]);
+  });
+
+  test("lote sin campo fecha en absoluto (undefined, no null) -- mismo tratamiento, arriba", () => {
+    const lotes = [{ id: "viejo", fecha: ts("2026-11-01T10:00:00") }, { id: "sin-fecha" }];
+    expect(ordenarLotesPorCarga(lotes).map((l) => l.id)).toEqual(["sin-fecha", "viejo"]);
+  });
+
+  test("mezcla: varios con fecha real y uno pendiente -- el pendiente arriba, el resto por fecha descendente", () => {
+    const lotes = [
+      { id: "L1", fecha: ts("2026-11-01T10:00:00") },
+      { id: "pendiente", fecha: null },
+      { id: "L2", fecha: ts("2026-11-05T10:00:00") },
+      { id: "L3", fecha: ts("2026-11-03T10:00:00") },
+    ];
+    expect(ordenarLotesPorCarga(lotes).map((l) => l.id)).toEqual(["pendiente", "L2", "L3", "L1"]);
+  });
+
+  test("no muta el array recibido -- devuelve una copia", () => {
+    const original = [{ id: "L1", fecha: ts("2026-11-01T10:00:00") }, { id: "L2", fecha: ts("2026-11-05T10:00:00") }];
+    const copia = [...original];
+    ordenarLotesPorCarga(original);
+    expect(original).toEqual(copia);
+  });
+
+  test("control de mutación: invertir el sentido del sort rompe el test de 'más reciente primero'", () => {
+    const lotes = [{ id: "L1", fecha: ts("2026-11-01T10:00:00") }, { id: "L2", fecha: ts("2026-11-05T10:00:00") }];
+    const orden = ordenarLotesPorCarga(lotes).map((l) => l.id);
+    expect(orden).not.toEqual(["L1", "L2"]); // si alguien invierte el sort, este assert lo detecta
+    expect(orden).toEqual(["L2", "L1"]);
   });
 });

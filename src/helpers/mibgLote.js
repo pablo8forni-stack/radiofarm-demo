@@ -116,3 +116,42 @@ export function loteVialYaExiste(lotes, { numeroLote, numeroVial, sedeId, anulac
     !anulaciones.has(l.id)
   );
 }
+
+// ms desde epoch de l.fecha, o null si está ausente/pendiente/corrupto --
+// nunca NaN hacia afuera. l.fecha puede ser un Timestamp de Firestore
+// (.toDate()), un Date ya convertido (tests) o un string ISO; mientras la
+// escritura todavía no fue confirmada por el servidor, serverTimestamp()
+// (ver addMibgLote, mibgLotes.js) llega como null en el snapshot local --
+// eso NO es "sin fecha para siempre", es "más nuevo que cualquier fecha ya
+// confirmada", y ordenarLotesPorCarga de abajo lo trata así.
+function fechaMs(l) {
+  if (l.fecha == null) return null;
+  const d = l.fecha?.toDate ? l.fecha.toDate() : new Date(l.fecha);
+  const ms = d.getTime();
+  return Number.isNaN(ms) ? null : ms;
+}
+
+// Orden de carga de TabLoteDosisUnica -- el último cargado primero (decisión
+// de Pablo, 9/11, tras ver en staging que dos lotes recién guardados
+// aparecían "más abajo": el sort anterior comparaba new Date(null), que en
+// JS da el epoch 1/1/1970 -- el lote recién guardado, con fecha todavía
+// pendiente, se ordenaba como el MÁS VIEJO posible en vez del más nuevo).
+// Función PURA y separada del componente para poder testearla sin React:
+// - fecha pendiente/ausente (fechaMs===null) va ARRIBA de todo -- es más
+//   nueva que cualquier fecha ya confirmada, no "sin dato".
+// - entre dos fechas reales, la más reciente primero (descendente).
+// - empate (dos fechas pendientes entre sí, o dos timestamps iguales) se
+//   desempata por id, siempre en el mismo sentido -- determinístico, para
+//   que el orden no salte de un render a otro con los mismos lotes.
+// Devuelve una copia -- nunca muta `lotes` (el array de estado del
+// componente, o el que pase cualquier otro llamador).
+export function ordenarLotesPorCarga(lotes) {
+  return [...lotes].sort((a, b) => {
+    const msA = fechaMs(a);
+    const msB = fechaMs(b);
+    if (msA === null && msB !== null) return -1;
+    if (msB === null && msA !== null) return 1;
+    if (msA !== null && msB !== null && msA !== msB) return msB - msA;
+    return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+  });
+}

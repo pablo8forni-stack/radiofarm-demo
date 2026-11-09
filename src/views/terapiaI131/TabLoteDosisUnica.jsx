@@ -8,7 +8,7 @@ import { ModalAnularActa } from "../../components/actas/ModalAnularActa.jsx";
 import { fmtF, fmtTs } from "../../helpers/formato.js";
 import { listenActas, anularActaTransaction, listenAnulacionesActas } from "../../services/firestore/actas.js";
 import { addMibgLote, listenMibgLotes } from "../../services/firestore/mibgLotes.js";
-import { estadoMibgLote, normalizarNumeroLoteDosisUnica, loteVialYaExiste, numeroVialEsEnteroPositivo } from "../../helpers/mibgLote.js";
+import { estadoMibgLote, normalizarNumeroLoteDosisUnica, loteVialYaExiste, numeroVialEsEnteroPositivo, ordenarLotesPorCarga } from "../../helpers/mibgLote.js";
 import { actividadCalibradaHaciaAtras } from "../../helpers/decaimientoLu177.js";
 
 // concentracionCalibracion/actividadAdministracion/fechaHoraAdministracion y
@@ -91,9 +91,10 @@ export function TabLoteDosisUnica({ catalogo, usuario, esAdmin, onToast, isotopo
     return estadoMibgLote(lote.id, { anulaciones, usoPorLoteId });
   }
 
+  // Orden de carga -- el último cargado primero, ver ordenarLotesPorCarga
+  // (helpers/mibgLote.js) para el porqué del caso fecha pendiente/null.
   const lotesFiltrados = useMemo(
-    () => lotes.filter((l) => !sedeEfectiva || l.sedeId === sedeEfectiva)
-      .sort((a, b) => (b.fecha?.toDate?.() ?? new Date(b.fecha)) - (a.fecha?.toDate?.() ?? new Date(a.fecha))),
+    () => ordenarLotesPorCarga(lotes.filter((l) => !sedeEfectiva || l.sedeId === sedeEfectiva)),
     [lotes, sedeEfectiva]
   );
 
