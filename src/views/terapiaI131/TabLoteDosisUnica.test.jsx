@@ -21,15 +21,24 @@ vi.mock("../../services/firestore/actas.js", () => ({
   anularActaTransaction: vi.fn(async () => {}),
 }));
 
+// estadoListadoLoteDosisUnica (paso 6, 9/11): default permisivo -- todo lote
+// pasado resuelve "disponible" salvo que un test puntual lo sobrescriba con
+// vi.spyOn. Los tests de ESTE bloque (N° de vial, mayúsculas, payload, etc.)
+// nunca tienen lotes reales en listenMibgLotes (datos = [] por default), así
+// que esta función ni siquiera llega a ejecutarse para ellos.
 vi.mock("../../services/firestore/mibgLotes.js", () => ({
   listenMibgLotes: (cb) => listenerCon(cb, []),
   addMibgLote: vi.fn(async () => {}),
+  estadoListadoLoteDosisUnica: vi.fn(async (lotes) => new Map(lotes.map((l) => [l.id, { estado: "disponible", uso: null, error: null }]))),
 }));
 
 const catalogo = {
   sedes: { central: { nombre: "FUESMEN Central", short: "Central", activo: true, principal: true, eliminada: false, farmIds: [], puntosReorden: {} } },
 };
 const usuario = { nombre: "Técnica Test", email: "tecnica@test.local", sede: "central" };
+// Para los tests de esAdmin -- sin sedeAuditando, el componente muestra el
+// aviso "Elegí qué sede vas a auditar" y nunca llega a renderizar la lista.
+const usuarioAdmin = { nombre: "Admin Test", email: "admin@test.local", sede: "central", sedeAuditando: "central" };
 
 function labelInput(label) {
   return screen.getByText(label, { selector: "label" }).nextElementSibling;
@@ -431,5 +440,156 @@ describe("TabLoteDosisUnica -- aviso de calibración futura (no bloqueante)", ()
     await user.type(labelInput("Fecha/hora de calibración"), futura);
 
     expect(screen.getByText(AVISO_CALIBRACION_FUTURA)).toBeTruthy();
+  });
+});
+
+// ===========================================================================
+// Paso 6 (9/11): estado por lote del LISTADO (useEstadoListadoLotes), avisos
+// de atención, "Reintentar", "Anular" deshabilitado mientras no se verificó,
+// y paginación "Ver más". estadoListadoLoteDosisUnica se mockea por test con
+// vi.spyOn -- lo que ya corre contra el emulador real está en
+// scripts/testing/transacciones.test.mjs.
+// ===========================================================================
+
+function loteDeLista(overrides = {}) {
+  return {
+    id: "lote-1", sedeId: "central", sedeNombre: "FUESMEN Central", isotopoId: "lutecio177",
+    numeroLote: "LPS-PASO6-25", numeroVial: 1, proveedor: "Tecnonuclear", actividadCalibrada: 150, volumen: 10,
+    fechaHoraCalibracion: new Date("2026-11-01T10:00:00"), fechaVencimiento: "2026-11-02",
+    conformidad: true, usuarioNombre: "Técnica Test", fecha: new Date("2026-11-01T10:00:00"),
+    ...overrides,
+  };
+}
+
+async function mockearListaConEstado(lotes, estadoFijo) {
+  const mibgLotesMod = await import("../../services/firestore/mibgLotes.js");
+  vi.spyOn(mibgLotesMod, "listenMibgLotes").mockImplementation((cb) => listenerCon(cb, lotes));
+  vi.spyOn(mibgLotesMod, "estadoListadoLoteDosisUnica").mockImplementation(async (ls) =>
+    new Map(ls.map((l) => [l.id, typeof estadoFijo === "function" ? estadoFijo(l) : estadoFijo]))
+  );
+  return mibgLotesMod;
+}
+
+describe("TabLoteDosisUnica -- paso 6: avisos de atención por estado", () => {
+  test("'Vencido sin uso' -- badge + recuadro ámbar de atención", async () => {
+    await mockearListaConEstado([loteDeLista()], { estado: "vencido-sin-uso", uso: null, error: null });
+    render(<TabLoteDosisUnica catalogo={catalogo} usuario={usuario} esAdmin={false} onToast={vi.fn()} isotopoId="lutecio177" titulo="Lutecio-177" descripcion="" placeholderLote="LPS..." />);
+
+    expect(await screen.findByText("Vencido sin uso")).toBeTruthy();
+    expect(screen.getByText(/venció sin ninguna administración registrada/i)).toBeTruthy();
+  });
+
+  test("'Sin vencimiento' (sin uso) -- mismo recuadro ámbar, texto específico (coherente con el bloqueo del picker del paso 5)", async () => {
+    await mockearListaConEstado([loteDeLista({ fechaVencimiento: undefined })], { estado: "sin-vencimiento", uso: null, error: null });
+    render(<TabLoteDosisUnica catalogo={catalogo} usuario={usuario} esAdmin={false} onToast={vi.fn()} isotopoId="lutecio177" titulo="Lutecio-177" descripcion="" placeholderLote="LPS..." />);
+
+    expect(await screen.findByText("Sin vencimiento")).toBeTruthy();
+    expect(screen.getByText("No se puede administrar: falta la fecha de vencimiento del lote.")).toBeTruthy();
+  });
+
+  test("'Usado' -- sin recuadro de atención, muestra 'Usado en: Ficha...' con el uso de la lectura puntual", async () => {
+    const uso = { id: "lote-1_1", pacienteFicha: "123", pacienteNombre: "Paciente Test", fecha: new Date("2026-11-01T11:00:00") };
+    await mockearListaConEstado([loteDeLista()], { estado: "usado", uso, error: null });
+    render(<TabLoteDosisUnica catalogo={catalogo} usuario={usuario} esAdmin={false} onToast={vi.fn()} isotopoId="lutecio177" titulo="Lutecio-177" descripcion="" placeholderLote="LPS..." />);
+
+    expect(await screen.findByText("Usado")).toBeTruthy();
+    expect(screen.getByText(/Usado en: Ficha 123 · Paciente Test/)).toBeTruthy();
+    expect(screen.queryByText(/venció sin ninguna administración/i)).toBeNull();
+  });
+});
+
+describe("TabLoteDosisUnica -- paso 6: 'Verificando…' y 'No se pudo verificar' + Reintentar", () => {
+  test("mientras la lectura puntual está en vuelo, muestra 'Verificando…'", async () => {
+    const mibgLotesMod = await import("../../services/firestore/mibgLotes.js");
+    vi.spyOn(mibgLotesMod, "listenMibgLotes").mockImplementation((cb) => listenerCon(cb, [loteDeLista()]));
+    vi.spyOn(mibgLotesMod, "estadoListadoLoteDosisUnica").mockImplementation(() => new Promise(() => {})); // nunca resuelve
+
+    render(<TabLoteDosisUnica catalogo={catalogo} usuario={usuario} esAdmin={false} onToast={vi.fn()} isotopoId="lutecio177" titulo="Lutecio-177" descripcion="" placeholderLote="LPS..." />);
+
+    expect(await screen.findByText("Verificando…")).toBeTruthy();
+  });
+
+  test("si la lectura puntual falla -- 'No se pudo verificar' + botón Reintentar, que vuelve a pedirla", async () => {
+    const user = userEvent.setup();
+    const mibgLotesMod = await import("../../services/firestore/mibgLotes.js");
+    vi.spyOn(mibgLotesMod, "listenMibgLotes").mockImplementation((cb) => listenerCon(cb, [loteDeLista()]));
+    const spy = vi.spyOn(mibgLotesMod, "estadoListadoLoteDosisUnica")
+      .mockResolvedValueOnce(new Map([["lote-1", { estado: "no-verificable", uso: null, error: new Error("permission-denied") }]]));
+
+    render(<TabLoteDosisUnica catalogo={catalogo} usuario={usuario} esAdmin={false} onToast={vi.fn()} isotopoId="lutecio177" titulo="Lutecio-177" descripcion="" placeholderLote="LPS..." />);
+
+    expect(await screen.findByText("No se pudo verificar")).toBeTruthy();
+    const botonReintentar = screen.getByRole("button", { name: "Reintentar" });
+
+    spy.mockResolvedValueOnce(new Map([["lote-1", { estado: "disponible", uso: null, error: null }]]));
+    await user.click(botonReintentar);
+
+    expect(await screen.findByText("Disponible")).toBeTruthy();
+    expect(spy).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("TabLoteDosisUnica -- paso 6: 'Anular' deshabilitado mientras no se verificó el estado", () => {
+  test("'Verificando…' -- el botón Anular está deshabilitado", async () => {
+    const mibgLotesMod = await import("../../services/firestore/mibgLotes.js");
+    vi.spyOn(mibgLotesMod, "listenMibgLotes").mockImplementation((cb) => listenerCon(cb, [loteDeLista()]));
+    vi.spyOn(mibgLotesMod, "estadoListadoLoteDosisUnica").mockImplementation(() => new Promise(() => {}));
+
+    render(<TabLoteDosisUnica catalogo={catalogo} usuario={usuarioAdmin} esAdmin onToast={vi.fn()} isotopoId="lutecio177" titulo="Lutecio-177" descripcion="" placeholderLote="LPS..." />);
+
+    const botonAnular = await screen.findByRole("button", { name: "Anular" });
+    expect(botonAnular.disabled).toBe(true);
+  });
+
+  test("'No se pudo verificar' -- el botón Anular sigue deshabilitado", async () => {
+    await mockearListaConEstado([loteDeLista()], { estado: "no-verificable", uso: null, error: new Error("x") });
+    render(<TabLoteDosisUnica catalogo={catalogo} usuario={usuarioAdmin} esAdmin onToast={vi.fn()} isotopoId="lutecio177" titulo="Lutecio-177" descripcion="" placeholderLote="LPS..." />);
+
+    const botonAnular = await screen.findByRole("button", { name: "Anular" });
+    expect(botonAnular.disabled).toBe(true);
+  });
+
+  test("'Disponible' (ya verificado) -- el botón Anular está habilitado", async () => {
+    await mockearListaConEstado([loteDeLista()], { estado: "disponible", uso: null, error: null });
+    render(<TabLoteDosisUnica catalogo={catalogo} usuario={usuarioAdmin} esAdmin onToast={vi.fn()} isotopoId="lutecio177" titulo="Lutecio-177" descripcion="" placeholderLote="LPS..." />);
+
+    const botonAnular = await screen.findByRole("button", { name: "Anular" });
+    expect(botonAnular.disabled).toBe(false);
+  });
+});
+
+describe("TabLoteDosisUnica -- paso 6: paginación (30 por página + 'Ver más')", () => {
+  function lotes(n) {
+    return Array.from({ length: n }, (_, i) => loteDeLista({
+      id: `lote-${i}`, numeroLote: `LPS-PAG-${String(i).padStart(3, "0")}`, numeroVial: i + 1,
+      fecha: new Date(2026, 10, 1, 0, i), // orden determinístico, el de índice más alto es "más nuevo"
+    }));
+  }
+
+  test("con 35 lotes, sólo se ven 30 -- aparece 'Ver 5 más'", async () => {
+    await mockearListaConEstado(lotes(35), { estado: "disponible", uso: null, error: null });
+    render(<TabLoteDosisUnica catalogo={catalogo} usuario={usuario} esAdmin={false} onToast={vi.fn()} isotopoId="lutecio177" titulo="Lutecio-177" descripcion="" placeholderLote="LPS..." />);
+
+    await screen.findByText(/LPS-PAG-034/); // el más nuevo, siempre visible
+    expect(screen.queryAllByText(/^LPS-PAG-/).length).toBe(30);
+    expect(screen.getByRole("button", { name: "Ver 5 más" })).toBeTruthy();
+  });
+
+  test("tocar 'Ver más' muestra los lotes restantes, sin re-pedir el estado de los primeros 30", async () => {
+    const user = userEvent.setup();
+    const mibgLotesMod = await mockearListaConEstado(lotes(35), { estado: "disponible", uso: null, error: null });
+    render(<TabLoteDosisUnica catalogo={catalogo} usuario={usuario} esAdmin={false} onToast={vi.fn()} isotopoId="lutecio177" titulo="Lutecio-177" descripcion="" placeholderLote="LPS..." />);
+    await screen.findByText(/LPS-PAG-034/);
+    expect(mibgLotesMod.estadoListadoLoteDosisUnica).toHaveBeenCalledTimes(1);
+    const idsPrimeraCorrida = mibgLotesMod.estadoListadoLoteDosisUnica.mock.calls[0][0].map((l) => l.id);
+    expect(idsPrimeraCorrida).toHaveLength(30);
+
+    await user.click(screen.getByRole("button", { name: "Ver 5 más" }));
+
+    await screen.findByText(/LPS-PAG-000/); // el más viejo, ahora visible
+    expect(screen.queryByRole("button", { name: /Ver .* más/ })).toBeNull(); // ya no hay más
+    expect(mibgLotesMod.estadoListadoLoteDosisUnica).toHaveBeenCalledTimes(2);
+    const idsSegundaCorrida = mibgLotesMod.estadoListadoLoteDosisUnica.mock.calls[1][0].map((l) => l.id);
+    expect(idsSegundaCorrida).toHaveLength(5); // SÓLO los 5 nuevos -- no se re-pidieron los 30 ya resueltos
   });
 });

@@ -10,7 +10,7 @@ import {
   prepararFixturesGlobales, buscarLotePorNumero, buscarMovimientos, cerrarConexiones,
 } from "./fixtures.mjs";
 import { egresoTransaction, ingresoBatch, transferenciaTransaction } from "../../src/services/firestore/stock.js";
-import { addMibgLote, administrarMibgTransaction, administrarLutecioTransaction, usoActivoDeLote, estadoPorLoteDosisUnica, lotesDisponiblesParaAdministrar, listenMibgLotes } from "../../src/services/firestore/mibgLotes.js";
+import { addMibgLote, administrarMibgTransaction, administrarLutecioTransaction, usoActivoDeLote, estadoPorLoteDosisUnica, lotesDisponiblesParaAdministrar, listenMibgLotes, estadoDeUnLoteListado, estadoListadoLoteDosisUnica } from "../../src/services/firestore/mibgLotes.js";
 import { addActaPaciente, addActaI131Barrido, anularActaTransaction, anulacionesPorSede } from "../../src/services/firestore/actas.js";
 import { lotesDelMes } from "../../src/helpers/mibgLote.js";
 import { setSedeAuditando } from "../../src/services/auth.js";
@@ -1122,4 +1122,251 @@ test("administrarLutecioTransaction: admin con sedeAuditando en OTRA sede -- res
   } finally {
     await setSedeAuditando(PERSONAS.admin.email, SEDE_A);
   }
+});
+
+// ===========================================================================
+// Paso 6 (9/11) -- estadoDeUnLoteListado / estadoListadoLoteDosisUnica, para
+// el LISTADO de TabLoteDosisUnica (no el picker de arriba, que sigue usando
+// estadoPorLoteDosisUnica sin tocar). TODOS corren contra el emulador real.
+//
+// onLectura (parámetro nuevo y opcional de usoActivoDeLote, mibgLotes.js):
+// cuenta lecturas REALES -- pedido explícito de Pablo ("contá con spy las
+// lecturas reales... no lo supongas"). Ningún llamador existente lo pasa, así
+// que no cambia nada del comportamiento ya probado arriba.
+// ===========================================================================
+
+test("estadoDeUnLoteListado: lote anulado -- 'anulado', CERO lecturas puntuales", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  const numeroLote = `PASO6-ANULADO-${Date.now()}`;
+  const loteRef = await addMibgLote({
+    sedeId: SEDE_A, sedeNombre: "FUESMEN Central", isotopoId: "lutecio177",
+    numeroLote, proveedor: "Tecnonuclear", actividadCalibrada: 150, volumen: 10,
+    fechaHoraCalibracion: new Date(), fechaVencimiento: "2020-01-01", conformidad: true,
+    usuarioNombre: PERSONAS.tecnicoA.nombre, usuarioEmail: PERSONAS.tecnicoA.email, observacion: "",
+  });
+  await loguearComo(PERSONAS.admin);
+  await setSedeAuditando(PERSONAS.admin.email, SEDE_A);
+  await anularActaTransaction({ id: loteRef.id, sedeId: SEDE_A }, "Lote mal cargado", PERSONAS.admin);
+
+  const anulaciones = await anulacionesComoMapa(SEDE_A);
+  let lecturas = 0;
+  const estado = await estadoDeUnLoteListado({ id: loteRef.id, fechaVencimiento: "2020-01-01" }, { anulaciones, prefijo: "lote_", hoyISO: hoy(), onLectura: () => lecturas++ });
+  assert.equal(estado.estado, "anulado");
+  assert.equal(lecturas, 0, "un lote anulado no debería disparar ninguna lectura puntual");
+});
+
+test("estadoDeUnLoteListado: usado SIN correcciones -- 'usado' con 1 sola lectura puntual", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  const numeroLote = `PASO6-USADO1-${Date.now()}`;
+  const loteRef = await addMibgLote({
+    sedeId: SEDE_A, sedeNombre: "FUESMEN Central", isotopoId: "lutecio177",
+    numeroLote, proveedor: "Tecnonuclear", actividadCalibrada: 150, volumen: 10,
+    fechaHoraCalibracion: new Date(), fechaVencimiento: "2027-06-01", conformidad: true,
+    usuarioNombre: PERSONAS.tecnicoA.nombre, usuarioEmail: PERSONAS.tecnicoA.email, observacion: "",
+  });
+  await administrarLutecioTransaction(loteRef.id, {
+    sedeId: SEDE_A, sedeNombre: "FUESMEN Central",
+    pacienteFicha: fichaDePrueba(), pacienteNombre: "Paciente Paso6 Usado1", pacienteDni: "60001",
+    peso: 70, talla: 170, mciAdministrados: 140, actividadCalibrada: 150,
+    isotopoId: "lu177", lote: numeroLote, medicoResponsable: "Dr. Test",
+    usuarioNombre: PERSONAS.tecnicoA.nombre, usuarioEmail: PERSONAS.tecnicoA.email, observacion: "",
+  });
+
+  const anulaciones = await anulacionesComoMapa(SEDE_A);
+  let lecturas = 0;
+  const estado = await estadoDeUnLoteListado({ id: loteRef.id, fechaVencimiento: "2027-06-01" }, { anulaciones, prefijo: "lote_", hoyISO: hoy(), onLectura: () => lecturas++ });
+  assert.equal(estado.estado, "usado");
+  assert.equal(lecturas, 1, "con el intento 1 vigente, tiene que resolver con una sola lectura");
+});
+
+test("estadoDeUnLoteListado: lote usado Y vencido -- gana 'usado', NUNCA 'vencido-sin-uso' (precedencia del paso 6)", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  const numeroLote = `PASO6-USADOVENC-${Date.now()}`;
+  const loteRef = await addMibgLote({
+    sedeId: SEDE_A, sedeNombre: "FUESMEN Central", isotopoId: "lutecio177",
+    numeroLote, proveedor: "Tecnonuclear", actividadCalibrada: 150, volumen: 10,
+    fechaHoraCalibracion: new Date(), fechaVencimiento: "2020-01-01", conformidad: true,
+    usuarioNombre: PERSONAS.tecnicoA.nombre, usuarioEmail: PERSONAS.tecnicoA.email, observacion: "",
+  });
+  await administrarLutecioTransaction(loteRef.id, {
+    sedeId: SEDE_A, sedeNombre: "FUESMEN Central",
+    pacienteFicha: fichaDePrueba(), pacienteNombre: "Paciente Paso6 UsadoVenc", pacienteDni: "60002",
+    peso: 70, talla: 170, mciAdministrados: 140, actividadCalibrada: 150,
+    isotopoId: "lu177", lote: numeroLote, medicoResponsable: "Dr. Test",
+    usuarioNombre: PERSONAS.tecnicoA.nombre, usuarioEmail: PERSONAS.tecnicoA.email, observacion: "",
+  });
+
+  const anulaciones = await anulacionesComoMapa(SEDE_A);
+  const estado = await estadoDeUnLoteListado({ id: loteRef.id, fechaVencimiento: "2020-01-01" }, { anulaciones, prefijo: "lote_", hoyISO: hoy() });
+  assert.equal(estado.estado, "usado");
+});
+
+test("estadoDeUnLoteListado: lote vencido SIN uso -- 'vencido-sin-uso' (atención), agota los 5 intentos (CAP_INTENTOS)", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  const numeroLote = `PASO6-VENCSINUSO-${Date.now()}`;
+  const loteRef = await addMibgLote({
+    sedeId: SEDE_A, sedeNombre: "FUESMEN Central", isotopoId: "lutecio177",
+    numeroLote, proveedor: "Tecnonuclear", actividadCalibrada: 150, volumen: 10,
+    fechaHoraCalibracion: new Date(), fechaVencimiento: "2020-01-01", conformidad: true,
+    usuarioNombre: PERSONAS.tecnicoA.nombre, usuarioEmail: PERSONAS.tecnicoA.email, observacion: "",
+  });
+
+  const anulaciones = await anulacionesComoMapa(SEDE_A);
+  let lecturas = 0;
+  const estado = await estadoDeUnLoteListado({ id: loteRef.id, fechaVencimiento: "2020-01-01" }, { anulaciones, prefijo: "lote_", hoyISO: hoy(), onLectura: () => lecturas++ });
+  assert.equal(estado.estado, "vencido-sin-uso");
+  assert.equal(lecturas, 5, "nunca usado -- agota los 5 intentos antes de poder descartar el uso");
+});
+
+test("estadoDeUnLoteListado: lote SIN fechaVencimiento y sin uso -- 'sin-vencimiento', también agota los 5 intentos", async () => {
+  const loteId = await crearLoteSinVencimientoDirecto(SEDE_A, `PASO6-SINVENC-${Date.now()}`);
+  const anulaciones = new Map();
+  let lecturas = 0;
+  const estado = await estadoDeUnLoteListado({ id: loteId, fechaVencimiento: undefined }, { anulaciones, prefijo: "lote_", hoyISO: hoy(), onLectura: () => lecturas++ });
+  assert.equal(estado.estado, "sin-vencimiento");
+  assert.equal(lecturas, 5);
+});
+
+test("estadoDeUnLoteListado: intento 1 anulado + intento 2 vigente -- 'usado' con exactamente 2 lecturas puntuales", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  const numeroLote = `PASO6-CORRECCION-${Date.now()}`;
+  const loteRef = await addMibgLote({
+    sedeId: SEDE_A, sedeNombre: "FUESMEN Central", isotopoId: "lutecio177",
+    numeroLote, proveedor: "Tecnonuclear", actividadCalibrada: 150, volumen: 10,
+    fechaHoraCalibracion: new Date(), fechaVencimiento: "2027-06-01", conformidad: true,
+    usuarioNombre: PERSONAS.tecnicoA.nombre, usuarioEmail: PERSONAS.tecnicoA.email, observacion: "",
+  });
+  await administrarLutecioTransaction(loteRef.id, {
+    sedeId: SEDE_A, sedeNombre: "FUESMEN Central",
+    pacienteFicha: fichaDePrueba(), pacienteNombre: "Paciente Paso6 Intento1", pacienteDni: "60003",
+    peso: 70, talla: 170, mciAdministrados: 140, actividadCalibrada: 150,
+    isotopoId: "lu177", lote: numeroLote, medicoResponsable: "Dr. Test",
+    usuarioNombre: PERSONAS.tecnicoA.nombre, usuarioEmail: PERSONAS.tecnicoA.email, observacion: "",
+  });
+  const uso1Id = `lote_${loteRef.id}_1`;
+  const uso1Snap = await getDoc(doc(db, "actas", uso1Id));
+  await loguearComo(PERSONAS.admin);
+  await setSedeAuditando(PERSONAS.admin.email, SEDE_A);
+  await anularActaTransaction({ id: uso1Id, ...uso1Snap.data() }, "Error de carga", PERSONAS.admin);
+
+  await loguearComo(PERSONAS.tecnicoA);
+  await administrarLutecioTransaction(loteRef.id, {
+    sedeId: SEDE_A, sedeNombre: "FUESMEN Central",
+    pacienteFicha: fichaDePrueba(), pacienteNombre: "Paciente Paso6 Intento2", pacienteDni: "60004",
+    peso: 70, talla: 170, mciAdministrados: 140, actividadCalibrada: 150,
+    isotopoId: "lu177", lote: numeroLote, medicoResponsable: "Dr. Test",
+    usuarioNombre: PERSONAS.tecnicoA.nombre, usuarioEmail: PERSONAS.tecnicoA.email, observacion: "",
+  });
+
+  const anulaciones = await anulacionesComoMapa(SEDE_A);
+  let lecturas = 0;
+  const estado = await estadoDeUnLoteListado({ id: loteRef.id, fechaVencimiento: "2027-06-01" }, { anulaciones, prefijo: "lote_", hoyISO: hoy(), onLectura: () => lecturas++ });
+  assert.equal(estado.estado, "usado");
+  assert.equal(estado.uso.pacienteNombre, "Paciente Paso6 Intento2");
+  assert.equal(lecturas, 2, "intento 1 anulado + intento 2 vigente -- 2 lecturas, ni más ni menos");
+});
+
+test("estadoDeUnLoteListado: lote usado + 160 actas 'paciente' MÁS NUEVAS -- sigue 'usado' (lectura puntual por id, nunca depende de un límite de 150)", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  const numeroLote = `PASO6-FUERA150-${Date.now()}`;
+  const loteRef = await addMibgLote({
+    sedeId: SEDE_A, sedeNombre: "FUESMEN Central", isotopoId: "lutecio177",
+    numeroLote, proveedor: "Tecnonuclear", actividadCalibrada: 150, volumen: 10,
+    fechaHoraCalibracion: new Date(), fechaVencimiento: "2027-06-01", conformidad: true,
+    usuarioNombre: PERSONAS.tecnicoA.nombre, usuarioEmail: PERSONAS.tecnicoA.email, observacion: "",
+  });
+  await administrarLutecioTransaction(loteRef.id, {
+    sedeId: SEDE_A, sedeNombre: "FUESMEN Central",
+    pacienteFicha: fichaDePrueba(), pacienteNombre: "Paciente Paso6 Fuera150", pacienteDni: "60005",
+    peso: 70, talla: 170, mciAdministrados: 140, actividadCalibrada: 150,
+    isotopoId: "lu177", lote: numeroLote, medicoResponsable: "Dr. Test",
+    usuarioNombre: PERSONAS.tecnicoA.nombre, usuarioEmail: PERSONAS.tecnicoA.email, observacion: "",
+  });
+
+  const base = Date.now();
+  for (let i = 0; i < 160; i++) {
+    await addActaPaciente({
+      sedeId: SEDE_A, sedeNombre: "FUESMEN Central",
+      pacienteFicha: `${base}${String(i).padStart(4, "0")}`.slice(-15), fichaIntentoNro: "1",
+      pacienteNombre: `Paciente Ruido Paso6 ${i}`, pacienteDni: `${92000000 + i}`,
+      isotopoId: "tc99m", sinRadiofarmaco: true, mciAdministrados: 10,
+      usuarioNombre: PERSONAS.tecnicoA.nombre, usuarioEmail: PERSONAS.tecnicoA.email, observacion: "",
+    });
+  }
+
+  const anulaciones = await anulacionesComoMapa(SEDE_A);
+  const estado = await estadoDeUnLoteListado({ id: loteRef.id, fechaVencimiento: "2027-06-01" }, { anulaciones, prefijo: "lote_", hoyISO: hoy() });
+  assert.equal(estado.estado, "usado", "una lectura puntual por id nunca puede quedar afuera de un límite de 150 -- a diferencia de listenActas(limit 150), que SÍ se usaba antes para 'Usado' en TabLoteDosisUnica");
+});
+
+test("estadoDeUnLoteListado: admin con sedeAuditando en OTRA sede -- 'no-verificable' con el error real (lo que habilita Reintentar)", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  const numeroLote = `PASO6-NOVERIF-${Date.now()}`;
+  const loteRef = await addMibgLote({
+    sedeId: SEDE_A, sedeNombre: "FUESMEN Central", isotopoId: "lutecio177",
+    numeroLote, proveedor: "Tecnonuclear", actividadCalibrada: 150, volumen: 10,
+    fechaHoraCalibracion: new Date(), fechaVencimiento: "2027-06-01", conformidad: true,
+    usuarioNombre: PERSONAS.tecnicoA.nombre, usuarioEmail: PERSONAS.tecnicoA.email, observacion: "",
+  });
+  await administrarLutecioTransaction(loteRef.id, {
+    sedeId: SEDE_A, sedeNombre: "FUESMEN Central",
+    pacienteFicha: fichaDePrueba(), pacienteNombre: "Paciente Paso6 NoVerif", pacienteDni: "60006",
+    peso: 70, talla: 170, mciAdministrados: 140, actividadCalibrada: 150,
+    isotopoId: "lu177", lote: numeroLote, medicoResponsable: "Dr. Test",
+    usuarioNombre: PERSONAS.tecnicoA.nombre, usuarioEmail: PERSONAS.tecnicoA.email, observacion: "",
+  });
+
+  await loguearComo(PERSONAS.admin);
+  await setSedeAuditando(PERSONAS.admin.email, SEDE_B); // DESALINEADO a propósito
+  try {
+    const estado = await estadoDeUnLoteListado({ id: loteRef.id, fechaVencimiento: "2027-06-01" }, { anulaciones: new Map(), prefijo: "lote_", hoyISO: hoy() });
+    assert.equal(estado.estado, "no-verificable");
+    assert.ok(estado.error, "tiene que guardar el error real -- es lo que permite reintentar con la misma lectura después");
+  } finally {
+    await setSedeAuditando(PERSONAS.admin.email, SEDE_A);
+  }
+});
+
+test("estadoListadoLoteDosisUnica: batch mixto (anulado/usado/vencido-sin-uso) -- total de lecturas = la suma exacta esperada por cada uno", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  const nAnulado = `PASO6-BATCH-ANUL-${Date.now()}`;
+  const loteAnulado = await addMibgLote({
+    sedeId: SEDE_A, sedeNombre: "FUESMEN Central", isotopoId: "lutecio177", numeroLote: nAnulado,
+    proveedor: "Tecnonuclear", actividadCalibrada: 150, volumen: 10, fechaHoraCalibracion: new Date(),
+    fechaVencimiento: "2020-01-01", conformidad: true, usuarioNombre: PERSONAS.tecnicoA.nombre, usuarioEmail: PERSONAS.tecnicoA.email, observacion: "",
+  });
+  const nUsado = `PASO6-BATCH-USADO-${Date.now()}`;
+  const loteUsado = await addMibgLote({
+    sedeId: SEDE_A, sedeNombre: "FUESMEN Central", isotopoId: "lutecio177", numeroLote: nUsado,
+    proveedor: "Tecnonuclear", actividadCalibrada: 150, volumen: 10, fechaHoraCalibracion: new Date(),
+    fechaVencimiento: "2027-06-01", conformidad: true, usuarioNombre: PERSONAS.tecnicoA.nombre, usuarioEmail: PERSONAS.tecnicoA.email, observacion: "",
+  });
+  const nVenc = `PASO6-BATCH-VENC-${Date.now()}`;
+  const loteVencSinUso = await addMibgLote({
+    sedeId: SEDE_A, sedeNombre: "FUESMEN Central", isotopoId: "lutecio177", numeroLote: nVenc,
+    proveedor: "Tecnonuclear", actividadCalibrada: 150, volumen: 10, fechaHoraCalibracion: new Date(),
+    fechaVencimiento: "2020-01-01", conformidad: true, usuarioNombre: PERSONAS.tecnicoA.nombre, usuarioEmail: PERSONAS.tecnicoA.email, observacion: "",
+  });
+  await administrarLutecioTransaction(loteUsado.id, {
+    sedeId: SEDE_A, sedeNombre: "FUESMEN Central", pacienteFicha: fichaDePrueba(), pacienteNombre: "Paciente Paso6 Batch", pacienteDni: "60007",
+    peso: 70, talla: 170, mciAdministrados: 140, actividadCalibrada: 150, isotopoId: "lu177", lote: nUsado, medicoResponsable: "Dr. Test",
+    usuarioNombre: PERSONAS.tecnicoA.nombre, usuarioEmail: PERSONAS.tecnicoA.email, observacion: "",
+  });
+
+  await loguearComo(PERSONAS.admin);
+  await setSedeAuditando(PERSONAS.admin.email, SEDE_A);
+  await anularActaTransaction({ id: loteAnulado.id, sedeId: SEDE_A }, "Lote mal cargado", PERSONAS.admin);
+
+  const anulaciones = await anulacionesComoMapa(SEDE_A);
+  let lecturas = 0;
+  const lotes = [
+    { id: loteAnulado.id, fechaVencimiento: "2020-01-01" },
+    { id: loteUsado.id, fechaVencimiento: "2027-06-01" },
+    { id: loteVencSinUso.id, fechaVencimiento: "2020-01-01" },
+  ];
+  const mapa = await estadoListadoLoteDosisUnica(lotes, { anulaciones, prefijo: "lote_", hoyISO: hoy(), onLectura: () => lecturas++ });
+  assert.equal(mapa.get(loteAnulado.id).estado, "anulado");
+  assert.equal(mapa.get(loteUsado.id).estado, "usado");
+  assert.equal(mapa.get(loteVencSinUso.id).estado, "vencido-sin-uso");
+  assert.equal(lecturas, 1 + 5, "anulado=0 + usado=1 (intento vigente) + vencido-sin-uso=5 (agota CAP_INTENTOS) = 6 lecturas en total para los 3 lotes del batch");
 });

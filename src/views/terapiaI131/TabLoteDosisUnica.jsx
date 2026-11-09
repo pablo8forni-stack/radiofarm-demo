@@ -8,8 +8,9 @@ import { ModalAnularActa } from "../../components/actas/ModalAnularActa.jsx";
 import { fmtF, fmtTs } from "../../helpers/formato.js";
 import { listenActas, anularActaTransaction, listenAnulacionesActas } from "../../services/firestore/actas.js";
 import { addMibgLote, listenMibgLotes } from "../../services/firestore/mibgLotes.js";
-import { estadoMibgLote, normalizarNumeroLoteDosisUnica, loteVialYaExiste, numeroVialEsEnteroPositivo, ordenarLotesPorCarga, calibracionEsFutura } from "../../helpers/mibgLote.js";
+import { normalizarNumeroLoteDosisUnica, loteVialYaExiste, numeroVialEsEnteroPositivo, ordenarLotesPorCarga, calibracionEsFutura } from "../../helpers/mibgLote.js";
 import { actividadCalibradaHaciaAtras } from "../../helpers/decaimientoLu177.js";
+import { useEstadoListadoLotes } from "../../hooks/useEstadoListadoLotes.js";
 
 // concentracionCalibracion/actividadAdministracion/fechaHoraAdministracion y
 // calibradaTocada son EFÍMEROS -- sólo existen acá para calcular
@@ -23,11 +24,24 @@ const VACIO = {
   concentracionCalibracion: "", actividadAdministracion: "", fechaHoraAdministracion: "", calibradaTocada: false,
 };
 
+// Paso 6 (9/11): estados del LISTADO -- vienen de useEstadoListadoLotes
+// (estadoDe() más abajo). estadoMibgLote (helpers/mibgLote.js) sigue
+// existiendo tal cual, sin tocar -- lo sigue usando la impresión de Libro 4
+// (ImprimibleLibro4Lutecio.jsx), fuera de alcance de este paso.
+// "vencido-sin-uso"/"sin-vencimiento" llevan además un recuadro ámbar de
+// atención en el render (ver más abajo, junto a cada fila); "no-verificable"
+// lleva un botón "Reintentar" al lado del badge.
 const ESTADO_LOTE = {
   disponible: { label: "Disponible", color: "green" },
   usado: { label: "Usado", color: "gray" },
   anulado: { label: "Anulado", color: "red" },
+  "vencido-sin-uso": { label: "Vencido sin uso", color: "orange" },
+  "sin-vencimiento": { label: "Sin vencimiento", color: "purple" },
+  verificando: { label: "Verificando…", color: "gray" },
+  "no-verificable": { label: "No se pudo verificar", color: "orange" },
 };
+
+const TAMANO_PAGINA = 30;
 
 // Qué tipo de acta "usa" un lote de dosis única, y en qué campo queda el
 // vínculo -- distinto según isótopo porque MIBG ya estaba en producción con
@@ -37,6 +51,9 @@ const ESTADO_LOTE = {
 // mibgLotes.js -- misma asimetría, mismo motivo.
 const TIPO_USO = { mibg: "i131_mibg", lutecio177: "paciente" };
 const CAMPO_LOTE_ID = { mibg: "mibgLoteId", lutecio177: "loteDosisUnicaId" };
+// Mismo prefijo que ya usa usoActivoDeLote/administrarLoteDosisUnicaTransaction
+// (mibgLotes.js) para los ids determinísticos de las actas de uso.
+const PREFIJO_USO = { mibg: "mibg_", lutecio177: "lote_" };
 
 // Lote de dosis única -- componente COMPARTIDO entre "Gestión I-131 > MIBG"
 // (isotopoId="mibg") y "Actas ARN > Libro 4 — Lutecio-177"
@@ -47,10 +64,16 @@ const CAMPO_LOTE_ID = { mibg: "mibgLoteId", lutecio177: "loteDosisUnicaId" };
 // -- I-131 y Lutecio-177 nunca deben mezclarse en la navegación aunque
 // compartan la colección mibg_lote por debajo (nombre histórico, ver nota en
 // mibgLotes.js). Abierta a CUALQUIER técnico (sin accesoTerapiaI131/
-// accesoAgendaI131). "Disponible" se deriva acá mismo (nunca se guarda un
-// contador): un lote deja de estarlo apenas existe un acta no anulada que lo
-// usa, o si el lote mismo se anula -- ambos vía listeners en vivo, nunca
-// queda "vencido" por refrescar la pantalla.
+// accesoAgendaI131). "Disponible"/"Usado"/etc. nunca se guardan como campo --
+// se resuelven por lote (useEstadoListadoLotes, paso 6, 9/11): anulado sale
+// gratis de un listener en vivo (listenAnulacionesActas); el resto sale de
+// una lectura puntual (usoActivoDeLote), re-verificada sólo cuando hace
+// falta -- primera carga, "Ver más", una anulación que afecta a ESE lote, o
+// un uso nuevo señalado por listenActas (ver ajuste A en useEstadoListadoLotes.js,
+// ese listener ya NO es la fuente del estado, sólo un aviso de "revisá este
+// lote de nuevo"). Por eso el estado puede quedar desactualizado un rato si
+// el cambio ocurre en otra sesión mientras esta pantalla no recalcula nada
+// de ese lote puntual -- ver el comentario largo del hook para el detalle.
 export function TabLoteDosisUnica({ catalogo, usuario, esAdmin, onToast, isotopoId, titulo, descripcion, placeholderLote, placeholderActividad = "150", onIrALibro2 }) {
   const [lotesTodos, setLotesTodos] = useState([]);
   const [usosRaw, setUsosRaw] = useState([]);
@@ -62,6 +85,12 @@ export function TabLoteDosisUnica({ catalogo, usuario, esAdmin, onToast, isotopo
   const [mostrarForm, setMostrarForm] = useState(false);
   const [form, setForm] = useState(VACIO);
   const [guardando, setGuardando] = useState(false);
+  // Paginación del listado (paso 6, 9/11): 30 lotes visibles + "Ver más".
+  // Se reinicia a 1 página al cambiar de sede/isótopo -- mismo scopeKey que
+  // usa useEstadoListadoLotes más abajo para reiniciar su cache.
+  const [paginas, setPaginas] = useState(1);
+  const scopeKey = `${sedeEfectiva}|${isotopoId}`;
+  useEffect(() => { setPaginas(1); }, [scopeKey]);
 
   useEffect(() => { if (sedeEfectiva) return listenMibgLotes(setLotesTodos, { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
   useEffect(() => { if (sedeEfectiva) return listenActas(TIPO_USO[isotopoId], setUsosRaw, { sedeId: sedeEfectiva }); }, [isotopoId, sedeEfectiva]);
@@ -74,22 +103,24 @@ export function TabLoteDosisUnica({ catalogo, usuario, esAdmin, onToast, isotopo
   // tienen isotopoId, y se interpretan como 'mibg' por ausencia.
   const lotes = useMemo(() => lotesTodos.filter((l) => (l.isotopoId || "mibg") === isotopoId), [lotesTodos, isotopoId]);
   // 'paciente' trae los 3 isótopos mezclados (tc99m/lu177/i131) -- para
-  // Lutecio-177 hay que filtrar además por isotopoId=='lu177' antes de armar
-  // el mapa de usos (para MIBG, TIPO_USO ya scopeó la consulta a i131_mibg
-  // exclusivamente, no hace falta filtrar de nuevo).
-  // !anulaciones.has(u.id): un uso anulado no cuenta como "usado" -- anular
-  // la administración es independiente de anular el lote (ver
-  // helpers/mibgLote.js), así que el lote vuelve a "disponible" apenas se
-  // anula la acta que lo usaba.
+  // Lutecio-177 hay que filtrar además por isotopoId=='lu177' (para MIBG,
+  // TIPO_USO ya scopeó la consulta a i131_mibg exclusivamente, no hace falta
+  // filtrar de nuevo). !anulaciones.has(u.id): un uso anulado no cuenta como
+  // señal -- anular la administración es independiente de anular el lote.
+  //
+  // Paso 6 (9/11, ajuste A de Pablo): este listener (listenActas, limit 150)
+  // YA NO es la fuente del estado "Usado" -- eso sale siempre de una lectura
+  // puntual (usoActivoDeLote, dentro de useEstadoListadoLotes). `usos` acá
+  // sólo sirve para derivar `idsConUsoRaw`, el AVISO de "revisá este lote de
+  // nuevo" que el hook usa para invalidar un lote puntual que tenía cacheado
+  // un estado sin uso. Mantenerlo en vivo es justamente lo que permite
+  // detectar una administración nueva sin tener que releer TODA la página
+  // visible por las dudas.
   const usos = useMemo(
     () => (isotopoId === "lutecio177" ? usosRaw.filter((u) => u.isotopoId === "lu177" && u.loteDosisUnicaId && !anulaciones.has(u.id)) : usosRaw.filter((u) => !anulaciones.has(u.id))),
     [usosRaw, isotopoId, anulaciones]
   );
-  const usoPorLoteId = useMemo(() => new Map(usos.map((u) => [u[CAMPO_LOTE_ID[isotopoId]], u])), [usos, isotopoId]);
-
-  function estadoDe(lote) {
-    return estadoMibgLote(lote.id, { anulaciones, usoPorLoteId });
-  }
+  const idsConUsoRaw = useMemo(() => new Set(usos.map((u) => u[CAMPO_LOTE_ID[isotopoId]])), [usos, isotopoId]);
 
   // Orden de carga -- el último cargado primero, ver ordenarLotesPorCarga
   // (helpers/mibgLote.js) para el porqué del caso fecha pendiente/null.
@@ -97,14 +128,32 @@ export function TabLoteDosisUnica({ catalogo, usuario, esAdmin, onToast, isotopo
     () => ordenarLotesPorCarga(lotes.filter((l) => !sedeEfectiva || l.sedeId === sedeEfectiva)),
     [lotes, sedeEfectiva]
   );
+  // Ventana visible de la paginación -- useEstadoListadoLotes sólo verifica
+  // estos, nunca el historial completo de la sede.
+  const lotesVisibles = useMemo(() => lotesFiltrados.slice(0, paginas * TAMANO_PAGINA), [lotesFiltrados, paginas]);
+  const hayMas = lotesVisibles.length < lotesFiltrados.length;
 
-  // Doble chequeo con usoPorLoteId (además del gate en el botón "Anular" más
-  // abajo): la regla server-side es la garantía real, esto es sólo para un
-  // mensaje amigable si el estado cambió mientras el modal estaba abierto
-  // (alguien administró el lote en el ínterin) -- usoPorLoteId es reactivo
-  // (listener en vivo), así que ya refleja ese cambio para cuando se confirma.
+  const { estadoPorLote, reintentar } = useEstadoListadoLotes(lotesVisibles, {
+    anulaciones, prefijo: PREFIJO_USO[isotopoId], idsConUsoSegunListener: idsConUsoRaw, scopeKey,
+  });
+
+  function estadoDe(lote) {
+    return estadoPorLote.get(lote.id)?.estado || "verificando";
+  }
+
+  // Doble chequeo con el `uso` resuelto por useEstadoListadoLotes (además
+  // del gate en el botón "Anular" más abajo): la regla server-side
+  // (loteTieneAdministracionActiva, firestore.rules) es la garantía real,
+  // esto es sólo para un mensaje amigable. A diferencia de la versión
+  // anterior (que leía `usoPorLoteId`, derivado del listener limitado a 150
+  // actas), este `uso` viene de una lectura puntual -- correcto más allá de
+  // las 150, pero NO se re-verifica solo si alguien administra el lote justo
+  // mientras este modal está abierto (ver riesgo documentado en
+  // useEstadoListadoLotes.js) -- el botón "Anular" ya está deshabilitado
+  // mientras el estado no esté resuelto, así que este caso es un margen muy
+  // acotado en el tiempo.
   async function confirmarAnulacion(lote, motivo) {
-    const uso = usoPorLoteId.get(lote.id);
+    const uso = estadoPorLote.get(lote.id)?.uso;
     if (uso) {
       onToast(`Este lote tiene una administración activa (Paciente: ${uso.pacienteNombre}, ${fmtTs(uso.fecha)}) -- anulá primero ese registro en Libro 2.`, "error", 8000);
       setMAnular(null);
@@ -120,7 +169,7 @@ export function TabLoteDosisUnica({ catalogo, usuario, esAdmin, onToast, isotopo
   }
 
   function pedirAnulacion(lote) {
-    const uso = usoPorLoteId.get(lote.id);
+    const uso = estadoPorLote.get(lote.id)?.uso;
     if (uso) { setLoteBloqueado({ lote, uso }); return; }
     setMAnular(lote);
   }
@@ -388,15 +437,30 @@ export function TabLoteDosisUnica({ catalogo, usuario, esAdmin, onToast, isotopo
           <Badge color="blue">{lotesFiltrados.length}</Badge>
         </div>
         <div className="divide-y divide-gray-50">
-          {lotesFiltrados.map((l) => {
-            const estado = ESTADO_LOTE[estadoDe(l)];
+          {lotesVisibles.map((l) => {
+            const estadoId = estadoDe(l);
+            const estado = ESTADO_LOTE[estadoId];
             const anulacion = anulaciones.get(l.id);
-            const uso = usoPorLoteId.get(l.id);
+            const uso = estadoPorLote.get(l.id)?.uso;
+            // Mientras no se sabe si hay una administración activa real
+            // (todavía verificando, o la lectura puntual falló), no se
+            // ofrece "Anular" -- el servidor lo rechazaría igual
+            // (loteTieneAdministracionActiva, firestore.rules) pero evita un
+            // rechazo confuso con un estado que el cliente ni siquiera pudo
+            // confirmar.
+            const anularDeshabilitado = estadoId === "verificando" || estadoId === "no-verificable";
             return (
               <div key={l.id} className={`p-4 flex flex-col gap-1.5 ${anulacion ? "opacity-50" : ""}`}>
                 <div className="flex items-center justify-between gap-2 flex-wrap">
                   <div className="text-sm font-semibold text-gray-800">{l.numeroLote}{l.numeroVial ? ` · Vial ${l.numeroVial}` : ""}</div>
-                  <Badge color={estado.color}>{estado.label}</Badge>
+                  <div className="flex items-center gap-2">
+                    <Badge color={estado.color}>{estado.label}</Badge>
+                    {estadoId === "no-verificable" && (
+                      <button onClick={() => reintentar(l.id)} className="text-xs text-blue-600 hover:text-blue-800 font-semibold">
+                        Reintentar
+                      </button>
+                    )}
+                  </div>
                 </div>
                 <div className="text-xs text-gray-500">
                   {fmtTs(l.fecha)} · {l.sedeNombre} · Proveedor: {l.proveedor}
@@ -405,13 +469,30 @@ export function TabLoteDosisUnica({ catalogo, usuario, esAdmin, onToast, isotopo
                   {l.actividadCalibrada} mCi en {l.volumen} mL · Calibrado {fmtTs(l.fechaHoraCalibracion)} · Vence {fmtF(l.fechaVencimiento)}
                 </div>
                 {l.conformidad === false && <div className="text-xs text-red-600 font-semibold">No conforme</div>}
+                {/* Vencido sin uso: anomalía real (los lotes de MIBG/Lutecio-177
+                    no se vencen en la práctica, se usan siempre -- decisión de
+                    Pablo, 9/11). Sin vencimiento: no se puede verificar si
+                    expiró -- mismo criterio de bloqueo que el picker del paso
+                    5 (ahí ese lote nunca se ofrece como disponible). Mismo
+                    estilo de aviso ya usado 4 veces en este archivo. */}
+                {estadoId === "vencido-sin-uso" && (
+                  <div className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-1.5">
+                    Este lote venció sin ninguna administración registrada -- revisar.
+                  </div>
+                )}
+                {estadoId === "sin-vencimiento" && (
+                  <div className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-1.5">
+                    No se puede administrar: falta la fecha de vencimiento del lote.
+                  </div>
+                )}
                 {uso && <div className="text-xs text-gray-500">Usado en: Ficha {uso.pacienteFicha || "—"} · {uso.pacienteNombre} · {fmtTs(uso.fecha)}</div>}
                 {l.observacion && <div className="text-xs text-gray-400 italic">{l.observacion}</div>}
                 {anulacion && <div className="text-xs text-orange-500 font-semibold">ANULADO: {anulacion.motivo}</div>}
                 <div className="text-xs text-gray-400">{l.usuarioNombre}</div>
-                {esAdmin && estadoDe(l) !== "anulado" && (
+                {esAdmin && estadoId !== "anulado" && (
                   <div className="flex justify-end mt-0.5">
-                    <button onClick={() => pedirAnulacion(l)} className="text-xs text-orange-500 hover:text-orange-700 font-semibold px-2 py-1 rounded-lg hover:bg-orange-50 transition min-h-11 md:min-h-0">
+                    <button onClick={() => pedirAnulacion(l)} disabled={anularDeshabilitado}
+                      className="text-xs text-orange-500 hover:text-orange-700 font-semibold px-2 py-1 rounded-lg hover:bg-orange-50 transition min-h-11 md:min-h-0 disabled:opacity-40 disabled:hover:bg-transparent disabled:cursor-not-allowed">
                       Anular
                     </button>
                   </div>
@@ -423,6 +504,13 @@ export function TabLoteDosisUnica({ catalogo, usuario, esAdmin, onToast, isotopo
             <div className="text-center py-12 text-gray-400 text-sm">Sin lotes de {titulo} registrados todavía.</div>
           )}
         </div>
+        {hayMas && (
+          <div className="px-4 py-3 border-t border-gray-100 flex justify-center">
+            <Btn variant="outline" size="sm" onClick={() => setPaginas((p) => p + 1)} className="min-h-11 md:min-h-0">
+              Ver {Math.min(TAMANO_PAGINA, lotesFiltrados.length - lotesVisibles.length)} más
+            </Btn>
+          </div>
+        )}
       </div>
 
       {mAnular && (

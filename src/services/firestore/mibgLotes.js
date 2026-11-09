@@ -101,9 +101,16 @@ const CAP_FICHA_INTENTOS = 5;
 // abajo) -- INFERENCIA, no confirmada con datos reales: Lutecio-177 es un
 // namespace nuevo (`lote_`), nunca tuvo el esquema viejo sin sufijo, así que
 // no debería hacer falta para este caso.
-export async function usoActivoDeLote(loteId, { prefijo, anulaciones }) {
+// onLectura: callback OPCIONAL (paso 6, 9/11) -- se llama una vez por cada
+// getDoc real que esta función hace, sólo para que los tests contra el
+// emulador puedan contar lecturas reales en vez de suponerlas (pedido
+// explícito de Pablo). undefined por default -- ningún llamador existente
+// (estadoPorLoteDosisUnica, GenerarActasImpresion.jsx) lo pasa, así que su
+// comportamiento queda exactamente igual.
+export async function usoActivoDeLote(loteId, { prefijo, anulaciones, onLectura }) {
   for (let n = 1; n <= CAP_INTENTOS; n++) {
     const usoSnap = await getDoc(doc(actasCol, `${prefijo}${loteId}_${n}`));
+    onLectura?.();
     if (usoSnap.exists() && !anulaciones.has(usoSnap.id)) {
       return { id: usoSnap.id, ...usoSnap.data() };
     }
@@ -163,9 +170,8 @@ export function disponiblesDesdeEstadoPorLote(lotes, estadoPorLoteId) {
 }
 
 // Helper de conveniencia para quien sólo necesita la lista de disponibles
-// (TabPacientes.jsx) -- TabLoteDosisUnica.jsx, que necesita el estado de
-// CADA lote (no sólo los disponibles), usa estadoPorLoteDosisUnica directo.
-// Una sola corrida de lecturas puntuales por llamada -- nunca dos.
+// (TabPacientes.jsx, picker de administrar). Una sola corrida de lecturas
+// puntuales por llamada -- nunca dos.
 export async function lotesDisponiblesParaAdministrar(lotes, { anulaciones, prefijo, hoyISO }) {
   const estadoPorLoteId = await estadoPorLoteDosisUnica(lotes, { anulaciones, prefijo, hoyISO });
   return {
@@ -173,6 +179,55 @@ export async function lotesDisponiblesParaAdministrar(lotes, { anulaciones, pref
     sinVencimiento: lotes.filter((l) => estadoPorLoteId.get(l.id)?.estado === "sin-vencimiento"),
     noVerificables: lotes.filter((l) => estadoPorLoteId.get(l.id)?.estado === "no-verificable"),
   };
+}
+
+// ===========================================================================
+// Paso 6 (9/11) -- estado por lote para el LISTADO de TabLoteDosisUnica
+// (no el picker de arriba). Hermana de estadoPorLoteDosisUnica, NO la
+// reemplaza ni la modifica -- el picker del paso 5 (y sus tests) siguen
+// usando esa función tal cual, sin tocar.
+//
+// Por qué una función aparte: estadoPorLoteDosisUnica corta ANTES de leer el
+// uso si el lote está vencido/sin-vencimiento (correcto para el picker: un
+// lote vencido nunca se ofrece, haya sido usado o no). Acá la prioridad es
+// la inversa -- un lote usado tiene que figurar "Usado" aunque esté vencido
+// (decisión de Pablo, 9/11: "los lotes no se vencen en la práctica, se usan
+// siempre"; un vencido SIN uso es la anomalía real a destacar). Por eso acá
+// se verifica el uso de CUALQUIER lote no anulado, nunca se corta antes por
+// vencimiento.
+// ===========================================================================
+
+// Resuelve el estado de UN lote para el listado. Reutiliza usoActivoDeLote
+// tal cual (misma función que ya usan el picker del paso 5 y la impresión de
+// Libro 4) -- ninguna lectura nueva distinta de las que ya existían.
+// hoyISO llega como parámetro (nunca `hoy()` adentro), mismo criterio que ya
+// usa estadoPorLoteDosisUnica -- quien la llama (useEstadoListadoLotes) es
+// quien decide "ahora", esta función queda pura en el tiempo.
+export async function estadoDeUnLoteListado(lote, { anulaciones, prefijo, hoyISO, onLectura }) {
+  if (anulaciones.has(lote.id)) return { estado: "anulado", uso: null, error: null };
+  let uso;
+  try {
+    uso = await usoActivoDeLote(lote.id, { prefijo, anulaciones, onLectura });
+  } catch (error) {
+    return { estado: "no-verificable", uso: null, error };
+  }
+  if (uso) return { estado: "usado", uso, error: null };
+  if (!lote.fechaVencimiento) return { estado: "sin-vencimiento", uso: null, error: null };
+  return { estado: lote.fechaVencimiento <= hoyISO ? "vencido-sin-uso" : "disponible", uso: null, error: null };
+}
+
+// Versión en lote de la de arriba, para la primera carga / "Ver más" (varios
+// lotes nuevos a la vez). Promise.allSettled -- un error de programación en
+// un lote puntual (no absorbido ya por el try/catch de arriba) no tira abajo
+// la corrida completa de los demás, mismo criterio que estadoPorLoteDosisUnica.
+export async function estadoListadoLoteDosisUnica(lotes, { anulaciones, prefijo, hoyISO, onLectura }) {
+  const resultados = await Promise.allSettled(lotes.map((l) => estadoDeUnLoteListado(l, { anulaciones, prefijo, hoyISO, onLectura })));
+  const mapa = new Map();
+  lotes.forEach((l, i) => {
+    const r = resultados[i];
+    mapa.set(l.id, r.status === "fulfilled" ? r.value : { estado: "no-verificable", uso: null, error: r.reason });
+  });
+  return mapa;
 }
 
 function administrarLoteDosisUnicaTransaction(loteId, dataActa, { prefijo, tipo, campoLoteId }) {
