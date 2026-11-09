@@ -856,6 +856,153 @@ test("estadoPorLoteDosisUnica: admin con sedeAuditando en OTRA sede -- el lote q
   await setSedeAuditando(PERSONAS.admin.email, SEDE_A);
 });
 
+// ===========================================================================
+// Verificación explícita como TÉCNICO de su propia sede (no admin) -- pedido
+// de Pablo (9/11): todos los tests de arriba usan tecnicoA para ESCRIBIR
+// (addMibgLote/administrarLutecioTransaction), pero varios dejan la sesión
+// logueada como admin (tras anularActaTransaction, que exige isAdmin() --
+// ver actaValida() en firestore.rules) en el momento de LEER
+// estadoPorLoteDosisUnica/lotesDisponiblesParaAdministrar. Estos 5 tests
+// relogean explícitamente como tecnicoA (o tecnicoB) ANTES de cada lectura,
+// para confirmar contra el emulador real que el técnico mismo -- no sólo el
+// admin -- puede resolver los 5 estados sin permission-denied.
+// ===========================================================================
+
+test("TÉCNICO (no admin): lote disponible (nunca usado) -- 'disponible', leído logueado como técnico", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  const numeroLote = `TECNICO-DISPONIBLE-${Date.now()}`;
+  const loteRef = await addMibgLote({
+    sedeId: SEDE_A, sedeNombre: "FUESMEN Central", isotopoId: "lutecio177",
+    numeroLote, proveedor: "Tecnonuclear", actividadCalibrada: 150, volumen: 10,
+    fechaHoraCalibracion: new Date(), fechaVencimiento: "2027-06-01", conformidad: true,
+    usuarioNombre: PERSONAS.tecnicoA.nombre, usuarioEmail: PERSONAS.tecnicoA.email, observacion: "",
+  });
+
+  // Sigue logueado como tecnicoA -- la lectura ocurre con esa sesión.
+  const anulaciones = await anulacionesComoMapa(SEDE_A);
+  const estado = await estadoPorLoteDosisUnica([{ id: loteRef.id, fechaVencimiento: "2027-06-01" }], { anulaciones, prefijo: "lote_", hoyISO: hoy() });
+  assert.equal(estado.get(loteRef.id).estado, "disponible");
+});
+
+test("TÉCNICO (no admin): lote usado -- 'usado' con el uso real, leído logueado como técnico", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  const numeroLote = `TECNICO-USADO-${Date.now()}`;
+  const loteRef = await addMibgLote({
+    sedeId: SEDE_A, sedeNombre: "FUESMEN Central", isotopoId: "lutecio177",
+    numeroLote, proveedor: "Tecnonuclear", actividadCalibrada: 150, volumen: 10,
+    fechaHoraCalibracion: new Date(), fechaVencimiento: "2027-06-01", conformidad: true,
+    usuarioNombre: PERSONAS.tecnicoA.nombre, usuarioEmail: PERSONAS.tecnicoA.email, observacion: "",
+  });
+  await administrarLutecioTransaction(loteRef.id, {
+    sedeId: SEDE_A, sedeNombre: "FUESMEN Central",
+    pacienteFicha: fichaDePrueba(), pacienteNombre: "Paciente Técnico Usado", pacienteDni: "11",
+    peso: 70, talla: 170, mciAdministrados: 140, actividadCalibrada: 150,
+    isotopoId: "lu177", lote: numeroLote, medicoResponsable: "Dr. Test",
+    usuarioNombre: PERSONAS.tecnicoA.nombre, usuarioEmail: PERSONAS.tecnicoA.email, observacion: "",
+  });
+
+  // Sigue logueado como tecnicoA -- la lectura ocurre con esa sesión.
+  const anulaciones = await anulacionesComoMapa(SEDE_A);
+  const estado = await estadoPorLoteDosisUnica([{ id: loteRef.id, fechaVencimiento: "2027-06-01" }], { anulaciones, prefijo: "lote_", hoyISO: hoy() });
+  assert.equal(estado.get(loteRef.id).estado, "usado");
+  assert.equal(estado.get(loteRef.id).uso?.pacienteNombre, "Paciente Técnico Usado");
+});
+
+test("TÉCNICO (no admin): uso ANULADO (por admin) -- el técnico lo vuelve a ver 'disponible'", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  const numeroLote = `TECNICO-USOANUL-${Date.now()}`;
+  const loteRef = await addMibgLote({
+    sedeId: SEDE_A, sedeNombre: "FUESMEN Central", isotopoId: "lutecio177",
+    numeroLote, proveedor: "Tecnonuclear", actividadCalibrada: 150, volumen: 10,
+    fechaHoraCalibracion: new Date(), fechaVencimiento: "2027-06-01", conformidad: true,
+    usuarioNombre: PERSONAS.tecnicoA.nombre, usuarioEmail: PERSONAS.tecnicoA.email, observacion: "",
+  });
+  await administrarLutecioTransaction(loteRef.id, {
+    sedeId: SEDE_A, sedeNombre: "FUESMEN Central",
+    pacienteFicha: fichaDePrueba(), pacienteNombre: "Paciente Técnico Uso Anulado", pacienteDni: "12",
+    peso: 70, talla: 170, mciAdministrados: 140, actividadCalibrada: 150,
+    isotopoId: "lu177", lote: numeroLote, medicoResponsable: "Dr. Test",
+    usuarioNombre: PERSONAS.tecnicoA.nombre, usuarioEmail: PERSONAS.tecnicoA.email, observacion: "",
+  });
+  const usoId = `lote_${loteRef.id}_1`;
+  const usoSnap = await getDoc(doc(db, "actas", usoId));
+
+  // Anular EXIGE isAdmin() (actaValida(), firestore.rules) -- el técnico no
+  // puede hacerlo, por eso acá cambia a admin sólo para este paso.
+  await loguearComo(PERSONAS.admin);
+  await setSedeAuditando(PERSONAS.admin.email, SEDE_A);
+  await anularActaTransaction({ id: usoId, ...usoSnap.data() }, "Error de carga", PERSONAS.admin);
+
+  // Vuelve a loguearse como TÉCNICO antes de leer -- a diferencia del test
+  // equivalente de arriba (uso ANULADO, sin relogear), acá la lectura real
+  // ocurre con la sesión del técnico, no la del admin.
+  await loguearComo(PERSONAS.tecnicoA);
+  const anulaciones = await anulacionesComoMapa(SEDE_A);
+  const { disponibles } = await lotesDisponiblesParaAdministrar([{ id: loteRef.id, fechaVencimiento: "2027-06-01" }], { anulaciones, prefijo: "lote_", hoyISO: hoy() });
+  assert.deepEqual(disponibles.map((l) => l.id), [loteRef.id], "con el uso anulado, el técnico tiene que volver a ver el lote disponible");
+});
+
+test("TÉCNICO (no admin): lote ANULADO (por admin) -- el técnico lo ve 'anulado', nunca disponible", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  const numeroLote = `TECNICO-LOTEANUL-${Date.now()}`;
+  const loteRef = await addMibgLote({
+    sedeId: SEDE_A, sedeNombre: "FUESMEN Central", isotopoId: "lutecio177",
+    numeroLote, proveedor: "Tecnonuclear", actividadCalibrada: 150, volumen: 10,
+    fechaHoraCalibracion: new Date(), fechaVencimiento: "2027-06-01", conformidad: true,
+    usuarioNombre: PERSONAS.tecnicoA.nombre, usuarioEmail: PERSONAS.tecnicoA.email, observacion: "",
+  });
+
+  await loguearComo(PERSONAS.admin);
+  await setSedeAuditando(PERSONAS.admin.email, SEDE_A);
+  await anularActaTransaction({ id: loteRef.id, sedeId: SEDE_A }, "Lote mal cargado", PERSONAS.admin);
+
+  // Vuelve a loguearse como TÉCNICO antes de leer.
+  await loguearComo(PERSONAS.tecnicoA);
+  const anulaciones = await anulacionesComoMapa(SEDE_A);
+  const estado = await estadoPorLoteDosisUnica([{ id: loteRef.id, fechaVencimiento: "2027-06-01" }], { anulaciones, prefijo: "lote_", hoyISO: hoy() });
+  assert.equal(estado.get(loteRef.id).estado, "anulado");
+});
+
+test("TÉCNICO (no admin): lote de OTRA sede -- el query de sede lo excluye, Y la regla rechaza un intento de lectura directa por id", async () => {
+  await loguearComo(PERSONAS.tecnicoB); // SEDE_B
+  const numeroLoteB = `TECNICO-SEDEB-${Date.now()}`;
+  const loteBRef = await addMibgLote({
+    sedeId: SEDE_B, sedeNombre: "C. Gamma Hospital Italiano", isotopoId: "lutecio177",
+    numeroLote: numeroLoteB, proveedor: "Tecnonuclear", actividadCalibrada: 150, volumen: 10,
+    fechaHoraCalibracion: new Date(), fechaVencimiento: "2027-06-01", conformidad: true,
+    usuarioNombre: PERSONAS.tecnicoB.nombre, usuarioEmail: PERSONAS.tecnicoB.email, observacion: "",
+  });
+
+  await loguearComo(PERSONAS.tecnicoA); // SEDE_A
+  const numeroLoteA = `TECNICO-SEDEA-${Date.now()}`;
+  const loteARef = await addMibgLote({
+    sedeId: SEDE_A, sedeNombre: "FUESMEN Central", isotopoId: "lutecio177",
+    numeroLote: numeroLoteA, proveedor: "Tecnonuclear", actividadCalibrada: 150, volumen: 10,
+    fechaHoraCalibracion: new Date(), fechaVencimiento: "2027-06-01", conformidad: true,
+    usuarioNombre: PERSONAS.tecnicoA.nombre, usuarioEmail: PERSONAS.tecnicoA.email, observacion: "",
+  });
+
+  // Mismo query que listenMibgLotes -- scopeado a SEDE_A: el lote de SEDE_B
+  // ni siquiera llega a estadoPorLoteDosisUnica.
+  const snapA = await getDocs(query(collection(db, "mibg_lote"), where("sedeId", "==", SEDE_A)));
+  const lotesSedeA = snapA.docs.map((d) => ({ id: d.id, ...d.data() })).filter((l) => l.numeroLote === numeroLoteA);
+  const anulaciones = await anulacionesComoMapa(SEDE_A);
+  const { disponibles } = await lotesDisponiblesParaAdministrar(lotesSedeA, { anulaciones, prefijo: "lote_", hoyISO: hoy() });
+  assert.deepEqual(disponibles.map((l) => l.id), [loteARef.id]);
+  assert.ok(!disponibles.some((l) => l.numeroLote === numeroLoteB), "el lote de SEDE_B nunca debería aparecer -- ni siquiera llegó a la función");
+
+  // Chequeo de la REGLA en sí, no sólo del query: un intento directo de leer
+  // por id el mibg_lote de SEDE_B, logueado como tecnicoA, tiene que
+  // rechazar con permission-denied (mibg_lote: 'tecnico' exige
+  // resource.data.sedeId == miRol().sede, ver firestore.rules).
+  try {
+    await getDoc(doc(db, "mibg_lote", loteBRef.id));
+    assert.fail("se esperaba permission-denied al leer directo un mibg_lote de otra sede");
+  } catch (e) {
+    assert.equal(e.code, "permission-denied", `código inesperado: ${e.code} (${e.message})`);
+  }
+});
+
 test("disponiblesDesdeEstadoPorLote / lotesDisponiblesParaAdministrar: orden por vencimiento, el que vence antes primero", async () => {
   await loguearComo(PERSONAS.tecnicoA);
   const lotes = [];
