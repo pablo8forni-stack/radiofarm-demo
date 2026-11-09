@@ -28,7 +28,7 @@ import {
   resolverFichaIntento, obtenerUltimaFicha, listenActasMarcacionHoy, fechaFichaSiguiente, actasMarcacionPorFecha,
 } from "../../services/firestore/actas.js";
 import { listenMibgLotes, administrarMibgTransaction, administrarLutecioTransaction } from "../../services/firestore/mibgLotes.js";
-import { estadoMibgLote } from "../../helpers/mibgLote.js";
+import { useLotesDisponibles } from "../../hooks/useLotesDisponibles.js";
 
 const TIMEOUT_BUSQUEDA_MS = 20000;
 const MSJ_TIMEOUT_BUSQUEDA = "La consulta tardó demasiado, puede haber un problema de conexión -- intentá cerrar las otras pestañas de RadioFarm que tengas abiertas y reintentá.";
@@ -115,6 +115,12 @@ const TIPOS_I131 = [
 // en la URL), duplicado acá a propósito: es instrumentación de usar y
 // tirar, no amerita un módulo compartido nuevo. Apagada por defecto.
 const DEBUG_QR = typeof window !== "undefined" && new URLSearchParams(window.location.search).get("debugQR") === "1";
+
+// Referencia ESTABLE (nunca una nueva en cada render) -- se le pasa al hook
+// de disponibilidad cuando el picker correspondiente (MIBG o Lutecio-177)
+// no está siendo mostrado, para que useLotesDisponibles vea un conjunto
+// vacío sin disparar ninguna lectura puntual. Ver mibgCandidatos/lutecioCandidatos.
+const SIN_CANDIDATOS = [];
 
 export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
   const [pacientesTodas, setPacientesTodas] = useState([]);
@@ -385,9 +391,18 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
   useEffect(() => { if (sedeEfectiva) return listenActas("i131_extraccion", contarCallback("i131_extraccion", setExtraccionesI131), { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
   useEffect(() => { if (sedeEfectiva) return listenActas("i131_vial", contarCallback("i131_vial", setVialesI131), { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
   // mibgLotes/mibgUsos no se mezclan en actasTodas (mibg_lote no es una
-  // acta) -- alimentan sólo el picker "Lote disponible" de abajo, filtrado
-  // en tiempo real: un lote usado por otra técnica desaparece para todos al
-  // instante, sin importar el día (ver lotesMibgDisponibles).
+  // acta) -- alimentan tanto el lookup de "lote vinculado" al ver un
+  // registro ya guardado (loteVinculadoDe más abajo) como el picker de
+  // "Lote disponible" para REGISTRAR. Scopeado por sedeEfectiva (sede
+  // AUDITADA para admin): para un técnico es siempre la misma que sedeId
+  // (su única sede); para un admin cuya sedeAuditando sea DISTINTA de
+  // sedeId (usuario.sede, donde en realidad registra -- ver sedeId más
+  // abajo), esta lista nunca tiene los lotes de su propia sede de trabajo
+  // -- por eso mibgCandidatos/lutecioCandidatos (más abajo) no ofrecen
+  // nada en ese caso (sedeAuditandoDistinta), en vez de armar un listener
+  // aparte para la sede de trabajo: firestore.rules sólo deja leer
+  // mibg_lote por sedeAuditando para un admin (sin rama por su propia
+  // sede), así que esa segunda consulta quedaría denegada igual.
   useEffect(() => { if (sedeEfectiva) return listenMibgLotes(contarCallback("mibgLotes", setMibgLotes), { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
 
   // Pre-chequeo amigable (aviso inmediato antes de intentar guardar) -- la
@@ -520,35 +535,71 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
   // porque el listado necesita mostrar el motivo, no sólo saber que existe.
   const anulaciones = useMemo(() => new Map(anulacionesRaw.map((a) => [a.anulaId, a])), [anulacionesRaw]);
 
-  // "Disponible" para el picker de abajo, en tiempo real -- misma derivación
-  // que TabLoteDosisUnica.jsx (estadoMibgLote, ver helpers/mibgLote.js: antes
-  // cada pantalla tenía su propia lógica y divergieron, auditoría #12).
-  // !anulaciones.has(u.id): anular la administración es independiente de
-  // anular el lote (corrección de diseño posterior) -- el lote vuelve a
-  // "disponible" apenas se anula la acta que lo usaba, sin tocar el lote.
-  // Filtra por la sede elegida en el FORMULARIO (sedeId), no por
-  // usuario.sede -- admin puede cambiarla.
-  const usoPorLoteId = useMemo(() => new Map(mibgI131.filter((u) => !anulaciones.has(u.id)).map((u) => [u.mibgLoteId, u])), [mibgI131, anulaciones]);
-  const lotesMibgDisponibles = useMemo(
-    () => mibgLotes.filter((l) => (l.isotopoId || "mibg") === "mibg" && l.sedeId === sedeId && estadoMibgLote(l.id, { anulaciones, usoPorLoteId }) === "disponible")
-      .sort((a, b) => tsMillis(b.fecha) - tsMillis(a.fecha)),
-    [mibgLotes, sedeId, anulaciones, usoPorLoteId]
-  );
+  // Admin auditando una sede DISTINTA de la propia (sedeId = usuario.sede,
+  // donde siempre registra -- ver sedeId más abajo): firestore.rules sólo
+  // deja leer mibg_lote por sedeAuditando para un admin (sin rama por su
+  // propia sede), así que mibgLotes (scopeado por sedeEfectiva=sedeAuditando)
+  // nunca tiene los lotes de la sede de trabajo en este caso -- no hay un
+  // picker real para ofrecer. Se decide ACÁ, antes de armar los candidatos,
+  // para no pasarle ningún candidato al hook (SIN_CANDIDATOS, sin lecturas)
+  // y mostrar en el JSX un aviso fijo en vez de "no hay lotes disponibles"
+  // (ver más abajo en el render -- ese mensaje sería falso en este caso).
+  const sedeAuditandoDistinta = esAdmin && !!usuario.sedeAuditando && usuario.sedeAuditando !== sedeId;
 
-  // Mismo criterio para Lutecio-177 (Libro 4) -- el "uso" acá es un acta
-  // 'paciente' (isotopoId 'lu177') con loteDosisUnicaId, no i131_mibg, así
-  // que el mapa se arma distinto, pero estadoMibgLote es el mismo (ya es
-  // agnóstico de isótopo). Reusa pacientesTodas/mibgLotes, ya escuchados
-  // arriba -- ningún listener nuevo.
-  const usoLutecioPorLoteId = useMemo(
-    () => new Map(pacientesTodas.filter((p) => p.isotopoId === "lu177" && p.loteDosisUnicaId && !anulaciones.has(p.id)).map((p) => [p.loteDosisUnicaId, p])),
-    [pacientesTodas, anulaciones]
+  // Candidatos del picker -- sede de trabajo + isótopo + no anulados,
+  // armados ACÁ (antes de pasarlos al hook) para que useLotesDisponibles
+  // reciba un conjunto ya acotado y con identidad estable (useMemo): si
+  // mibgLotes trae una referencia nueva pero el contenido no cambió
+  // (reemisión del listener sin cambios reales), useLotesDisponibles ya
+  // detecta eso por su cuenta (clave por ids) y no relanza lecturas de más
+  // -- lo que de verdad importa acá es no construir un candidato de más
+  // (uno anulado, p. ej.) que le haga pagar una lectura puntual innecesaria.
+  // anulaciones completo (no sólo del lote): usoActivoDeLote lo necesita
+  // para saber si LA ADMINISTRACIÓN (no el lote) fue anulada -- mismo Map
+  // que ya usa el resto de esta pantalla, ver TabLoteDosisUnica.jsx para el
+  // mismo criterio.
+  //
+  // SIN_CANDIDATOS mientras el picker correspondiente no está siendo
+  // mostrado, o mientras sedeAuditandoDistinta (arriba): evita que el hook
+  // dispare lecturas puntuales cuando no hay ningún picker real para
+  // mostrar. isotopoId/tipoI131 (no esI131/tipoI131Actual, declarados más
+  // abajo en el archivo) porque todavía no existen en este punto.
+  const mibgFormAbierto = mostrarForm && isotopoId === "i131" && tipoI131 === "mibg" && !sedeAuditandoDistinta;
+  const lutecioFormAbierto = mostrarForm && isotopoId === "lu177" && !sedeAuditandoDistinta;
+  const mibgCandidatos = useMemo(
+    () => mibgFormAbierto ? mibgLotes.filter((l) => (l.isotopoId || "mibg") === "mibg" && l.sedeId === sedeId && !anulaciones.has(l.id)) : SIN_CANDIDATOS,
+    [mibgFormAbierto, mibgLotes, sedeId, anulaciones]
   );
-  const lotesLutecioDisponibles = useMemo(
-    () => mibgLotes.filter((l) => l.isotopoId === "lutecio177" && l.sedeId === sedeId && estadoMibgLote(l.id, { anulaciones, usoPorLoteId: usoLutecioPorLoteId }) === "disponible")
-      .sort((a, b) => tsMillis(b.fecha) - tsMillis(a.fecha)),
-    [mibgLotes, sedeId, anulaciones, usoLutecioPorLoteId]
+  const lutecioCandidatos = useMemo(
+    () => lutecioFormAbierto ? mibgLotes.filter((l) => l.isotopoId === "lutecio177" && l.sedeId === sedeId && !anulaciones.has(l.id)) : SIN_CANDIDATOS,
+    [lutecioFormAbierto, mibgLotes, sedeId, anulaciones]
   );
+  const mibg = useLotesDisponibles(mibgCandidatos, { anulaciones, prefijo: "mibg_" });
+  const lutecio = useLotesDisponibles(lutecioCandidatos, { anulaciones, prefijo: "lote_" });
+  // sin-vencimiento/no-verificable -- nunca elegibles (ya excluidos de
+  // mibg.disponibles/lutecio.disponibles por el hook), pero necesitan su
+  // propio aviso en vez de desaparecer en silencio (ver JSX más abajo).
+  const mibgSinVencimiento = useMemo(() => mibgCandidatos.filter((l) => mibg.estadoPorLote.get(l.id)?.estado === "sin-vencimiento"), [mibgCandidatos, mibg.estadoPorLote]);
+  const mibgNoVerificables = useMemo(() => mibgCandidatos.filter((l) => mibg.estadoPorLote.get(l.id)?.estado === "no-verificable"), [mibgCandidatos, mibg.estadoPorLote]);
+  const lutecioSinVencimiento = useMemo(() => lutecioCandidatos.filter((l) => lutecio.estadoPorLote.get(l.id)?.estado === "sin-vencimiento"), [lutecioCandidatos, lutecio.estadoPorLote]);
+  const lutecioNoVerificables = useMemo(() => lutecioCandidatos.filter((l) => lutecio.estadoPorLote.get(l.id)?.estado === "no-verificable"), [lutecioCandidatos, lutecio.estadoPorLote]);
+  // Con sedeAuditandoDistinta ya resuelto aparte (arriba, antes de armar
+  // los candidatos), "no-verificable" acá sólo puede ser un fallo real de
+  // lectura/conexión al verificar el uso del lote (ver usoActivoDeLote,
+  // mibgLotes.js) -- no la sede auditada, que ya nunca llega a esta rama.
+  const motivoNoVerificable = " -- revisá la conexión y volvé a intentar; si persiste, contactá soporte.";
+  // Si el lote elegido deja de estar disponible tras un recálculo (otra
+  // técnica lo usó, se anuló, venció, etc.), limpiar la selección -- nunca
+  // mientras cargando (el conjunto todavía no se terminó de recalcular, no
+  // hay nada confirmado todavía para decidir si el elegido sigue sirviendo).
+  useEffect(() => {
+    if (mibg.cargando || !mibgLoteSeleccionado) return;
+    if (!mibg.disponibles.some((l) => l.id === mibgLoteSeleccionado)) setMibgLoteSeleccionado("");
+  }, [mibg.cargando, mibg.disponibles, mibgLoteSeleccionado]);
+  useEffect(() => {
+    if (lutecio.cargando || !lutecioLoteSeleccionado) return;
+    if (!lutecio.disponibles.some((l) => l.id === lutecioLoteSeleccionado)) setLutecioLoteSeleccionado("");
+  }, [lutecio.cargando, lutecio.disponibles, lutecioLoteSeleccionado]);
 
   // Ver el lote vinculado (MIBG o Lutecio-177) al consultar el registro --
   // mibgLotes YA está completo en memoria (sin límite, sin filtro de fecha:
@@ -565,9 +616,11 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
       // es independiente de anular el lote -- son dos hechos distintos (el
       // lote es la llegada del vial, la acta es la dosis realmente
       // inyectada). El lote NO se toca acá: sigue válido y, apenas se anula
-      // esta acta, vuelve a aparecer "disponible" en el picker (ver
-      // usoPorLoteId/usoLutecioPorLoteId más arriba), listo para
-      // reasignarlo con el dato de dosis corregido.
+      // esta acta, vuelve a aparecer "disponible" en el picker -- anulaciones
+      // (Map reactivo) es dependencia de useLotesDisponibles (ver mibg/lutecio
+      // más arriba), así que esto solo ya dispara el recálculo, sin
+      // necesitar un refrescar() manual acá -- listo para reasignarlo con el
+      // dato de dosis corregido.
       await anularActaTransaction(acta, motivo, usuario);
       setMAnular(null);
       // Sede de trabajo (2026-11): hallazgo real de Pablo -- precargar
@@ -852,8 +905,8 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
         // técnico tipeó como realmente inyectado -- casi nunca coinciden
         // por decaimiento entre la llegada y la administración. Ya no se
         // copia uno como si fuera el otro.
-        if (!mibgLoteSeleccionado || !actividadAdministrada) return;
-        const loteElegido = mibgLotes.find((l) => l.id === mibgLoteSeleccionado);
+        if (mibg.cargando || !mibgLoteSeleccionado || !actividadAdministrada) return;
+        const loteElegido = mibgCandidatos.find((l) => l.id === mibgLoteSeleccionado);
         if (!loteElegido) return;
         // A diferencia del resto de esI131 (dosis/diagnostico/barrido, más
         // abajo en la línea compartida), esto SÍ espera la transacción real
@@ -877,8 +930,20 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
             ultimaFichaGuardadaRef.current = { sedeId, numero: parseInt(fichaNormalizada, 10) };
             onToast("MIBG registrado — consultalo en la pestaña Gestión I-131");
             limpiarForm(); setMostrarForm(false);
+            // El lote recién usado sigue teniendo el mismo id -- la clave
+            // estable del hook no cambia sola, hace falta refrescar() para
+            // que deje de aparecer "disponible" si se vuelve a abrir el form.
+            mibg.refrescar();
           })
-          .catch((e) => onToast(e.message || "No se pudo registrar la administración de MIBG", "error"))
+          .catch((e) => {
+            onToast(e.message || "No se pudo registrar la administración de MIBG", "error");
+            // Si falló PORQUE el lote ya estaba usado (otra técnica se
+            // adelantó un instante antes), el picker no tiene que seguir
+            // ofreciéndolo -- mismo refrescar() que tras un éxito, acá
+            // también hace falta forzar el recálculo (la clave no cambió
+            // sola: el lote sigue teniendo el mismo id).
+            mibg.refrescar();
+          })
           .finally(() => { transaccionEnCursoRef.current = false; setGuardandoTransaccionReal(false); });
         return;
       } else {
@@ -898,8 +963,8 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
       // casi nunca coinciden por decaimiento, ya no se copia uno como si
       // fuera el otro. Transacción real por el mismo motivo que MIBG: puede
       // fallar de verdad si otra técnica usó el mismo lote un instante antes.
-      if (!lutecioLoteSeleccionado || !medicoResponsable.trim() || !actividadAdministrada) return;
-      const loteElegido = mibgLotes.find((l) => l.id === lutecioLoteSeleccionado);
+      if (lutecio.cargando || !lutecioLoteSeleccionado || !medicoResponsable.trim() || !actividadAdministrada) return;
+      const loteElegido = lutecioCandidatos.find((l) => l.id === lutecioLoteSeleccionado);
       if (!loteElegido) return;
       // Mismo motivo que MIBG (ver comentario equivalente más arriba): si la
       // transacción falla (lote ya usado por otra técnica un instante
@@ -923,8 +988,13 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
           ultimaFichaGuardadaRef.current = { sedeId, numero: parseInt(fichaNormalizada, 10) };
           onToast("Lutecio-177 registrado — consultalo en Libro 4");
           limpiarForm(); setMostrarForm(false);
+          lutecio.refrescar();
         })
-        .catch((e) => onToast(e.message || "No se pudo registrar la administración de Lutecio-177", "error"))
+        .catch((e) => {
+          onToast(e.message || "No se pudo registrar la administración de Lutecio-177", "error");
+          // Ver comentario equivalente en el .catch de MIBG más arriba.
+          lutecio.refrescar();
+        })
         .finally(() => { transaccionEnCursoRef.current = false; setGuardandoTransaccionReal(false); });
       return;
     }
@@ -1660,14 +1730,34 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
             )}
             {esI131 && tipoI131Actual.categoria === "mibg" && (
               <div className="sm:col-span-2 flex flex-col gap-3">
-                <Sel label="Lote de MIBG disponible" value={mibgLoteSeleccionado} onChange={(e) => setMibgLoteSeleccionado(e.target.value)}>
-                  <option value="">Seleccionar lote...</option>
-                  {lotesMibgDisponibles.map((l) => (
-                    <option key={l.id} value={l.id}>{l.numeroLote}{l.numeroVial ? ` · Vial ${l.numeroVial}` : ""} · {l.actividadCalibrada} mCi en {l.volumen} mL (llegada) · Calibrado {fmtTs(l.fechaHoraCalibracion)}</option>
-                  ))}
-                </Sel>
-                {lotesMibgDisponibles.length === 0 && (
-                  <p className="text-sm text-orange-500 -mt-2">No hay lotes de MIBG disponibles en esta sede -- registrá uno nuevo en la pestaña "MIBG" de Gestión I-131.</p>
+                {sedeAuditandoDistinta ? (
+                  <p className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-1.5">
+                    Estás auditando {catalogo.sedes[usuario.sedeAuditando]?.nombre || "otra sede"}; para registrar en tu sede de trabajo ({catalogo.sedes[sedeId]?.nombre || sedeId}) cambiá la sede auditada en Configuración.
+                  </p>
+                ) : mibg.cargando ? (
+                  <p className="text-sm text-gray-500">Verificando lotes…</p>
+                ) : (
+                  <>
+                    <Sel label="Lote de MIBG disponible" value={mibgLoteSeleccionado} onChange={(e) => setMibgLoteSeleccionado(e.target.value)}>
+                      <option value="">Seleccionar lote...</option>
+                      {mibg.disponibles.map((l) => (
+                        <option key={l.id} value={l.id}>{l.numeroLote}{l.numeroVial ? ` · Vial ${l.numeroVial}` : ""} · {l.actividadCalibrada} mCi en {l.volumen} mL (llegada) · Calibrado {fmtTs(l.fechaHoraCalibracion)}</option>
+                      ))}
+                    </Sel>
+                    {mibg.disponibles.length === 0 && (
+                      <p className="text-sm text-orange-500 -mt-2">No hay lotes de MIBG disponibles en esta sede -- registrá uno nuevo en la pestaña "MIBG" de Gestión I-131.</p>
+                    )}
+                    {mibgSinVencimiento.length > 0 && (
+                      <p className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-1.5">
+                        {mibgSinVencimiento.length} lote{mibgSinVencimiento.length !== 1 ? "s" : ""} de MIBG sin fecha de vencimiento cargada -- no se puede{mibgSinVencimiento.length !== 1 ? "n" : ""} ofrecer para elegir hasta corregir el dato (pestaña "MIBG" de Gestión I-131).
+                      </p>
+                    )}
+                    {mibgNoVerificables.length > 0 && (
+                      <p className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-1.5">
+                        {mibgNoVerificables.length} lote{mibgNoVerificables.length !== 1 ? "s" : ""} de MIBG no se pud{mibgNoVerificables.length !== 1 ? "ieron" : "o"} verificar{motivoNoVerificable}
+                      </p>
+                    )}
+                  </>
                 )}
                 {/* Distinto de la actividad de llegada del lote (arriba) --
                     casi siempre difiere por decaimiento entre la llegada y el
@@ -1682,14 +1772,34 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
               // guardar()). Dosis administrada se tipea a mano, distinta de
               // la actividad de llegada del lote.
               <div className="sm:col-span-2 flex flex-col gap-3">
-                <Sel label="Lote de Lutecio-177 disponible" value={lutecioLoteSeleccionado} onChange={(e) => setLutecioLoteSeleccionado(e.target.value)}>
-                  <option value="">Seleccionar lote...</option>
-                  {lotesLutecioDisponibles.map((l) => (
-                    <option key={l.id} value={l.id}>{l.numeroLote}{l.numeroVial ? ` · Vial ${l.numeroVial}` : ""} · {l.actividadCalibrada} mCi en {l.volumen} mL (llegada) · Calibrado {fmtTs(l.fechaHoraCalibracion)}</option>
-                  ))}
-                </Sel>
-                {lotesLutecioDisponibles.length === 0 && (
-                  <p className="text-sm text-orange-500 -mt-2">No hay lotes de Lutecio-177 disponibles en esta sede -- registrá uno nuevo en "Libro 4 — Lutecio-177" (Actas ARN).</p>
+                {sedeAuditandoDistinta ? (
+                  <p className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-1.5">
+                    Estás auditando {catalogo.sedes[usuario.sedeAuditando]?.nombre || "otra sede"}; para registrar en tu sede de trabajo ({catalogo.sedes[sedeId]?.nombre || sedeId}) cambiá la sede auditada en Configuración.
+                  </p>
+                ) : lutecio.cargando ? (
+                  <p className="text-sm text-gray-500">Verificando lotes…</p>
+                ) : (
+                  <>
+                    <Sel label="Lote de Lutecio-177 disponible" value={lutecioLoteSeleccionado} onChange={(e) => setLutecioLoteSeleccionado(e.target.value)}>
+                      <option value="">Seleccionar lote...</option>
+                      {lutecio.disponibles.map((l) => (
+                        <option key={l.id} value={l.id}>{l.numeroLote}{l.numeroVial ? ` · Vial ${l.numeroVial}` : ""} · {l.actividadCalibrada} mCi en {l.volumen} mL (llegada) · Calibrado {fmtTs(l.fechaHoraCalibracion)}</option>
+                      ))}
+                    </Sel>
+                    {lutecio.disponibles.length === 0 && (
+                      <p className="text-sm text-orange-500 -mt-2">No hay lotes de Lutecio-177 disponibles en esta sede -- registrá uno nuevo en "Libro 4 — Lutecio-177" (Actas ARN).</p>
+                    )}
+                    {lutecioSinVencimiento.length > 0 && (
+                      <p className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-1.5">
+                        {lutecioSinVencimiento.length} lote{lutecioSinVencimiento.length !== 1 ? "s" : ""} de Lutecio-177 sin fecha de vencimiento cargada -- no se puede{lutecioSinVencimiento.length !== 1 ? "n" : ""} ofrecer para elegir hasta corregir el dato ("Libro 4 — Lutecio-177", Actas ARN).
+                      </p>
+                    )}
+                    {lutecioNoVerificables.length > 0 && (
+                      <p className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-1.5">
+                        {lutecioNoVerificables.length} lote{lutecioNoVerificables.length !== 1 ? "s" : ""} de Lutecio-177 no se pud{lutecioNoVerificables.length !== 1 ? "ieron" : "o"} verificar{motivoNoVerificable}
+                      </p>
+                    )}
+                  </>
                 )}
                 <Input label="Dosis administrada (mCi)" type="number" min={0} step={0.1} value={actividadAdministrada} onChange={(e) => setActividadAdministrada(e.target.value)} placeholder="Ej: 1.5 (suele ser menor a la actividad de llegada)" />
               </div>
@@ -1795,11 +1905,11 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
                 ? ((tipoI131Actual.requierePermiso && !puedeCargarDosisI131) ||
                    (tipoI131Actual.categoria !== "barrido" && !actividadAdministrada) ||
                    (tipoI131Actual.categoria === "dosis" && !lote.trim()) ||
-                   (tipoI131Actual.categoria === "mibg" && !mibgLoteSeleccionado) ||
+                   (tipoI131Actual.categoria === "mibg" && (mibg.cargando || !mibgLoteSeleccionado)) ||
                    // XOR obligatorio: ni los dos, ni ninguno.
                    (tipoI131Actual.requiereExtraccion && (!!extraccionVinculada === !!sinExtraccionVial)))
                 : esLutecio
-                  ? (!medicoResponsable.trim() || !lutecioLoteSeleccionado || !actividadAdministrada)
+                  ? (lutecio.cargando || !medicoResponsable.trim() || !lutecioLoteSeleccionado || !actividadAdministrada)
                   : (!mci || !estudio || (estudio === "Otro" && !estudioOtro.trim()) ||
                      (!sinRadiofarmaco && (!lote.trim() || !farmId || (loteSinMarcacion && !confirmoSinMarcacion)))))
             }>{guardandoTransaccionReal ? "Guardando..." : "Guardar registro"}</Btn>

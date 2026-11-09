@@ -911,3 +911,68 @@ test("listenMibgLotes: la primera emisión de un lote recién escrito (todavía 
   assert.notEqual(lote.fecha, null, "fecha no debería ser null en la primera emisión -- serverTimestamps:'estimate' tiene que devolver una fecha estimada");
   assert.ok(lote.fecha, "fecha tiene que ser un valor truthy (Timestamp estimado), no null/undefined");
 });
+
+// Pregunta de Pablo, SOLO VERIFICACIÓN (no se arregla nada acá): el picker
+// de TabPacientes.jsx ya bloquea del lado del cliente que un admin con
+// sedeAuditando distinta de su sede de trabajo pueda elegir un lote
+// (sedeAuditandoDistinta, sin ofrecer ninguno) -- esto prueba qué pasa si
+// administrarMibgTransaction/administrarLutecioTransaction se llamaran
+// igual (otro cliente, un bug futuro, etc.), contra el emulador real, no
+// por lectura de código. administrarLoteDosisUnicaTransaction (mibgLotes.js)
+// hace tx.get(loteRef) sobre mibg_lote -- ese read, para un admin, sólo lo
+// permite firestore.rules si resource.data.sedeId == sedeAuditando.
+test("administrarMibgTransaction: admin con sedeAuditando en OTRA sede -- resultado real contra el emulador", async () => {
+  await loguearComo(PERSONAS.admin);
+  const loteRef = await addMibgLote({
+    sedeId: SEDE_A, sedeNombre: NOMBRE_SEDE[SEDE_A], isotopoId: "mibg",
+    numeroLote: loteDePrueba(), proveedor: "Prueba", actividadCalibrada: 20, volumen: 2,
+    fechaHoraCalibracion: new Date(), fechaVencimiento: "2027-01-01", conformidad: true,
+    usuarioNombre: PERSONAS.admin.nombre, usuarioEmail: PERSONAS.admin.email, observacion: "",
+  });
+
+  await setSedeAuditando(PERSONAS.admin.email, SEDE_B); // DESALINEADO a propósito, igual que el caso real
+  try {
+    // Resultado real confirmado contra el emulador: rechaza -- pero con el
+    // mensaje AMIGABLE de conMensajeDeContingencia (helpers/erroresRed.js),
+    // no el "permission-denied" crudo -- confirma que la causa real es de
+    // permisos (tx.get(loteRef) sobre mibg_lote, gateado por sedeAuditando
+    // para un admin), sin asumir el formato exacto del mensaje.
+    await assert.rejects(
+      () => administrarMibgTransaction(loteRef.id, {
+        sedeId: SEDE_A, sedeNombre: NOMBRE_SEDE[SEDE_A],
+        pacienteFicha: fichaDePrueba(), pacienteNombre: "Paciente Admin Desalineado MIBG", pacienteDni: "SEDEDESALIN1",
+        usuarioNombre: PERSONAS.admin.nombre, usuarioEmail: PERSONAS.admin.email, observacion: "",
+      }),
+      /no tiene permiso/i
+    );
+  } finally {
+    await setSedeAuditando(PERSONAS.admin.email, SEDE_A);
+  }
+});
+
+test("administrarLutecioTransaction: admin con sedeAuditando en OTRA sede -- resultado real contra el emulador", async () => {
+  await loguearComo(PERSONAS.admin);
+  const loteRef = await addMibgLote({
+    sedeId: SEDE_A, sedeNombre: NOMBRE_SEDE[SEDE_A], isotopoId: "lutecio177",
+    numeroLote: loteDePrueba(), proveedor: "Prueba", actividadCalibrada: 150, volumen: 10,
+    fechaHoraCalibracion: new Date(), fechaVencimiento: "2027-01-01", conformidad: true,
+    usuarioNombre: PERSONAS.admin.nombre, usuarioEmail: PERSONAS.admin.email, observacion: "",
+  });
+
+  await setSedeAuditando(PERSONAS.admin.email, SEDE_B);
+  try {
+    // Mismo motivo/mismo formato de mensaje que MIBG -- ver comentario ahí.
+    await assert.rejects(
+      () => administrarLutecioTransaction(loteRef.id, {
+        sedeId: SEDE_A, sedeNombre: NOMBRE_SEDE[SEDE_A],
+        pacienteFicha: fichaDePrueba(), pacienteNombre: "Paciente Admin Desalineado Lutecio", pacienteDni: "SEDEDESALIN2",
+        peso: 70, talla: 170, mciAdministrados: 140, actividadCalibrada: 150,
+        isotopoId: "lu177", lote: loteRef.id, medicoResponsable: "Dr. Test",
+        usuarioNombre: PERSONAS.admin.nombre, usuarioEmail: PERSONAS.admin.email, observacion: "",
+      }),
+      /no tiene permiso/i
+    );
+  } finally {
+    await setSedeAuditando(PERSONAS.admin.email, SEDE_A);
+  }
+});

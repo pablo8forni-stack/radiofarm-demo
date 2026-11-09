@@ -110,10 +110,24 @@ vi.mock("../../services/firestore/actas.js", () => ({
   addActaI131CaptacionCentellograma: vi.fn(async () => {}),
 }));
 
+// estadoPorLoteDosisUnica/disponiblesDesdeEstadoPorLote: versión mínima y
+// PERMISIVA para este archivo (ignora sin-vencimiento/vencido/no-verificable
+// a propósito -- eso ya está cubierto a fondo en scripts/testing/
+// transacciones.test.mjs contra el emulador real, y en
+// src/hooks/useLotesDisponibles.test.js) -- acá sólo hace falta que un lote
+// no anulado quede "disponible" sin reventar ni pegarle a Firestore de
+// verdad (la real hace getDoc contra `db`, que no existe en este entorno de
+// test). Los tests que necesitan un estado puntual (no-verificable,
+// cargando que nunca resuelve, etc.) lo overridean con vi.spyOn, mismo
+// patrón que ya usa este archivo para listenMibgLotes/administrarXTransaction.
 vi.mock("../../services/firestore/mibgLotes.js", () => ({
   listenMibgLotes: (cb) => listenerCon(cb),
   administrarMibgTransaction: vi.fn(async () => {}),
   administrarLutecioTransaction: vi.fn(async () => {}),
+  estadoPorLoteDosisUnica: async (lotes, { anulaciones }) =>
+    new Map(lotes.map((l) => [l.id, anulaciones.has(l.id) ? { estado: "anulado", uso: null, error: null } : { estado: "disponible", uso: null, error: null }])),
+  disponiblesDesdeEstadoPorLote: (lotes, estadoPorLoteId) =>
+    lotes.filter((l) => estadoPorLoteId.get(l.id)?.estado === "disponible"),
 }));
 
 const catalogo = {
@@ -928,7 +942,14 @@ describe("TabPacientes -- MIBG/Lutecio-177: el formulario espera la transacción
     });
 
     expect(espiaTransaccion).toHaveBeenCalledTimes(1);
-    resolverTransaccion();
+    // Resolver DENTRO de act() y esperarla -- sin esto, la continuación
+    // (.then() de guardar()) queda como una promesa colgada que se resuelve
+    // en un microtask POSTERIOR a que este test ya terminó, y se filtra al
+    // siguiente test del archivo (bug real de higiene de test encontrado
+    // armando los tests del paso 5 -- otro test más adelante se volvía
+    // flaky/colgaba por esta continuación ajena interviniendo a mitad de
+    // camino).
+    await act(async () => { resolverTransaccion(); await Promise.resolve(); });
   });
 
   // Bug real encontrado por Pablo tras el fix del doble clic: con sólo el
@@ -1087,7 +1108,8 @@ describe("TabPacientes -- MIBG/Lutecio-177: el formulario espera la transacción
     });
 
     expect(espiaTransaccion).toHaveBeenCalledTimes(1);
-    resolverTransaccion();
+    // Ver comentario equivalente en el test de MIBG (misma causa real).
+    await act(async () => { resolverTransaccion(); await Promise.resolve(); });
   });
 
   test("Lutecio-177: si la transacción tiene éxito, el formulario se cierra y limpia", async () => {
@@ -1123,3 +1145,481 @@ describe("TabPacientes -- MIBG/Lutecio-177: el formulario espera la transacción
     expect(screen.queryByRole("button", { name: "Guardar registro" })).toBeNull();
   });
 });
+
+// Paso 5: useLotesDisponibles enchufado en los pickers MIBG/Lutecio-177 (ver
+// mibgCandidatos/lutecio en TabPacientes.jsx). Estos tests cubren MIBG como
+// representativo -- Lutecio-177 usa exactamente el mismo hook/wiring, misma
+// clase de bug si algo se rompe acá se rompería igual allá.
+async function llegarAFormMibg(user, numeroFicha) {
+  await user.click(await screen.findByText("+ Manual"));
+  const fichaInput = labelInput("N° de Ficha");
+  await user.type(fichaInput, numeroFicha);
+  fichaInput.blur();
+  await screen.findByText("Verificando N° de Ficha...");
+  await act(async () => {
+    resolverFichaIntentoDeferido.resolver({ intento: "1" });
+    await resolverFichaIntentoDeferido.promesa;
+  });
+  await user.type(labelInput("Apellido y nombre"), "Paciente Picker Test");
+  await user.type(labelInput("DNI"), "11112222");
+  await user.click(screen.getByText("¿Es un caso distinto a Tc-99m?"));
+  await user.selectOptions(labelInput("Isótopo"), "i131");
+  await user.selectOptions(labelInput("Tipo de registro"), "mibg");
+}
+
+async function llegarAFormLutecio(user, numeroFicha) {
+  await user.click(await screen.findByText("+ Manual"));
+  const fichaInput = labelInput("N° de Ficha");
+  await user.type(fichaInput, numeroFicha);
+  fichaInput.blur();
+  await screen.findByText("Verificando N° de Ficha...");
+  await act(async () => {
+    resolverFichaIntentoDeferido.resolver({ intento: "1" });
+    await resolverFichaIntentoDeferido.promesa;
+  });
+  await user.type(labelInput("Apellido y nombre"), "Paciente Picker Lutecio Test");
+  await user.type(labelInput("DNI"), "33334444");
+  await user.click(screen.getByText("¿Es un caso distinto a Tc-99m?"));
+  await user.selectOptions(labelInput("Isótopo"), "lu177");
+  await user.type(labelInput("Médico responsable"), "Dr. Picker Test");
+}
+
+const loteMibgBase = (id, numeroLote) => ({
+  id, sedeId: "central", isotopoId: "mibg", numeroLote, fechaVencimiento: "2027-01-01",
+  actividadCalibrada: 20, volumen: 2, fechaHoraCalibracion: new Date(), fecha: new Date(),
+});
+const loteLutecioBase = (id, numeroLote) => ({
+  id, sedeId: "central", isotopoId: "lutecio177", numeroLote, fechaVencimiento: "2027-01-01",
+  actividadCalibrada: 150, volumen: 10, fechaHoraCalibracion: new Date(), fecha: new Date(),
+});
+
+// vi.spyOn sobre estadoPorLoteDosisUnica NO se restaura solo entre tests (el
+// afterEach de arriba sólo hace cleanup()) -- sin esto, el mock de un test
+// (ej. una promesa que nunca resuelve, para simular cargando) se filtraba al
+// siguiente test y lo hacía fallar por timeout. Alcance acotado a este
+// describe exterior -- no toca el comportamiento de los tests ya existentes
+// arriba.
+describe("TabPacientes -- paso 5: picker MIBG/Lutecio con useLotesDisponibles", () => {
+  // beforeEach (no sólo afterEach): un vi.spyOn sin restaurar de un test de
+  // OTRO describe, más arriba en el archivo (ej. "doble clic rápido", que
+  // deja administrarMibgTransaction devolviendo una promesa que nunca se
+  // vuelve a resolver) se filtra igual -- afterEach sólo protege entre
+  // tests DE ESTE describe, no contra lo que ya venía sucio de antes.
+  beforeEach(() => { vi.restoreAllMocks(); });
+  afterEach(() => { vi.restoreAllMocks(); });
+
+describe("TabPacientes -- picker de MIBG con useLotesDisponibles: cargando", () => {
+  test("cargando=true: muestra 'Verificando lotes…', no ofrece ninguna opción, nunca dice 'no hay disponibles'", async () => {
+    const mibgLotesMod = await import("../../services/firestore/mibgLotes.js");
+    vi.spyOn(mibgLotesMod, "listenMibgLotes").mockImplementation((cb) => listenerCon(cb, [loteMibgBase("lote-cargando", "CARGANDO-1")]));
+    vi.spyOn(mibgLotesMod, "estadoPorLoteDosisUnica").mockImplementation(() => new Promise(() => {})); // nunca resuelve en este test
+
+    const user = userEvent.setup();
+    render(<TabPacientes catalogo={catalogo} usuario={usuario} esAdmin={false} onToast={vi.fn()} nav={null} />);
+    await llegarAFormMibg(user, "900001");
+
+    expect(await screen.findByText("Verificando lotes…")).toBeTruthy();
+    expect(screen.queryByText("CARGANDO-1")).toBeNull();
+    expect(screen.queryByText("Lote de MIBG disponible")).toBeNull(); // el Sel ni se renderiza mientras carga
+    expect(screen.queryByText(/No hay lotes de MIBG disponibles/)).toBeNull(); // nunca "vacío" mientras todavía no se sabe
+  });
+});
+
+describe("TabPacientes -- picker de MIBG: guardar bloqueado mientras carga", () => {
+  test("sin ningún lote elegido: Guardar deshabilitado mientras cargando=true", async () => {
+    const mibgLotesMod = await import("../../services/firestore/mibgLotes.js");
+    vi.spyOn(mibgLotesMod, "listenMibgLotes").mockImplementation((cb) => listenerCon(cb, [loteMibgBase("lote-bloq", "BLOQ-1")]));
+    vi.spyOn(mibgLotesMod, "estadoPorLoteDosisUnica").mockImplementation(() => new Promise(() => {}));
+
+    const user = userEvent.setup();
+    render(<TabPacientes catalogo={catalogo} usuario={usuario} esAdmin={false} onToast={vi.fn()} nav={null} />);
+    await llegarAFormMibg(user, "900002");
+    await user.type(labelInput("Dosis administrada (mCi)"), "5");
+
+    expect(screen.getByRole("button", { name: "Guardar registro" }).disabled).toBe(true);
+  });
+
+  // Caso que de verdad aísla la cláusula `mibg.cargando` del disabled (la
+  // de arriba también pasaría sólo con el chequeo de "sin lote elegido" --
+  // ver mutación verificada en el informe): un lote QUEDA elegido (de una
+  // corrida ya resuelta) y un recálculo nuevo entra en vuelo sin que la
+  // selección se haya limpiado todavía (el efecto de limpieza se frena
+  // mientras cargando=true, ver TabPacientes.jsx) -- con un lote elegido Y
+  // cargando=true a la vez, Guardar tiene que seguir bloqueado.
+  test("con un lote YA elegido: un recálculo nuevo en vuelo igual bloquea Guardar", async () => {
+    const mibgLotesMod = await import("../../services/firestore/mibgLotes.js");
+    let emitirLotes;
+    vi.spyOn(mibgLotesMod, "listenMibgLotes").mockImplementation((cb) => {
+      emitirLotes = cb;
+      cb([loteMibgBase("lote-elegido", "ELEGIDO-1")]);
+      return () => {};
+    });
+    // Por CONTENIDO, no por orden global de llamada (el hook de Lutecio-177,
+    // candidatos vacíos, llama a esto en paralelo todo el tiempo -- ver
+    // mismo motivo en el test de "refrescar()" más abajo).
+    vi.spyOn(mibgLotesMod, "estadoPorLoteDosisUnica").mockImplementation(async (lotes) => {
+      if (!lotes.some((l) => l.id === "lote-elegido")) return new Map();
+      if (lotes.length === 1) return new Map([["lote-elegido", { estado: "disponible", uso: null, error: null }]]);
+      return new Promise(() => {}); // el conjunto cambió (lote-nuevo apareció) -- esta corrida queda en vuelo
+    });
+
+    const user = userEvent.setup();
+    render(<TabPacientes catalogo={catalogo} usuario={usuario} esAdmin={false} onToast={vi.fn()} nav={null} />);
+    await llegarAFormMibg(user, "900008");
+    await user.selectOptions(labelInput("Lote de MIBG disponible"), "lote-elegido");
+    await user.type(labelInput("Dosis administrada (mCi)"), "5");
+    expect(screen.getByRole("button", { name: "Guardar registro" }).disabled).toBe(false);
+
+    // Un lote NUEVO aparece (otra carga) -- cambia el conjunto de
+    // candidatos, dispara un recálculo que queda en vuelo (nunca resuelve
+    // en este test) SIN tocar la selección ya hecha.
+    await act(async () => { emitirLotes([loteMibgBase("lote-elegido", "ELEGIDO-1"), loteMibgBase("lote-nuevo", "NUEVO-1")]); });
+
+    // El Sel ya ni se renderiza (cargando=true, "Verificando lotes…") -- la
+    // selección interna sigue en "lote-elegido" (el efecto de limpieza se
+    // frena mientras cargando), pero lo que importa acá es que Guardar se
+    // bloquea de nuevo pese a que HABÍA un lote elegido.
+    await screen.findByText("Verificando lotes…");
+    expect(screen.getByRole("button", { name: "Guardar registro" }).disabled).toBe(true);
+  });
+});
+
+describe("TabPacientes -- picker de MIBG: vacío real", () => {
+  test("cargando=false y sin lotes -- mensaje claro de que no hay disponibles", async () => {
+    const mibgLotesMod = await import("../../services/firestore/mibgLotes.js");
+    vi.spyOn(mibgLotesMod, "listenMibgLotes").mockImplementation((cb) => listenerCon(cb, []));
+
+    const user = userEvent.setup();
+    render(<TabPacientes catalogo={catalogo} usuario={usuario} esAdmin={false} onToast={vi.fn()} nav={null} />);
+    await llegarAFormMibg(user, "900003");
+
+    expect(await screen.findByText(/No hay lotes de MIBG disponibles/)).toBeTruthy();
+    expect(screen.queryByText("Verificando lotes…")).toBeNull();
+  });
+});
+
+describe("TabPacientes -- picker de MIBG: aviso de no-verificable", () => {
+  test("lote no-verificable: aviso visible y claro, nunca aparece como opción elegible", async () => {
+    const mibgLotesMod = await import("../../services/firestore/mibgLotes.js");
+    vi.spyOn(mibgLotesMod, "listenMibgLotes").mockImplementation((cb) => listenerCon(cb, [loteMibgBase("lote-nv", "NOVERIF-1")]));
+    vi.spyOn(mibgLotesMod, "estadoPorLoteDosisUnica").mockResolvedValue(
+      new Map([["lote-nv", { estado: "no-verificable", uso: null, error: new Error("permission-denied simulado") }]])
+    );
+
+    const user = userEvent.setup();
+    render(<TabPacientes catalogo={catalogo} usuario={usuario} esAdmin={false} onToast={vi.fn()} nav={null} />);
+    await llegarAFormMibg(user, "900004");
+
+    expect(await screen.findByText(/no se pud.*verificar/)).toBeTruthy();
+    expect(screen.queryByText("NOVERIF-1")).toBeNull();
+  });
+});
+
+describe("TabPacientes -- picker de MIBG: lote usado que desaparece tras refrescar()", () => {
+  test("tras guardar con éxito, el lote usado ya no se ofrece al reabrir el formulario", async () => {
+    const mibgLotesMod = await import("../../services/firestore/mibgLotes.js");
+    vi.spyOn(mibgLotesMod, "listenMibgLotes").mockImplementation((cb) => listenerCon(cb, [loteMibgBase("lote-refrescar", "REFRESCAR-1")]));
+    // Implementación por CONTENIDO (no por orden de llamada global): el hook
+    // de Lutecio-177 (candidatos vacíos, se ejecuta en paralelo todo el
+    // tiempo) también llama a estadoPorLoteDosisUnica -- mockResolvedValueOnce
+    // encadenado se mezclaría con esas llamadas ajenas. Sólo cuenta las
+    // llamadas que de verdad incluyen el lote de este test.
+    let llamadasConEsteLote = 0;
+    vi.spyOn(mibgLotesMod, "estadoPorLoteDosisUnica").mockImplementation(async (lotes) => {
+      if (!lotes.some((l) => l.id === "lote-refrescar")) return new Map();
+      llamadasConEsteLote++;
+      const estado = llamadasConEsteLote === 1 ? "disponible" : "usado";
+      return new Map([["lote-refrescar", { estado, uso: estado === "usado" ? { pacienteNombre: "Otro Paciente" } : null, error: null }]]);
+    });
+    // Explícito, no implícito -- un vi.spyOn SIN restaurar de un test de
+    // OTRO describe (ej. "doble clic rápido", que deja esta función
+    // devolviendo una promesa que nunca se vuelve a resolver) puede
+    // filtrarse igual aunque este describe tenga su propio beforeEach/
+    // afterEach con restoreAllMocks (bug real de este archivo encontrado
+    // armando este test: colgaba sin razón aparente hasta que esto se hizo
+    // explícito acá).
+    vi.spyOn(mibgLotesMod, "administrarMibgTransaction").mockResolvedValue({});
+
+    const user = userEvent.setup();
+    const onToast = vi.fn();
+    render(<TabPacientes catalogo={catalogo} usuario={usuario} esAdmin={false} onToast={onToast} nav={null} />);
+    await llegarAFormMibg(user, "900005");
+    await user.selectOptions(labelInput("Lote de MIBG disponible"), "lote-refrescar");
+    await user.type(labelInput("Dosis administrada (mCi)"), "5");
+    await user.click(screen.getByRole("button", { name: "Guardar registro" }));
+    await vi.waitFor(() => expect(onToast).toHaveBeenCalledWith("MIBG registrado — consultalo en la pestaña Gestión I-131"), { timeout: 3000 });
+
+    // La segunda llamada (con ESTE lote) es refrescar() -- confirma que se disparó.
+    await vi.waitFor(() => expect(llamadasConEsteLote).toBe(2));
+
+    await llegarAFormMibg(user, "900006");
+    await screen.findByText(/No hay lotes de MIBG disponibles/);
+    expect(screen.queryByText("REFRESCAR-1")).toBeNull();
+  });
+});
+
+describe("TabPacientes -- picker de MIBG: la selección se limpia si el lote deja de estar disponible", () => {
+  // OJO -- leer el .value del <select> NO alcanza acá: el DOM resetea el
+  // value a "" en cuanto el valor controlado no matchea NINGUNA <option>
+  // existente, sin importar si el estado interno (mibgLoteSeleccionado) de
+  // verdad se limpió o quedó colgado en "lote-se-va" -- en los dos casos el
+  // <select> se ve igual (muestra la primera opción, "Seleccionar lote...").
+  // Encontrado armando este test: con el efecto de limpieza DESACTIVADO a
+  // mano, el assert sobre .value pasaba igual, sin detectar nada. El chequeo
+  // real: completar el resto del formulario ANTES de que el lote
+  // desaparezca, y mirar el disabled de Guardar -- si mibgLoteSeleccionado
+  // sigue siendo la string vieja (truthy, aunque inválida), Guardar quedaría
+  // HABILITADO; si se limpió a "", queda deshabilitado.
+  test("el lote elegido desaparece del conjunto de candidatos -- Guardar se bloquea (la selección interna se limpió, no sólo el <select> visual)", async () => {
+    const mibgLotesMod = await import("../../services/firestore/mibgLotes.js");
+    let emitirLotes;
+    vi.spyOn(mibgLotesMod, "listenMibgLotes").mockImplementation((cb) => {
+      emitirLotes = cb;
+      cb([loteMibgBase("lote-se-va", "SEVA-1")]);
+      return () => {};
+    });
+
+    const user = userEvent.setup();
+    render(<TabPacientes catalogo={catalogo} usuario={usuario} esAdmin={false} onToast={vi.fn()} nav={null} />);
+    await llegarAFormMibg(user, "900007");
+    await user.selectOptions(labelInput("Lote de MIBG disponible"), "lote-se-va");
+    await user.type(labelInput("Dosis administrada (mCi)"), "5"); // completo ANTES de que el lote desaparezca
+    expect(screen.getByRole("button", { name: "Guardar registro" }).disabled).toBe(false);
+
+    // El lote desaparece del listener (otra técnica lo movió/usó un instante
+    // antes, el conjunto de candidatos cambia) -- useLotesDisponibles
+    // recalcula solo, y el efecto de "limpiar selección" la vacía.
+    await act(async () => { emitirLotes([]); });
+    await vi.waitFor(() => expect(screen.queryByText(/No hay lotes de MIBG disponibles/)).toBeTruthy());
+
+    // Un render más -- el efecto de limpieza corre DESPUÉS del render que
+    // muestra "No hay lotes" (cargando=false), su propio setMibgLoteSeleccionado("")
+    // todavía puede no haberse reflejado en el DOM en el instante exacto del
+    // assert anterior.
+    await vi.waitFor(() => expect(screen.getByRole("button", { name: "Guardar registro" }).disabled).toBe(true));
+  });
+});
+
+// Punto 1 (Pablo): sin esto, useLotesDisponibles corría SIEMPRE que la
+// pantalla estaba montada, aunque nadie hubiera abierto el form o estuviera
+// en Tc-99m -- ~446 lecturas puntuales por cada apertura real de la pestaña.
+describe("TabPacientes -- picker MIBG/Lutecio: SIN candidatos cuando el form correspondiente no está abierto", () => {
+  // El hook SIGUE llamando a estadoPorLoteDosisUnica al montar (siempre lo
+  // hizo, ver useLotesDisponibles.js) -- lo que cambia es CON QUÉ: antes
+  // recibía los 2 lotes reales (172+154 candidatos reales en staging,
+  // ~446 lecturas); con SIN_CANDIDATOS recibe un array vacío, así que la
+  // llamada es instantánea y de CERO lecturas puntuales (el loop interno
+  // sobre `lotes` nunca itera). Por eso el assert es "con array vacío", no
+  // "nunca se llama" -- esto último sería falso y un test así fallaría
+  // siempre, sin reflejar la mejora real.
+  test("form cerrado (pantalla recién montada): estadoPorLoteDosisUnica sólo se llama con un array VACÍO (cero lecturas)", async () => {
+    const mibgLotesMod = await import("../../services/firestore/mibgLotes.js");
+    vi.spyOn(mibgLotesMod, "listenMibgLotes").mockImplementation((cb) => listenerCon(cb, [loteMibgBase("lote-x", "X-1"), loteLutecioBase("lote-y", "Y-1")]));
+    const espia = vi.spyOn(mibgLotesMod, "estadoPorLoteDosisUnica");
+
+    render(<TabPacientes catalogo={catalogo} usuario={usuario} esAdmin={false} onToast={vi.fn()} nav={null} />);
+    await screen.findByText("+ Manual");
+    await act(async () => { await Promise.resolve(); });
+
+    expect(espia.mock.calls.length).toBeGreaterThan(0);
+    for (const [lotesPasados] of espia.mock.calls) expect(lotesPasados).toEqual([]);
+  });
+
+  test("form abierto pero en Tc-99m (tipo por defecto, ni MIBG ni Lutecio): estadoPorLoteDosisUnica sólo se llama con un array VACÍO", async () => {
+    const mibgLotesMod = await import("../../services/firestore/mibgLotes.js");
+    vi.spyOn(mibgLotesMod, "listenMibgLotes").mockImplementation((cb) => listenerCon(cb, [loteMibgBase("lote-x", "X-1"), loteLutecioBase("lote-y", "Y-1")]));
+    const espia = vi.spyOn(mibgLotesMod, "estadoPorLoteDosisUnica");
+
+    const user = userEvent.setup();
+    render(<TabPacientes catalogo={catalogo} usuario={usuario} esAdmin={false} onToast={vi.fn()} nav={null} />);
+    await user.click(await screen.findByText("+ Manual")); // Tc-99m es el default, no se toca nada más
+    await act(async () => { await Promise.resolve(); });
+
+    expect(espia.mock.calls.length).toBeGreaterThan(0);
+    for (const [lotesPasados] of espia.mock.calls) expect(lotesPasados).toEqual([]);
+  });
+});
+
+// Punto 2 (Pablo): si la transacción falla porque el lote ya estaba usado,
+// el picker no debe seguir ofreciéndolo -- refrescar() también en el .catch.
+describe("TabPacientes -- refrescar() tras un error (lote ya usado) -- MIBG y Lutecio-177", () => {
+  test("MIBG: si la transacción falla, refrescar() se dispara igual", async () => {
+    const mibgLotesMod = await import("../../services/firestore/mibgLotes.js");
+    vi.spyOn(mibgLotesMod, "listenMibgLotes").mockImplementation((cb) => listenerCon(cb, [loteMibgBase("lote-mibg-catch", "CATCH-1")]));
+    let llamadas = 0;
+    vi.spyOn(mibgLotesMod, "estadoPorLoteDosisUnica").mockImplementation(async (lotes) => {
+      if (!lotes.some((l) => l.id === "lote-mibg-catch")) return new Map();
+      llamadas++;
+      return new Map([["lote-mibg-catch", { estado: "disponible", uso: null, error: null }]]);
+    });
+    vi.spyOn(mibgLotesMod, "administrarMibgTransaction").mockRejectedValueOnce(new Error("Este lote ya fue administrado a otro paciente -- elegí otro."));
+
+    const user = userEvent.setup();
+    const onToast = vi.fn();
+    render(<TabPacientes catalogo={catalogo} usuario={usuario} esAdmin={false} onToast={onToast} nav={null} />);
+    await llegarAFormMibg(user, "900013");
+    await user.selectOptions(labelInput("Lote de MIBG disponible"), "lote-mibg-catch");
+    await user.type(labelInput("Dosis administrada (mCi)"), "5");
+    await user.click(screen.getByRole("button", { name: "Guardar registro" }));
+    await vi.waitFor(() => expect(onToast).toHaveBeenCalledWith(expect.stringContaining("ya fue administrado"), "error"), { timeout: 3000 });
+
+    await vi.waitFor(() => expect(llamadas).toBe(2)); // la segunda llamada (con este lote) es refrescar() tras el error
+  });
+
+  test("Lutecio-177: si la transacción falla, refrescar() se dispara igual", async () => {
+    const mibgLotesMod = await import("../../services/firestore/mibgLotes.js");
+    vi.spyOn(mibgLotesMod, "listenMibgLotes").mockImplementation((cb) => listenerCon(cb, [loteLutecioBase("lote-lu-catch", "LU-CATCH-1")]));
+    let llamadas = 0;
+    vi.spyOn(mibgLotesMod, "estadoPorLoteDosisUnica").mockImplementation(async (lotes) => {
+      if (!lotes.some((l) => l.id === "lote-lu-catch")) return new Map();
+      llamadas++;
+      return new Map([["lote-lu-catch", { estado: "disponible", uso: null, error: null }]]);
+    });
+    vi.spyOn(mibgLotesMod, "administrarLutecioTransaction").mockRejectedValueOnce(new Error("Este lote ya fue administrado a otro paciente -- elegí otro."));
+
+    const user = userEvent.setup();
+    const onToast = vi.fn();
+    render(<TabPacientes catalogo={catalogo} usuario={usuario} esAdmin={false} onToast={onToast} nav={null} />);
+    await llegarAFormLutecio(user, "900014");
+    await user.selectOptions(labelInput("Lote de Lutecio-177 disponible"), "lote-lu-catch");
+    await user.type(labelInput("Dosis administrada (mCi)"), "1.5");
+    await user.click(screen.getByRole("button", { name: "Guardar registro" }));
+    await vi.waitFor(() => expect(onToast).toHaveBeenCalledWith(expect.stringContaining("ya fue administrado"), "error"), { timeout: 3000 });
+
+    await vi.waitFor(() => expect(llamadas).toBe(2));
+  });
+});
+
+// Punto 3 (Pablo): equivalentes de Lutecio-177 a los 7 tests de MIBG --
+// mismo hook, mismo wiring, misma clase de bug si algo se rompe.
+describe("TabPacientes -- picker de Lutecio-177: guardar bloqueado mientras carga (con lote ya elegido)", () => {
+  test("con un lote YA elegido: un recálculo nuevo en vuelo igual bloquea Guardar", async () => {
+    const mibgLotesMod = await import("../../services/firestore/mibgLotes.js");
+    let emitirLotes;
+    vi.spyOn(mibgLotesMod, "listenMibgLotes").mockImplementation((cb) => {
+      emitirLotes = cb;
+      cb([loteLutecioBase("lote-lu-elegido", "LU-ELEGIDO-1")]);
+      return () => {};
+    });
+    vi.spyOn(mibgLotesMod, "estadoPorLoteDosisUnica").mockImplementation(async (lotes) => {
+      if (!lotes.some((l) => l.id === "lote-lu-elegido")) return new Map();
+      if (lotes.length === 1) return new Map([["lote-lu-elegido", { estado: "disponible", uso: null, error: null }]]);
+      return new Promise(() => {}); // el conjunto cambió -- esta corrida queda en vuelo
+    });
+
+    const user = userEvent.setup();
+    render(<TabPacientes catalogo={catalogo} usuario={usuario} esAdmin={false} onToast={vi.fn()} nav={null} />);
+    await llegarAFormLutecio(user, "900009");
+    await user.selectOptions(labelInput("Lote de Lutecio-177 disponible"), "lote-lu-elegido");
+    await user.type(labelInput("Dosis administrada (mCi)"), "1.5");
+    expect(screen.getByRole("button", { name: "Guardar registro" }).disabled).toBe(false);
+
+    await act(async () => { emitirLotes([loteLutecioBase("lote-lu-elegido", "LU-ELEGIDO-1"), loteLutecioBase("lote-lu-nuevo", "LU-NUEVO-1")]); });
+
+    await screen.findByText("Verificando lotes…");
+    expect(screen.getByRole("button", { name: "Guardar registro" }).disabled).toBe(true);
+  });
+});
+
+describe("TabPacientes -- picker de Lutecio-177: la selección se limpia si el lote deja de estar disponible", () => {
+  // Mismo motivo que el test equivalente de MIBG -- leer .value del
+  // <select> no distingue "se limpió" de "quedó colgada" (el DOM resetea
+  // el value visual en los dos casos, por no matchear ninguna <option>).
+  // El chequeo real es el disabled de Guardar, con el resto del formulario
+  // ya completo ANTES de que el lote desaparezca.
+  test("el lote elegido desaparece del conjunto de candidatos -- Guardar se bloquea (la selección interna se limpió)", async () => {
+    const mibgLotesMod = await import("../../services/firestore/mibgLotes.js");
+    let emitirLotes;
+    vi.spyOn(mibgLotesMod, "listenMibgLotes").mockImplementation((cb) => {
+      emitirLotes = cb;
+      cb([loteLutecioBase("lote-lu-se-va", "LU-SEVA-1")]);
+      return () => {};
+    });
+
+    const user = userEvent.setup();
+    render(<TabPacientes catalogo={catalogo} usuario={usuario} esAdmin={false} onToast={vi.fn()} nav={null} />);
+    await llegarAFormLutecio(user, "900010");
+    await user.selectOptions(labelInput("Lote de Lutecio-177 disponible"), "lote-lu-se-va");
+    await user.type(labelInput("Dosis administrada (mCi)"), "1.5");
+    expect(screen.getByRole("button", { name: "Guardar registro" }).disabled).toBe(false);
+
+    await act(async () => { emitirLotes([]); });
+    await vi.waitFor(() => expect(screen.queryByText(/No hay lotes de Lutecio-177 disponibles/)).toBeTruthy());
+
+    await vi.waitFor(() => expect(screen.getByRole("button", { name: "Guardar registro" }).disabled).toBe(true));
+  });
+});
+
+describe("TabPacientes -- picker de Lutecio-177: lote usado que desaparece tras refrescar() (éxito)", () => {
+  test("tras guardar con éxito, el lote usado ya no se ofrece al reabrir el formulario", async () => {
+    const mibgLotesMod = await import("../../services/firestore/mibgLotes.js");
+    vi.spyOn(mibgLotesMod, "listenMibgLotes").mockImplementation((cb) => listenerCon(cb, [loteLutecioBase("lote-lu-refrescar", "LU-REFRESCAR-1")]));
+    let llamadasConEsteLote = 0;
+    vi.spyOn(mibgLotesMod, "estadoPorLoteDosisUnica").mockImplementation(async (lotes) => {
+      if (!lotes.some((l) => l.id === "lote-lu-refrescar")) return new Map();
+      llamadasConEsteLote++;
+      const estado = llamadasConEsteLote === 1 ? "disponible" : "usado";
+      return new Map([["lote-lu-refrescar", { estado, uso: estado === "usado" ? { pacienteNombre: "Otro Paciente" } : null, error: null }]]);
+    });
+    vi.spyOn(mibgLotesMod, "administrarLutecioTransaction").mockResolvedValue({});
+
+    const user = userEvent.setup();
+    const onToast = vi.fn();
+    render(<TabPacientes catalogo={catalogo} usuario={usuario} esAdmin={false} onToast={onToast} nav={null} />);
+    await llegarAFormLutecio(user, "900011");
+    await user.selectOptions(labelInput("Lote de Lutecio-177 disponible"), "lote-lu-refrescar");
+    await user.type(labelInput("Dosis administrada (mCi)"), "1.5");
+    await user.click(screen.getByRole("button", { name: "Guardar registro" }));
+    await vi.waitFor(() => expect(onToast).toHaveBeenCalledWith("Lutecio-177 registrado — consultalo en Libro 4"), { timeout: 3000 });
+    await vi.waitFor(() => expect(llamadasConEsteLote).toBe(2));
+
+    await llegarAFormLutecio(user, "900012");
+    await screen.findByText(/No hay lotes de Lutecio-177 disponibles/);
+    expect(screen.queryByText("LU-REFRESCAR-1")).toBeNull();
+  });
+});
+
+// Punto A (Pablo): admin con sedeAuditando distinta de usuario.sede -- los
+// pickers no lanzan ninguna lectura y muestran un único aviso fijo, sin Sel
+// ni "no hay lotes disponibles" (sería falso en este caso: no es que no
+// haya lotes, es que no se puede ofrecer ningún picker real para la sede de
+// trabajo mientras se está auditando otra).
+const usuarioAdminOtraSede = { ...usuario, sede: "central", sedeAuditando: "italiano" };
+
+describe("TabPacientes -- admin auditando sede distinta de la propia: picker MIBG", () => {
+  test("no lanza ninguna lectura puntual, muestra el aviso fijo, sin Sel ni 'no hay lotes'", async () => {
+    const mibgLotesMod = await import("../../services/firestore/mibgLotes.js");
+    vi.spyOn(mibgLotesMod, "listenMibgLotes").mockImplementation((cb) => listenerCon(cb, [loteMibgBase("lote-x", "X-1")]));
+    const espia = vi.spyOn(mibgLotesMod, "estadoPorLoteDosisUnica");
+
+    const user = userEvent.setup();
+    render(<TabPacientes catalogo={catalogo} usuario={usuarioAdminOtraSede} esAdmin={true} onToast={vi.fn()} nav={null} />);
+    await llegarAFormMibg(user, "900015");
+
+    expect(await screen.findByText(/Estás auditando/)).toBeTruthy();
+    expect(screen.queryByText("Lote de MIBG disponible")).toBeNull();
+    expect(screen.queryByText(/No hay lotes de MIBG disponibles/)).toBeNull();
+    expect(screen.queryByText("Verificando lotes…")).toBeNull();
+    for (const [lotesPasados] of espia.mock.calls) expect(lotesPasados).toEqual([]);
+  });
+});
+
+describe("TabPacientes -- admin auditando sede distinta de la propia: picker Lutecio-177", () => {
+  test("no lanza ninguna lectura puntual, muestra el aviso fijo, sin Sel ni 'no hay lotes'", async () => {
+    const mibgLotesMod = await import("../../services/firestore/mibgLotes.js");
+    vi.spyOn(mibgLotesMod, "listenMibgLotes").mockImplementation((cb) => listenerCon(cb, [loteLutecioBase("lote-y", "Y-1")]));
+    const espia = vi.spyOn(mibgLotesMod, "estadoPorLoteDosisUnica");
+
+    const user = userEvent.setup();
+    render(<TabPacientes catalogo={catalogo} usuario={usuarioAdminOtraSede} esAdmin={true} onToast={vi.fn()} nav={null} />);
+    await llegarAFormLutecio(user, "900017");
+
+    expect(await screen.findByText(/Estás auditando/)).toBeTruthy();
+    expect(screen.queryByText("Lote de Lutecio-177 disponible")).toBeNull();
+    expect(screen.queryByText(/No hay lotes de Lutecio-177 disponibles/)).toBeNull();
+    expect(screen.queryByText("Verificando lotes…")).toBeNull();
+    for (const [lotesPasados] of espia.mock.calls) expect(lotesPasados).toEqual([]);
+  });
+});
+
+}); // cierra "TabPacientes -- paso 5: picker MIBG/Lutecio con useLotesDisponibles"
