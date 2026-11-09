@@ -27,9 +27,19 @@ export function addMibgLote(data) {
 // client-side (nunca where("isotopoId","==",...)) -- un where de igualdad
 // no matchea los docs viejos de MIBG que no tienen el campo, así que
 // filtrar server-side los haría desaparecer del listado.
+//
+// data({ serverTimestamps: "estimate" }) -- sin esto, `fecha` (siempre
+// serverTimestamp(), ver addMibgLote) llega como `null` mientras la
+// escritura está pendiente de confirmar (la primera emisión del listener,
+// desde el caché local, ANTES del ack del servidor). Con "estimate", esa
+// primera emisión ya trae una fecha aproximada (el reloj local al momento
+// de escribir) en vez de null -- real para ESTE caso transitorio. No afecta
+// a lotesSinFecha/lotesDelMes (Libro 4): esas dos leen de lotesPorSede
+// (getDocs puntual, nunca ven un pending-write en la práctica), no de este
+// listener.
 export function listenMibgLotes(callback, { sedeId } = {}) {
   return onSnapshot(query(mibgLoteCol, where("sedeId", "==", sedeId)), (snap) => {
-    callback(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+    callback(snap.docs.map((d) => ({ id: d.id, ...d.data({ serverTimestamps: "estimate" }) })));
   });
 }
 

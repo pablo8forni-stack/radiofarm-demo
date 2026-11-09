@@ -117,13 +117,22 @@ export function loteVialYaExiste(lotes, { numeroLote, numeroVial, sedeId, anulac
   );
 }
 
-// ms desde epoch de l.fecha, o null si está ausente/pendiente/corrupto --
-// nunca NaN hacia afuera. l.fecha puede ser un Timestamp de Firestore
-// (.toDate()), un Date ya convertido (tests) o un string ISO; mientras la
-// escritura todavía no fue confirmada por el servidor, serverTimestamp()
-// (ver addMibgLote, mibgLotes.js) llega como null en el snapshot local --
-// eso NO es "sin fecha para siempre", es "más nuevo que cualquier fecha ya
-// confirmada", y ordenarLotesPorCarga de abajo lo trata así.
+// ms desde epoch de l.fecha, o null si está ausente/corrupto -- nunca NaN
+// hacia afuera. l.fecha puede ser un Timestamp de Firestore (.toDate()), un
+// Date ya convertido (tests) o un string ISO.
+//
+// null NO significa "recién guardado, pendiente de confirmar" -- eso ya no
+// puede pasar: listenMibgLotes (mibgLotes.js) lee con
+// `serverTimestamps: "estimate"`, así que una escritura en vuelo YA trae una
+// fecha estimada (no null) desde la primera emisión. Un null real acá es
+// dato VIEJO, permanentemente incompleto -- confirmado contra staging real
+// (9/11): 322 de 341 lotes de Lutecio-177 tenían `fecha` null de forma
+// permanente (numeroLote "TEST-xxxxxxxx", cargas de prueba viejas que nunca
+// pasaron por addMibgLote con éxito, o de antes de que este campo existiera)
+// -- con el criterio anterior ("null = más nuevo"), esos 322 ocupaban TODO
+// el techo del listado para siempre, y un lote real de hoy quedaba en la
+// posición 323. Por eso null/ausente/corrupta se trata como la fecha MÁS
+// VIEJA posible, no la más nueva.
 function fechaMs(l) {
   if (l.fecha == null) return null;
   const d = l.fecha?.toDate ? l.fecha.toDate() : new Date(l.fecha);
@@ -132,15 +141,12 @@ function fechaMs(l) {
 }
 
 // Orden de carga de TabLoteDosisUnica -- el último cargado primero (decisión
-// de Pablo, 9/11, tras ver en staging que dos lotes recién guardados
-// aparecían "más abajo": el sort anterior comparaba new Date(null), que en
-// JS da el epoch 1/1/1970 -- el lote recién guardado, con fecha todavía
-// pendiente, se ordenaba como el MÁS VIEJO posible en vez del más nuevo).
-// Función PURA y separada del componente para poder testearla sin React:
-// - fecha pendiente/ausente (fechaMs===null) va ARRIBA de todo -- es más
-//   nueva que cualquier fecha ya confirmada, no "sin dato".
+// de Pablo, 9/11). Función PURA y separada del componente para poder
+// testearla sin React:
+// - fecha null/ausente/corrupta (fechaMs===null) va AL FINAL de todo -- se
+//   trata como la más vieja, ver comentario de fechaMs arriba.
 // - entre dos fechas reales, la más reciente primero (descendente).
-// - empate (dos fechas pendientes entre sí, o dos timestamps iguales) se
+// - empate (dos nulls entre sí, o dos timestamps reales iguales) se
 //   desempata por id, siempre en el mismo sentido -- determinístico, para
 //   que el orden no salte de un render a otro con los mismos lotes.
 // Devuelve una copia -- nunca muta `lotes` (el array de estado del
@@ -149,8 +155,8 @@ export function ordenarLotesPorCarga(lotes) {
   return [...lotes].sort((a, b) => {
     const msA = fechaMs(a);
     const msB = fechaMs(b);
-    if (msA === null && msB !== null) return -1;
-    if (msB === null && msA !== null) return 1;
+    if (msA === null && msB !== null) return 1;
+    if (msB === null && msA !== null) return -1;
     if (msA !== null && msB !== null && msA !== msB) return msB - msA;
     return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
   });

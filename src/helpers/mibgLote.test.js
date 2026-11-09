@@ -298,6 +298,18 @@ describe("loteVialYaExiste", () => {
 // "más abajo" en vez de arriba -- el sort viejo comparaba new Date(null)
 // (fecha todavía pendiente de confirmar por el servidor), que da el epoch
 // 1/1/1970, no NaN -- el lote más nuevo se trataba como el más viejo.
+//
+// Premisa corregida el mismo 9/11, con datos reales de staging: "null =
+// recién guardado, pendiente" es FALSA para datos ya almacenados -- 322 de
+// 341 lotes de Lutecio-177 en staging tenían `fecha` null de forma
+// PERMANENTE (cargas de prueba viejas, numeroLote "TEST-xxxxxxxx"), no
+// transitoria. Con el criterio "null = más nuevo", esos 322 ocupaban todo el
+// techo del listado para siempre y un lote real de hoy quedaba en la
+// posición 323 de 341. Arreglo real: listenMibgLotes ahora lee con
+// `serverTimestamps: "estimate"` (mibgLotes.js) -- una escritura en vuelo ya
+// NUNCA llega como null, así que null null sólo puede ser dato viejo
+// incompleto, y ordenarLotesPorCarga lo manda al FINAL (el más viejo), no al
+// principio.
 describe("ordenarLotesPorCarga", () => {
   test("fechas reales distintas -- la más reciente primero", () => {
     const lotes = [
@@ -321,28 +333,44 @@ describe("ordenarLotesPorCarga", () => {
     expect(orden2).toEqual(orden1);
   });
 
-  test("fecha null/pendiente (serverTimestamp todavía sin confirmar) -- va ARRIBA de todo, no abajo ni como NaN", () => {
+  test("fecha null/ausente (dato viejo incompleto, NUNCA un pending-write real -- ver listenMibgLotes) -- va AL FINAL, no arriba ni como NaN", () => {
     const lotes = [
-      { id: "viejo", fecha: ts("2026-11-01T10:00:00") },
-      { id: "nuevo-pendiente", fecha: null },
-      { id: "otro-viejo", fecha: ts("2026-11-05T10:00:00") },
+      { id: "con-fecha-real", fecha: ts("2026-11-01T10:00:00") },
+      { id: "sin-fecha-1", fecha: null },
+      { id: "otro-con-fecha-real", fecha: ts("2026-11-05T10:00:00") },
     ];
-    expect(ordenarLotesPorCarga(lotes).map((l) => l.id)).toEqual(["nuevo-pendiente", "otro-viejo", "viejo"]);
+    expect(ordenarLotesPorCarga(lotes).map((l) => l.id)).toEqual(["otro-con-fecha-real", "con-fecha-real", "sin-fecha-1"]);
   });
 
-  test("lote sin campo fecha en absoluto (undefined, no null) -- mismo tratamiento, arriba", () => {
-    const lotes = [{ id: "viejo", fecha: ts("2026-11-01T10:00:00") }, { id: "sin-fecha" }];
-    expect(ordenarLotesPorCarga(lotes).map((l) => l.id)).toEqual(["sin-fecha", "viejo"]);
+  test("lote sin campo fecha en absoluto (undefined, no null) -- mismo tratamiento, al final", () => {
+    const lotes = [{ id: "con-fecha" }, { id: "sin-fecha-en-absoluto" }];
+    lotes[0].fecha = ts("2026-11-01T10:00:00");
+    expect(ordenarLotesPorCarga(lotes).map((l) => l.id)).toEqual(["con-fecha", "sin-fecha-en-absoluto"]);
   });
 
-  test("mezcla: varios con fecha real y uno pendiente -- el pendiente arriba, el resto por fecha descendente", () => {
+  test("fecha corrupta (no parseable, ej. string sin sentido) -- mismo tratamiento, al final", () => {
     const lotes = [
-      { id: "L1", fecha: ts("2026-11-01T10:00:00") },
-      { id: "pendiente", fecha: null },
-      { id: "L2", fecha: ts("2026-11-05T10:00:00") },
-      { id: "L3", fecha: ts("2026-11-03T10:00:00") },
+      { id: "con-fecha-real", fecha: ts("2026-11-01T10:00:00") },
+      { id: "fecha-corrupta", fecha: "no es una fecha" },
     ];
-    expect(ordenarLotesPorCarga(lotes).map((l) => l.id)).toEqual(["pendiente", "L2", "L3", "L1"]);
+    expect(ordenarLotesPorCarga(lotes).map((l) => l.id)).toEqual(["con-fecha-real", "fecha-corrupta"]);
+  });
+
+  test("mezcla real (caso staging 9/11): muchos lotes sin fecha + un lote real de HOY -- el de hoy aparece primero", () => {
+    const sinFecha = Array.from({ length: 10 }, (_, i) => ({ id: `TEST-sin-fecha-${i}`, fecha: null }));
+    const lotes = [
+      { id: "L1-viejo-real", fecha: ts("2026-10-01T10:00:00") },
+      ...sinFecha,
+      { id: "lote-de-hoy", fecha: ts("2026-11-09T14:05:01") },
+    ];
+    const orden = ordenarLotesPorCarga(lotes).map((l) => l.id);
+    expect(orden[0]).toBe("lote-de-hoy");
+    expect(orden.slice(-10)).toEqual(expect.arrayContaining(sinFecha.map((l) => l.id)));
+  });
+
+  test("desempate determinístico por id entre dos lotes AMBOS sin fecha", () => {
+    const lotes = [{ id: "zzz", fecha: null }, { id: "aaa", fecha: null }];
+    expect(ordenarLotesPorCarga(lotes).map((l) => l.id)).toEqual(["aaa", "zzz"]);
   });
 
   test("no muta el array recibido -- devuelve una copia", () => {
@@ -357,5 +385,15 @@ describe("ordenarLotesPorCarga", () => {
     const orden = ordenarLotesPorCarga(lotes).map((l) => l.id);
     expect(orden).not.toEqual(["L1", "L2"]); // si alguien invierte el sort, este assert lo detecta
     expect(orden).toEqual(["L2", "L1"]);
+  });
+
+  test("control de mutación: poner 'null arriba' (en vez de al final) rompe el test de null/ausente", () => {
+    const lotes = [
+      { id: "con-fecha-real", fecha: ts("2026-11-01T10:00:00") },
+      { id: "sin-fecha", fecha: null },
+    ];
+    const orden = ordenarLotesPorCarga(lotes).map((l) => l.id);
+    expect(orden).not.toEqual(["sin-fecha", "con-fecha-real"]); // "null arriba" -- el criterio viejo e incorrecto
+    expect(orden).toEqual(["con-fecha-real", "sin-fecha"]);
   });
 });

@@ -10,7 +10,7 @@ import {
   prepararFixturesGlobales, buscarLotePorNumero, buscarMovimientos, cerrarConexiones,
 } from "./fixtures.mjs";
 import { egresoTransaction, ingresoBatch, transferenciaTransaction } from "../../src/services/firestore/stock.js";
-import { addMibgLote, administrarMibgTransaction, administrarLutecioTransaction, usoActivoDeLote, estadoPorLoteDosisUnica, lotesDisponiblesParaAdministrar } from "../../src/services/firestore/mibgLotes.js";
+import { addMibgLote, administrarMibgTransaction, administrarLutecioTransaction, usoActivoDeLote, estadoPorLoteDosisUnica, lotesDisponiblesParaAdministrar, listenMibgLotes } from "../../src/services/firestore/mibgLotes.js";
 import { addActaPaciente, addActaI131Barrido, anularActaTransaction, anulacionesPorSede } from "../../src/services/firestore/actas.js";
 import { lotesDelMes } from "../../src/helpers/mibgLote.js";
 import { setSedeAuditando } from "../../src/services/auth.js";
@@ -872,4 +872,42 @@ test("disponiblesDesdeEstadoPorLote / lotesDisponiblesParaAdministrar: orden por
 
   const { disponibles } = await lotesDisponiblesParaAdministrar(lotes, { anulaciones: new Map(), prefijo: "lote_", hoyISO: hoy() });
   assert.deepEqual(disponibles.map((l) => l.fechaVencimiento), ["2027-01-01", "2027-02-01", "2027-03-01"]);
+});
+
+// Caso real de staging (9/11): la premisa "fecha null = recién guardado,
+// pendiente" resultó falsa para datos ya almacenados (322/341 lotes de
+// Lutecio-177 con fecha null PERMANENTE, nunca pending). El arreglo real fue
+// en listenMibgLotes (mibgLotes.js): leer con serverTimestamps:"estimate" --
+// este test confirma, contra el emulador real, que la PRIMERA emisión de un
+// lote recién escrito (todavía sin ack del servidor) ya trae una fecha
+// estimada, nunca null.
+test("listenMibgLotes: la primera emisión de un lote recién escrito (todavía sin confirmar por el servidor) NO trae fecha null", async () => {
+  await loguearComo(PERSONAS.admin);
+  const loteNum = loteDePrueba();
+
+  let unsub;
+  const primeraEmisionConElLote = new Promise((resolve, reject) => {
+    const timeoutId = setTimeout(() => reject(new Error("timeout esperando la primera emisión con el lote nuevo")), 10000);
+    unsub = listenMibgLotes((lotes) => {
+      const encontrado = lotes.find((l) => l.numeroLote === loteNum);
+      if (encontrado) { clearTimeout(timeoutId); resolve(encontrado); }
+    }, { sedeId: SEDE_A });
+  });
+
+  // SIN await -- a propósito: el listener ya está activo (arriba) antes de
+  // que la escritura exista siquiera, para poder observar la emisión desde
+  // el caché local (la escritura pendiente, previa al ack del servidor),
+  // que es justo lo que este test necesita capturar.
+  addMibgLote({
+    sedeId: SEDE_A, sedeNombre: NOMBRE_SEDE[SEDE_A], isotopoId: "lutecio177",
+    numeroLote: loteNum, proveedor: "Prueba", actividadCalibrada: 150, volumen: 10,
+    fechaHoraCalibracion: new Date(), fechaVencimiento: "2027-01-01", conformidad: true,
+    usuarioNombre: PERSONAS.admin.nombre, usuarioEmail: PERSONAS.admin.email, observacion: "",
+  });
+
+  const lote = await primeraEmisionConElLote;
+  unsub();
+
+  assert.notEqual(lote.fecha, null, "fecha no debería ser null en la primera emisión -- serverTimestamps:'estimate' tiene que devolver una fecha estimada");
+  assert.ok(lote.fecha, "fecha tiene que ser un valor truthy (Timestamp estimado), no null/undefined");
 });

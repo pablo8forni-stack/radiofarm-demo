@@ -353,23 +353,31 @@ describe("TabLoteDosisUnica -- orden de carga (el más nuevo arriba)", () => {
     expect(nombres).toEqual(["LOTE-NUEVO · Vial 2", "LOTE-MEDIO · Vial 3", "LOTE-VIEJO · Vial 1"]);
   });
 
-  test("un lote recién guardado con fecha null (serverTimestamp todavía sin confirmar) aparece primero, no al final", async () => {
+  // Premisa corregida el 9/11 con datos reales de staging: `fecha` null NO
+  // es "recién guardado, pendiente" -- eso ya no puede pasar (listenMibgLotes
+  // lee con serverTimestamps:"estimate", ver mibgLotes.js). Un null real es
+  // dato viejo incompleto -- 322 de 341 lotes de Lutecio-177 en staging
+  // (numeroLote "TEST-xxxxxxxx") tenían `fecha` null de forma PERMANENTE, y
+  // con el criterio viejo ("null arriba") ocupaban todo el techo del listado
+  // para siempre -- un lote real de hoy quedaba en la posición 323 de 341.
+  test("muchos lotes con fecha null (dato viejo incompleto, caso real de staging) + un lote reciente con fecha real -- el reciente aparece primero, los null quedan al final", async () => {
     const mibgLotesMod = await import("../../services/firestore/mibgLotes.js");
+    const viejosSinFecha = Array.from({ length: 8 }, (_, i) => ({
+      id: `test-sin-fecha-${i}`, sedeId: "central", isotopoId: "lutecio177", numeroLote: `TEST-${i}`, numeroVial: i + 1,
+      proveedor: "Prueba", actividadCalibrada: 150, volumen: 10, fechaHoraCalibracion: new Date("2026-09-23T00:00:00"),
+      fechaVencimiento: "2026-09-24", conformidad: true, usuarioNombre: "Admin", fecha: null,
+    }));
     vi.spyOn(mibgLotesMod, "listenMibgLotes").mockImplementation((cb) => listenerCon(cb, [
-      { id: "ya-existia", sedeId: "central", isotopoId: "lutecio177", numeroLote: "LOTE-EXISTENTE", numeroVial: 1,
-        proveedor: "Tecnonuclear", actividadCalibrada: 150, volumen: 10, fechaHoraCalibracion: new Date("2026-11-08T10:00:00"),
-        fechaVencimiento: "2026-11-09", conformidad: true, usuarioNombre: "Técnica Test", fecha: new Date("2026-11-08T10:00:00") },
-      // fecha: null -- exactamente lo que entrega el onSnapshot en vivo
-      // mientras el serverTimestamp() de addMibgLote todavía no fue
-      // confirmado por el servidor (ver addMibgLote, mibgLotes.js).
-      { id: "recien-guardado", sedeId: "central", isotopoId: "lutecio177", numeroLote: "LOTE-RECIEN", numeroVial: 2,
+      ...viejosSinFecha,
+      { id: "lote-de-hoy", sedeId: "central", isotopoId: "lutecio177", numeroLote: "LOTE-DE-HOY", numeroVial: 99,
         proveedor: "Tecnonuclear", actividadCalibrada: 150, volumen: 10, fechaHoraCalibracion: new Date("2026-11-09T10:00:00"),
-        fechaVencimiento: "2026-11-10", conformidad: true, usuarioNombre: "Técnica Test", fecha: null },
+        fechaVencimiento: "2026-11-10", conformidad: true, usuarioNombre: "Técnica Test", fecha: new Date("2026-11-09T14:05:01") },
     ]));
 
     render(<TabLoteDosisUnica catalogo={catalogo} usuario={usuario} esAdmin={false} onToast={vi.fn()} isotopoId="lutecio177" titulo="Lutecio-177" descripcion="" placeholderLote="LPS..." />);
 
-    const nombres = (await screen.findAllByText(/^LOTE-/)).map((el) => el.textContent);
-    expect(nombres).toEqual(["LOTE-RECIEN · Vial 2", "LOTE-EXISTENTE · Vial 1"]);
+    const nombres = (await screen.findAllByText(/^(LOTE-DE-HOY|TEST-)/)).map((el) => el.textContent);
+    expect(nombres[0]).toBe("LOTE-DE-HOY · Vial 99");
+    expect(nombres.slice(1)).toEqual(expect.arrayContaining(viejosSinFecha.map((l) => `${l.numeroLote} · Vial ${l.numeroVial}`)));
   });
 });
