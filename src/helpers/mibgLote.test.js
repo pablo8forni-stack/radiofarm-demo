@@ -1,5 +1,5 @@
 import { describe, test, expect } from "vitest";
-import { estadoMibgLote, lotesDelMes, lotesSinFecha, avisoLotesSinFecha, normalizarNumeroLoteDosisUnica, loteVialYaExiste, numeroVialEsEnteroPositivo, ordenarLotesPorCarga } from "./mibgLote.js";
+import { estadoMibgLote, lotesDelMes, lotesSinFecha, avisoLotesSinFecha, normalizarNumeroLoteDosisUnica, loteVialYaExiste, numeroVialEsEnteroPositivo, ordenarLotesPorCarga, calibracionEsFutura } from "./mibgLote.js";
 
 const ts = (iso) => ({ toDate: () => new Date(iso) });
 
@@ -77,7 +77,14 @@ describe("lotesDelMes", () => {
       const lotes = [{ id: "L1", fecha: { toDate: () => new Date("2026-11-01T02:30:00.000Z") } }];
       expect(lotesDelMes(lotes, MES_OCTUBRE).map((l) => l.id)).toEqual(["L1"]);
     } finally {
-      process.env.TZ = tzOriginal;
+      // process.env.TZ = undefined NO lo borra -- Node coacciona a la
+      // string literal "undefined" (ningún TZ real), y los tests de fecha
+      // que corren después en el mismo proceso quedan en UTC en vez de la
+      // zona real de la máquina -- bug real encontrado armando
+      // calibracionEsFutura (pasaba aislado, fallaba en la suite completa
+      // por esto mismo).
+      if (tzOriginal === undefined) delete process.env.TZ;
+      else process.env.TZ = tzOriginal;
     }
   });
 
@@ -395,5 +402,58 @@ describe("ordenarLotesPorCarga", () => {
     const orden = ordenarLotesPorCarga(lotes).map((l) => l.id);
     expect(orden).not.toEqual(["sin-fecha", "con-fecha-real"]); // "null arriba" -- el criterio viejo e incorrecto
     expect(orden).toEqual(["con-fecha-real", "sin-fecha"]);
+  });
+});
+
+describe("calibracionEsFutura", () => {
+  const ahora = new Date("2026-11-09T12:00:00");
+
+  test("justo en el margen (+5min exacto) -- todavía NO es futura", () => {
+    expect(calibracionEsFutura("2026-11-09T12:05:00", ahora, 5)).toBe(false);
+  });
+
+  test("1 minuto más allá del margen (+6min) -- SÍ es futura", () => {
+    expect(calibracionEsFutura("2026-11-09T12:06:00", ahora, 5)).toBe(true);
+  });
+
+  test("fecha claramente futura (+2 horas) -- futura", () => {
+    expect(calibracionEsFutura("2026-11-09T14:00:00", ahora, 5)).toBe(true);
+  });
+
+  test("fecha claramente pasada (-2 horas) -- no futura", () => {
+    expect(calibracionEsFutura("2026-11-09T10:00:00", ahora, 5)).toBe(false);
+  });
+
+  test("exactamente 'ahora' -- no futura", () => {
+    expect(calibracionEsFutura("2026-11-09T12:00:00", ahora, 5)).toBe(false);
+  });
+
+  test("vacío ('') -- false, nunca avisa sobre un campo sin completar", () => {
+    expect(calibracionEsFutura("", ahora, 5)).toBe(false);
+  });
+
+  test("null/undefined -- false", () => {
+    expect(calibracionEsFutura(null, ahora, 5)).toBe(false);
+    expect(calibracionEsFutura(undefined, ahora, 5)).toBe(false);
+  });
+
+  test("inválido (string sin sentido, no parseable) -- false, no NaN hacia afuera", () => {
+    expect(calibracionEsFutura("no es una fecha", ahora, 5)).toBe(false);
+  });
+
+  test("margen por defecto (sin pasar margenMin) -- usa 5", () => {
+    expect(calibracionEsFutura("2026-11-09T12:04:00", ahora)).toBe(false); // +4min, dentro del margen default
+    expect(calibracionEsFutura("2026-11-09T12:06:00", ahora)).toBe(true); // +6min, fuera del margen default
+  });
+
+  test("control de mutación: comparar sin el margen (> ahora directo) rompe el caso 'justo en el margen'", () => {
+    const sinMargen = (fecha, ahoraRef) => {
+      if (!fecha) return false;
+      const d = new Date(fecha);
+      if (Number.isNaN(d.getTime())) return false;
+      return d.getTime() > ahoraRef.getTime(); // mutación: ignora margenMin
+    };
+    // +5min ya sería "futura" sin margen -- distinto del resultado real (false).
+    expect(sinMargen("2026-11-09T12:05:00", ahora)).not.toBe(calibracionEsFutura("2026-11-09T12:05:00", ahora, 5));
   });
 });

@@ -381,3 +381,55 @@ describe("TabLoteDosisUnica -- orden de carga (el más nuevo arriba)", () => {
     expect(nombres.slice(1)).toEqual(expect.arrayContaining(viejosSinFecha.map((l) => `${l.numeroLote} · Vial ${l.numeroVial}`)));
   });
 });
+
+// Calibración futura (regla de negocio de Pablo, 9/11): aviso NO bloqueante.
+// Fechas SIEMPRE relativas a "ahora" (+2h/-2h) -- nunca fijas, para que el
+// test no se rompa solo con el correr del calendario. +-2h está muy por
+// encima de cualquier margen de tolerancia (5min) y de cualquier demora
+// real de ejecución del test, así que no hace falta pisar el reloj.
+function aDatetimeLocal(d) {
+  const y = d.getFullYear(), m = String(d.getMonth() + 1).padStart(2, "0"), day = String(d.getDate()).padStart(2, "0");
+  const h = String(d.getHours()).padStart(2, "0"), min = String(d.getMinutes()).padStart(2, "0");
+  return `${y}-${m}-${day}T${h}:${min}`;
+}
+const AVISO_CALIBRACION_FUTURA = /La fecha\/hora de calibración es posterior a este momento/;
+
+describe("TabLoteDosisUnica -- aviso de calibración futura (no bloqueante)", () => {
+  test("Lutecio-177: calibración +2h en el futuro -- aviso visible, Guardar sigue habilitado", async () => {
+    const user = userEvent.setup();
+    const futura = aDatetimeLocal(new Date(Date.now() + 2 * 60 * 60 * 1000));
+    render(<TabLoteDosisUnica catalogo={catalogo} usuario={usuario} esAdmin={false} onToast={vi.fn()} isotopoId="lutecio177" titulo="Lutecio-177" descripcion="" placeholderLote="LPS..." />);
+    await user.click(screen.getByRole("button", { name: "+ Registrar lote nuevo" }));
+    await user.type(labelInput("N° de lote"), "LPS261101E-25");
+    await user.type(labelInput("Proveedor"), "Tecnonuclear");
+    await user.type(labelInput("Actividad calibrada (mCi)"), "150");
+    await user.type(labelInput("Volumen (mL)"), "10");
+    await user.type(labelInput("Fecha/hora de calibración"), futura);
+    await user.type(labelInput("Fecha de vencimiento"), "2027-01-01");
+    await user.click(screen.getByRole("button", { name: "Sí, conforme" }));
+    await user.type(labelInput("N° de vial"), "5");
+
+    expect(screen.getByText(AVISO_CALIBRACION_FUTURA)).toBeTruthy();
+    expect(botonGuardar().disabled).toBe(false);
+  });
+
+  test("Lutecio-177: calibración -2h en el pasado -- sin aviso", async () => {
+    const user = userEvent.setup();
+    const pasada = aDatetimeLocal(new Date(Date.now() - 2 * 60 * 60 * 1000));
+    render(<TabLoteDosisUnica catalogo={catalogo} usuario={usuario} esAdmin={false} onToast={vi.fn()} isotopoId="lutecio177" titulo="Lutecio-177" descripcion="" placeholderLote="LPS..." />);
+    await user.click(screen.getByRole("button", { name: "+ Registrar lote nuevo" }));
+    await user.type(labelInput("Fecha/hora de calibración"), pasada);
+
+    expect(screen.queryByText(AVISO_CALIBRACION_FUTURA)).toBeNull();
+  });
+
+  test("MIBG: calibración +2h en el futuro -- mismo aviso (componente compartido)", async () => {
+    const user = userEvent.setup();
+    const futura = aDatetimeLocal(new Date(Date.now() + 2 * 60 * 60 * 1000));
+    render(<TabLoteDosisUnica catalogo={catalogo} usuario={usuario} esAdmin={false} onToast={vi.fn()} isotopoId="mibg" titulo="MIBG" descripcion="" placeholderLote="123-45678" />);
+    await user.click(screen.getByRole("button", { name: "+ Registrar lote nuevo" }));
+    await user.type(labelInput("Fecha/hora de calibración"), futura);
+
+    expect(screen.getByText(AVISO_CALIBRACION_FUTURA)).toBeTruthy();
+  });
+});

@@ -18,7 +18,12 @@ describe("hoy() -- fecha LOCAL (Mendoza), nunca por toISOString/UTC", () => {
       expect(hoy()).toBe("2026-11-07");
     } finally {
       vi.useRealTimers();
-      process.env.TZ = tzOriginal;
+      // process.env.TZ = undefined NO lo borra -- Node coacciona a la
+      // string literal "undefined" (ningún TZ real), y los tests de fecha
+      // que corran después en el mismo proceso quedan en UTC en vez de la
+      // zona real de la máquina.
+      if (tzOriginal === undefined) delete process.env.TZ;
+      else process.env.TZ = tzOriginal;
     }
   });
 
@@ -36,7 +41,9 @@ describe("hoy() -- fecha LOCAL (Mendoza), nunca por toISOString/UTC", () => {
       expect(new Date(2026, 10, 7, 21, 1, 0).toISOString().slice(0, 10)).toBe("2026-11-08");
     } finally {
       vi.useRealTimers();
-      process.env.TZ = tzOriginal;
+      // Ver comentario equivalente en el test de arriba.
+      if (tzOriginal === undefined) delete process.env.TZ;
+      else process.env.TZ = tzOriginal;
     }
   });
 });

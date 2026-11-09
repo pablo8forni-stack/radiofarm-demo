@@ -8,7 +8,7 @@ import { ModalAnularActa } from "../../components/actas/ModalAnularActa.jsx";
 import { fmtF, fmtTs } from "../../helpers/formato.js";
 import { listenActas, anularActaTransaction, listenAnulacionesActas } from "../../services/firestore/actas.js";
 import { addMibgLote, listenMibgLotes } from "../../services/firestore/mibgLotes.js";
-import { estadoMibgLote, normalizarNumeroLoteDosisUnica, loteVialYaExiste, numeroVialEsEnteroPositivo, ordenarLotesPorCarga } from "../../helpers/mibgLote.js";
+import { estadoMibgLote, normalizarNumeroLoteDosisUnica, loteVialYaExiste, numeroVialEsEnteroPositivo, ordenarLotesPorCarga, calibracionEsFutura } from "../../helpers/mibgLote.js";
 import { actividadCalibradaHaciaAtras } from "../../helpers/decaimientoLu177.js";
 
 // concentracionCalibracion/actividadAdministracion/fechaHoraAdministracion y
@@ -198,6 +198,18 @@ export function TabLoteDosisUnica({ catalogo, usuario, esAdmin, onToast, isotopo
   const actividadCalibradaInvalida = form.actividadCalibrada !== "" && !(parseFloat(form.actividadCalibrada) > 0);
   const volumenInvalido = form.volumen !== "" && !(parseFloat(form.volumen) > 0);
 
+  // Aviso NO bloqueante (regla de negocio de Pablo) -- una calibración
+  // posterior a este momento es casi seguro un error de tipeo, pero nunca
+  // bloquea "Guardar lote": si hace falta corregirla después, se anula el
+  // lote (igual que cualquier otro dato mal cargado acá). calibracionEsFutura
+  // es pura y testeada aparte (helpers/mibgLote.js) -- acá sólo se le pasa
+  // "ahora" en cada render, no hay reloj que mantener vivo mientras el
+  // formulario está abierto sin tocar este campo.
+  const calibracionFutura = useMemo(
+    () => calibracionEsFutura(form.fechaHoraCalibracion, new Date()),
+    [form.fechaHoraCalibracion]
+  );
+
   async function guardar() {
     if (!form.numeroLote.trim() || !form.proveedor.trim() || !form.actividadCalibrada || !form.volumen || !form.fechaHoraCalibracion || !form.fechaVencimiento) return;
     if (form.conformidad === null) return;
@@ -287,6 +299,17 @@ export function TabLoteDosisUnica({ catalogo, usuario, esAdmin, onToast, isotopo
               onChange={(e) => setForm((f) => ({ ...f, actividadCalibrada: e.target.value, calibradaTocada: true }))} placeholder={placeholderActividad} />
             <Input label="Volumen (mL)" type="number" min={0} step={0.1} value={form.volumen} onChange={(e) => setForm((f) => ({ ...f, volumen: e.target.value }))} placeholder="10" />
             <Input label="Fecha/hora de calibración" type="datetime-local" value={form.fechaHoraCalibracion} onChange={(e) => setForm((f) => ({ ...f, fechaHoraCalibracion: e.target.value }))} />
+            {/* Dentro del grid, junto al campo (no al final del formulario
+                con los demás avisos) -- se ve mientras se está tipeando la
+                calibración, no después de llenar todo lo demás. sm:col-span-2
+                para que no compita por la mitad de fila con "Fecha de
+                vencimiento": empuja ese campo a la fila siguiente sólo
+                mientras el aviso está visible. */}
+            {calibracionFutura && (
+              <div className="sm:col-span-2 -mt-1 text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-1.5">
+                La fecha/hora de calibración es posterior a este momento. Revisá que sea correcta; podés guardar igual.
+              </div>
+            )}
             <Input label="Fecha de vencimiento" type="date" value={form.fechaVencimiento} onChange={(e) => setForm((f) => ({ ...f, fechaVencimiento: e.target.value }))} />
           </div>
           {!numeroVialEsValido && (

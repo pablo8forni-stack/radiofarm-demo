@@ -117,6 +117,25 @@ export function loteVialYaExiste(lotes, { numeroLote, numeroVial, sedeId, anulac
   );
 }
 
+// Aviso (NO bloqueante, regla de negocio de Pablo) -- una calibración
+// posterior a "ahora" es casi seguro un error de tipeo, pero nunca bloquea
+// "Guardar lote": si hace falta corregirla después, se anula el lote (ver
+// TabLoteDosisUnica.jsx). `ahora` llega como parámetro (nunca `new Date()`
+// adentro) para que esta función quede pura en el tiempo, testeable sin
+// mockear relojes -- mismo criterio que hoyISO en estadoPorLoteDosisUnica.
+// margenMin=5: tolerancia técnica por reloj de equipo desincronizado (valor
+// propuesto, no una medición -- ajustable si en la práctica da falsos
+// avisos o deja pasar errores reales). Límite estrictamente mayor: justo en
+// el margen todavía NO es "futura"; un minuto más allá, sí.
+// fechaHoraCalibracion vacía/inválida -> false (nunca avisa sobre un campo
+// que ni siquiera se completó, o que no se pudo interpretar como fecha).
+export function calibracionEsFutura(fechaHoraCalibracion, ahora, margenMin = 5) {
+  if (!fechaHoraCalibracion) return false;
+  const d = new Date(fechaHoraCalibracion);
+  if (Number.isNaN(d.getTime())) return false;
+  return d.getTime() > ahora.getTime() + margenMin * 60 * 1000;
+}
+
 // ms desde epoch de l.fecha, o null si está ausente/corrupto -- nunca NaN
 // hacia afuera. l.fecha puede ser un Timestamp de Firestore (.toDate()), un
 // Date ya convertido (tests) o un string ISO.
