@@ -101,6 +101,70 @@ export async function usoActivoDeLote(loteId, { prefijo, anulaciones }) {
   return null;
 }
 
+// Estado real de CADA lote de dosis única (MIBG o Lutecio-177) -- "anulado"/
+// "sin-vencimiento"/"vencido" se resuelven LOCALMENTE primero, sin ninguna
+// lectura (anulaciones y fechaVencimiento ya están en memoria) -- sólo los
+// que sobreviven ese filtro (inventario vivo real, no todo el histórico
+// acumulado) pagan el costo de usoActivoDeLote. Esto es lo que evita el
+// N+1 real: nunca se hacen lecturas puntuales de más de los candidatos que
+// de verdad podrían estar disponibles.
+//
+// hoyISO: STRING "YYYY-MM-DD" de fecha LOCAL (ver hoy(), helpers/formato.js
+// -- nunca toISOString(), que convierte a UTC antes de recortar y corre el
+// día después de las 21:00 en Argentina). Lo arma el llamador (nunca
+// `new Date()` acá adentro) para que esta función sea pura en el tiempo:
+// testeable sin pisar el reloj del sistema.
+//
+// Vencido = INCLUSIVE desde el día del EXP (decisión de Pablo, 4/11): el
+// lote deja de estar disponible EL MISMO día de su fechaVencimiento, no al
+// día siguiente -- por eso la comparación es `<= hoyISO`, no `< hoyISO`.
+//
+// "no-verificable": usoActivoDeLote puede rechazar con permission-denied
+// real si sedeAuditando (admin) no coincide con la sede de la acta de uso
+// -- confirmado contra el emulador real, no inferido (ver transacciones.
+// test.mjs). FALLA CERRADO a propósito: ese lote NUNCA cae en "disponible"
+// por default, se marca aparte para que el llamador avise, no lo oferte.
+export async function estadoPorLoteDosisUnica(lotes, { anulaciones, prefijo, hoyISO }) {
+  const estadoPorLoteId = new Map();
+  const porVerificarUso = [];
+  for (const l of lotes) {
+    if (anulaciones.has(l.id)) { estadoPorLoteId.set(l.id, { estado: "anulado", uso: null, error: null }); continue; }
+    if (!l.fechaVencimiento) { estadoPorLoteId.set(l.id, { estado: "sin-vencimiento", uso: null, error: null }); continue; }
+    if (l.fechaVencimiento <= hoyISO) { estadoPorLoteId.set(l.id, { estado: "vencido", uso: null, error: null }); continue; }
+    porVerificarUso.push(l);
+  }
+
+  const resultados = await Promise.allSettled(porVerificarUso.map((l) => usoActivoDeLote(l.id, { prefijo, anulaciones })));
+  porVerificarUso.forEach((l, i) => {
+    const r = resultados[i];
+    if (r.status === "rejected") { estadoPorLoteId.set(l.id, { estado: "no-verificable", uso: null, error: r.reason }); return; }
+    estadoPorLoteId.set(l.id, r.value ? { estado: "usado", uso: r.value, error: null } : { estado: "disponible", uso: null, error: null });
+  });
+  return estadoPorLoteId;
+}
+
+// Vista "sólo disponibles" sobre estadoPorLoteDosisUnica -- sin ninguna
+// lectura nueva, es pura derivación en memoria. Orden: el que vence antes,
+// primero (decisión de Pablo).
+export function disponiblesDesdeEstadoPorLote(lotes, estadoPorLoteId) {
+  return lotes
+    .filter((l) => estadoPorLoteId.get(l.id)?.estado === "disponible")
+    .sort((a, b) => (a.fechaVencimiento || "").localeCompare(b.fechaVencimiento || ""));
+}
+
+// Helper de conveniencia para quien sólo necesita la lista de disponibles
+// (TabPacientes.jsx) -- TabLoteDosisUnica.jsx, que necesita el estado de
+// CADA lote (no sólo los disponibles), usa estadoPorLoteDosisUnica directo.
+// Una sola corrida de lecturas puntuales por llamada -- nunca dos.
+export async function lotesDisponiblesParaAdministrar(lotes, { anulaciones, prefijo, hoyISO }) {
+  const estadoPorLoteId = await estadoPorLoteDosisUnica(lotes, { anulaciones, prefijo, hoyISO });
+  return {
+    disponibles: disponiblesDesdeEstadoPorLote(lotes, estadoPorLoteId),
+    sinVencimiento: lotes.filter((l) => estadoPorLoteId.get(l.id)?.estado === "sin-vencimiento"),
+    noVerificables: lotes.filter((l) => estadoPorLoteId.get(l.id)?.estado === "no-verificable"),
+  };
+}
+
 function administrarLoteDosisUnicaTransaction(loteId, dataActa, { prefijo, tipo, campoLoteId }) {
   const loteRef = doc(mibgLoteCol, loteId);
   const anulaLoteRef = doc(actasCol, `anula_${loteId}`);

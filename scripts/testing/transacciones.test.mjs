@@ -3,17 +3,18 @@
 // lote). Ejercita directamente las funciones reales de src/services/firestore/stock.js.
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { doc, getDoc } from "firebase/firestore";
+import { collection, doc, getDoc, getDocs, query, where } from "firebase/firestore";
 import {
   PERSONAS, SEDE_A, SEDE_B, FARM_ID, db,
   loguearComo, crearLoteDirecto, borrarLote, loteDePrueba, fichaDePrueba,
   prepararFixturesGlobales, buscarLotePorNumero, buscarMovimientos, cerrarConexiones,
 } from "./fixtures.mjs";
 import { egresoTransaction, ingresoBatch, transferenciaTransaction } from "../../src/services/firestore/stock.js";
-import { addMibgLote, administrarMibgTransaction, administrarLutecioTransaction, usoActivoDeLote } from "../../src/services/firestore/mibgLotes.js";
+import { addMibgLote, administrarMibgTransaction, administrarLutecioTransaction, usoActivoDeLote, estadoPorLoteDosisUnica, lotesDisponiblesParaAdministrar } from "../../src/services/firestore/mibgLotes.js";
 import { addActaPaciente, addActaI131Barrido, anularActaTransaction, anulacionesPorSede } from "../../src/services/firestore/actas.js";
 import { lotesDelMes } from "../../src/helpers/mibgLote.js";
 import { setSedeAuditando } from "../../src/services/auth.js";
+import { hoy } from "../../src/helpers/formato.js";
 import { FARMS_DEFAULT } from "../../src/constants/farmsSeed.js";
 import { uid } from "../../src/helpers/id.js";
 
@@ -613,4 +614,262 @@ test("Libro 4 -- pipeline real: lote de este mes con uso activo sale 'usado', co
   }
   assert.ok(usoPorLoteId.has(loteRef.id));
   assert.equal(usoPorLoteId.get(loteRef.id).pacienteNombre, "Paciente Test Pipeline");
+});
+
+// ===========================================================================
+// estadoPorLoteDosisUnica / lotesDisponiblesParaAdministrar (4/11, plan del
+// selector de lote disponible) -- TODOS estos tests corren contra el
+// emulador REAL (escrituras/lecturas reales), nunca con un Map armado a
+// mano, como pidió Pablo explícitamente. Helper chico para no repetir
+// anulacionesPorSede+Map en cada test.
+// ===========================================================================
+async function anulacionesComoMapa(sedeId) {
+  return new Map((await anulacionesPorSede(sedeId)).map((a) => [a.anulaId, a]));
+}
+
+// Reproduce EXACTAMENTE el caso real (lote de septiembre reapareciendo en
+// noviembre) con el código NUEVO -- a diferencia del selector viejo
+// (listenActas con limit 150), usoActivoDeLote es un lookup puntual por id,
+// nunca una query de colección, así que el ruido de otras actas no puede
+// empujarlo fuera de ninguna ventana. Mismas 160 actas que la reproducción
+// del límite de 150 (confirmada antes, con el selector VIEJO, como bug
+// real) -- acá se prueba que el helper NUEVO no lo reproduce.
+test("estadoPorLoteDosisUnica: lote usado + 160 actas 'paciente' MÁS NUEVAS -- NO aparece disponible (el bug del límite 150 queda resuelto)", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  const numeroLote = `SELECTOR150-${Date.now()}`;
+  const loteRef = await addMibgLote({
+    sedeId: SEDE_A, sedeNombre: "FUESMEN Central", isotopoId: "lutecio177",
+    numeroLote, proveedor: "Tecnonuclear", actividadCalibrada: 150, volumen: 10,
+    fechaHoraCalibracion: new Date(), fechaVencimiento: "2027-06-01", conformidad: true,
+    usuarioNombre: PERSONAS.tecnicoA.nombre, usuarioEmail: PERSONAS.tecnicoA.email, observacion: "",
+  });
+  await administrarLutecioTransaction(loteRef.id, {
+    sedeId: SEDE_A, sedeNombre: "FUESMEN Central",
+    pacienteFicha: fichaDePrueba(), pacienteNombre: "Paciente Selector 150", pacienteDni: "1",
+    peso: 70, talla: 170, mciAdministrados: 140, actividadCalibrada: 150,
+    isotopoId: "lu177", lote: numeroLote, medicoResponsable: "Dr. Test",
+    usuarioNombre: PERSONAS.tecnicoA.nombre, usuarioEmail: PERSONAS.tecnicoA.email, observacion: "",
+  });
+
+  const base = Date.now();
+  for (let i = 0; i < 160; i++) {
+    await addActaPaciente({
+      sedeId: SEDE_A, sedeNombre: "FUESMEN Central",
+      pacienteFicha: `${base}${String(i).padStart(4, "0")}`.slice(-15), fichaIntentoNro: "1",
+      pacienteNombre: `Paciente Ruido Selector ${i}`, pacienteDni: `${91000000 + i}`,
+      isotopoId: "tc99m", sinRadiofarmaco: true, mciAdministrados: 10,
+      usuarioNombre: PERSONAS.tecnicoA.nombre, usuarioEmail: PERSONAS.tecnicoA.email, observacion: "",
+    });
+  }
+
+  const anulaciones = await anulacionesComoMapa(SEDE_A);
+  const { disponibles } = await lotesDisponiblesParaAdministrar([{ id: loteRef.id, fechaVencimiento: "2027-06-01" }], { anulaciones, prefijo: "lote_", hoyISO: hoy() });
+  assert.equal(disponibles.length, 0, "el lote usado NO debería aparecer disponible, con o sin 160 actas de ruido de por medio");
+});
+
+test("estadoPorLoteDosisUnica: uso ANULADO -- el lote reaparece como disponible (flujo de corrección)", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  const numeroLote = `SELECTOR-ANULUSO-${Date.now()}`;
+  const loteRef = await addMibgLote({
+    sedeId: SEDE_A, sedeNombre: "FUESMEN Central", isotopoId: "lutecio177",
+    numeroLote, proveedor: "Tecnonuclear", actividadCalibrada: 150, volumen: 10,
+    fechaHoraCalibracion: new Date(), fechaVencimiento: "2027-06-01", conformidad: true,
+    usuarioNombre: PERSONAS.tecnicoA.nombre, usuarioEmail: PERSONAS.tecnicoA.email, observacion: "",
+  });
+  await administrarLutecioTransaction(loteRef.id, {
+    sedeId: SEDE_A, sedeNombre: "FUESMEN Central",
+    pacienteFicha: fichaDePrueba(), pacienteNombre: "Paciente Selector Anulado", pacienteDni: "2",
+    peso: 70, talla: 170, mciAdministrados: 140, actividadCalibrada: 150,
+    isotopoId: "lu177", lote: numeroLote, medicoResponsable: "Dr. Test",
+    usuarioNombre: PERSONAS.tecnicoA.nombre, usuarioEmail: PERSONAS.tecnicoA.email, observacion: "",
+  });
+  const usoId = `lote_${loteRef.id}_1`;
+  const usoSnap = await getDoc(doc(db, "actas", usoId));
+  await loguearComo(PERSONAS.admin);
+  await setSedeAuditando(PERSONAS.admin.email, SEDE_A);
+  await anularActaTransaction({ id: usoId, ...usoSnap.data() }, "Error de carga", PERSONAS.admin);
+
+  const anulaciones = await anulacionesComoMapa(SEDE_A);
+  const { disponibles } = await lotesDisponiblesParaAdministrar([{ id: loteRef.id, fechaVencimiento: "2027-06-01" }], { anulaciones, prefijo: "lote_", hoyISO: hoy() });
+  assert.deepEqual(disponibles.map((l) => l.id), [loteRef.id], "con el uso anulado, el lote tiene que volver a estar disponible");
+});
+
+test("estadoPorLoteDosisUnica: lote ANULADO (no la administración) -- nunca disponible", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  const numeroLote = `SELECTOR-ANULOTE-${Date.now()}`;
+  const loteRef = await addMibgLote({
+    sedeId: SEDE_A, sedeNombre: "FUESMEN Central", isotopoId: "lutecio177",
+    numeroLote, proveedor: "Tecnonuclear", actividadCalibrada: 150, volumen: 10,
+    fechaHoraCalibracion: new Date(), fechaVencimiento: "2027-06-01", conformidad: true,
+    usuarioNombre: PERSONAS.tecnicoA.nombre, usuarioEmail: PERSONAS.tecnicoA.email, observacion: "",
+  });
+  await loguearComo(PERSONAS.admin);
+  await setSedeAuditando(PERSONAS.admin.email, SEDE_A);
+  await anularActaTransaction({ id: loteRef.id, sedeId: SEDE_A }, "Lote mal cargado", PERSONAS.admin);
+
+  const anulaciones = await anulacionesComoMapa(SEDE_A);
+  const estado = await estadoPorLoteDosisUnica([{ id: loteRef.id, fechaVencimiento: "2027-06-01" }], { anulaciones, prefijo: "lote_", hoyISO: hoy() });
+  assert.equal(estado.get(loteRef.id).estado, "anulado");
+});
+
+test("estadoPorLoteDosisUnica: vencido INCLUSIVE desde el día del EXP -- no disponible; vence mañana -- sí disponible", async () => {
+  const anulaciones = new Map();
+  const hoyISO = hoy();
+  const manana = new Date(); manana.setDate(manana.getDate() + 1);
+  const mananaISO = `${manana.getFullYear()}-${String(manana.getMonth() + 1).padStart(2, "0")}-${String(manana.getDate()).padStart(2, "0")}`;
+
+  const estado = await estadoPorLoteDosisUnica(
+    [
+      { id: "vence-hoy", fechaVencimiento: hoyISO },
+      { id: "vence-mañana", fechaVencimiento: mananaISO },
+    ],
+    { anulaciones, prefijo: "lote_", hoyISO }
+  );
+  assert.equal(estado.get("vence-hoy").estado, "vencido", "vence HOY mismo -- ya no disponible, inclusive");
+  assert.equal(estado.get("vence-mañana").estado, "disponible");
+});
+
+// fechaVencimiento es OBLIGATORIO en firestore.rules#mibgLoteValido (ningún
+// camino de la app real puede crear un lote sin él) -- para probar este
+// caso contra un documento REAL (no un mapa a mano), se escribe directo con
+// firebase-admin, bypaseando las reglas, SOLO contra el emulador local
+// (nunca contra staging/producción -- guardado explícito más abajo). Mismo
+// patrón ya usado en fixtures.mjs#bootstrapAdminEnEmulador para simular
+// datos reales malformados (ej. de un esquema viejo).
+async function crearLoteSinVencimientoDirecto(sedeId, numeroLote) {
+  if (process.env.USE_FIRESTORE_EMULATOR !== "1") {
+    throw new Error("crearLoteSinVencimientoDirecto sólo corre contra el emulador local -- nunca contra staging/producción.");
+  }
+  const { initializeApp, getApps } = await import("firebase-admin/app");
+  const { getFirestore } = await import("firebase-admin/firestore");
+  if (!getApps().length) initializeApp({ projectId: "radiofarm-fuesmen-staging" });
+  const ref = getFirestore().collection("mibg_lote").doc();
+  await ref.set({
+    sedeId, isotopoId: "lutecio177", numeroLote, proveedor: "Tecnonuclear",
+    actividadCalibrada: 150, volumen: 10, conformidad: true,
+    usuarioEmail: PERSONAS.tecnicoA.email,
+    // fechaVencimiento DELIBERADAMENTE ausente.
+  });
+  return ref.id;
+}
+
+test("estadoPorLoteDosisUnica: lote SIN fechaVencimiento (dato malformado real) -- 'sin-vencimiento', nunca 'disponible' en silencio", async () => {
+  const loteId = await crearLoteSinVencimientoDirecto(SEDE_A, `SINVENC-${Date.now()}`);
+  const anulaciones = new Map();
+  const estado = await estadoPorLoteDosisUnica([{ id: loteId, fechaVencimiento: undefined }], { anulaciones, prefijo: "lote_", hoyISO: hoy() });
+  assert.equal(estado.get(loteId).estado, "sin-vencimiento");
+});
+
+test("estadoPorLoteDosisUnica: sede ajena -- un lote de OTRA sede nunca llega a la función (lo saca el query de sede, igual que listenMibgLotes)", async () => {
+  await loguearComo(PERSONAS.tecnicoB); // SEDE_B
+  const numeroLoteB = `SELECTOR-SEDEB-${Date.now()}`;
+  await addMibgLote({
+    sedeId: SEDE_B, sedeNombre: "C. Gamma Hospital Italiano", isotopoId: "lutecio177",
+    numeroLote: numeroLoteB, proveedor: "Tecnonuclear", actividadCalibrada: 150, volumen: 10,
+    fechaHoraCalibracion: new Date(), fechaVencimiento: "2027-06-01", conformidad: true,
+    usuarioNombre: PERSONAS.tecnicoB.nombre, usuarioEmail: PERSONAS.tecnicoB.email, observacion: "",
+  });
+
+  await loguearComo(PERSONAS.tecnicoA); // SEDE_A
+  const numeroLoteA = `SELECTOR-SEDEA-${Date.now()}`;
+  const loteARef = await addMibgLote({
+    sedeId: SEDE_A, sedeNombre: "FUESMEN Central", isotopoId: "lutecio177",
+    numeroLote: numeroLoteA, proveedor: "Tecnonuclear", actividadCalibrada: 150, volumen: 10,
+    fechaHoraCalibracion: new Date(), fechaVencimiento: "2027-06-01", conformidad: true,
+    usuarioNombre: PERSONAS.tecnicoA.nombre, usuarioEmail: PERSONAS.tecnicoA.email, observacion: "",
+  });
+
+  // Mismo query que listenMibgLotes -- scopeado a SEDE_A, igual que la app real.
+  const snapA = await getDocs(query(collection(db, "mibg_lote"), where("sedeId", "==", SEDE_A)));
+  const lotesSedeA = snapA.docs.map((d) => ({ id: d.id, ...d.data() })).filter((l) => l.numeroLote === numeroLoteA);
+
+  const anulaciones = await anulacionesComoMapa(SEDE_A);
+  const { disponibles } = await lotesDisponiblesParaAdministrar(lotesSedeA, { anulaciones, prefijo: "lote_", hoyISO: hoy() });
+  assert.deepEqual(disponibles.map((l) => l.id), [loteARef.id]);
+  assert.ok(!disponibles.some((l) => l.numeroLote === numeroLoteB), "el lote de SEDE_B nunca debería aparecer -- ni siquiera llegó a la función");
+});
+
+test("estadoPorLoteDosisUnica: MIBG con el mismo criterio (prefijo 'mibg_') -- usado no aparece, uso anulado reaparece", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  const numeroLote = `SELECTOR-MIBG-${Date.now()}`;
+  const loteRef = await addMibgLote({
+    sedeId: SEDE_A, sedeNombre: "FUESMEN Central", isotopoId: "mibg",
+    numeroLote, proveedor: "IPEN", actividadCalibrada: 20, volumen: 2,
+    fechaHoraCalibracion: new Date(), fechaVencimiento: "2027-06-01", conformidad: true,
+    usuarioNombre: PERSONAS.tecnicoA.nombre, usuarioEmail: PERSONAS.tecnicoA.email, observacion: "",
+  });
+  await administrarMibgTransaction(loteRef.id, {
+    sedeId: SEDE_A, sedeNombre: "FUESMEN Central",
+    pacienteFicha: fichaDePrueba(), pacienteNombre: "Paciente Selector MIBG", pacienteDni: "3",
+    numeroLote, actividadCalibrada: 20, volumen: 2, actividadAdministrada: 18,
+    usuarioNombre: PERSONAS.tecnicoA.nombre, usuarioEmail: PERSONAS.tecnicoA.email, observacion: "",
+  });
+
+  let anulaciones = await anulacionesComoMapa(SEDE_A);
+  let { disponibles } = await lotesDisponiblesParaAdministrar([{ id: loteRef.id, fechaVencimiento: "2027-06-01" }], { anulaciones, prefijo: "mibg_", hoyISO: hoy() });
+  assert.equal(disponibles.length, 0, "usado -- no disponible");
+
+  const usoId = `mibg_${loteRef.id}_1`;
+  const usoSnap = await getDoc(doc(db, "actas", usoId));
+  await loguearComo(PERSONAS.admin);
+  await setSedeAuditando(PERSONAS.admin.email, SEDE_A);
+  await anularActaTransaction({ id: usoId, ...usoSnap.data() }, "Error de carga", PERSONAS.admin);
+
+  anulaciones = await anulacionesComoMapa(SEDE_A);
+  ({ disponibles } = await lotesDisponiblesParaAdministrar([{ id: loteRef.id, fechaVencimiento: "2027-06-01" }], { anulaciones, prefijo: "mibg_", hoyISO: hoy() }));
+  assert.deepEqual(disponibles.map((l) => l.id), [loteRef.id], "uso anulado -- vuelve a estar disponible");
+});
+
+// Mismo escenario ya confirmado antes (ver test de usoActivoDeLote, sede
+// desalineada): si sedeAuditando del admin no coincide con la sede real de
+// la acta de uso, getDoc rechaza con permission-denied real. El helper
+// tiene que fallar CERRADO -- ese lote queda en noVerificables, nunca en
+// disponibles.
+test("estadoPorLoteDosisUnica: admin con sedeAuditando en OTRA sede -- el lote queda 'no-verificable', NUNCA 'disponible'", async () => {
+  await loguearComo(PERSONAS.tecnicoA); // SEDE_A
+  const numeroLote = `SELECTOR-NOVERIF-${Date.now()}`;
+  const loteRef = await addMibgLote({
+    sedeId: SEDE_A, sedeNombre: "FUESMEN Central", isotopoId: "lutecio177",
+    numeroLote, proveedor: "Tecnonuclear", actividadCalibrada: 150, volumen: 10,
+    fechaHoraCalibracion: new Date(), fechaVencimiento: "2027-06-01", conformidad: true,
+    usuarioNombre: PERSONAS.tecnicoA.nombre, usuarioEmail: PERSONAS.tecnicoA.email, observacion: "",
+  });
+  await administrarLutecioTransaction(loteRef.id, {
+    sedeId: SEDE_A, sedeNombre: "FUESMEN Central",
+    pacienteFicha: fichaDePrueba(), pacienteNombre: "Paciente No Verificable", pacienteDni: "4",
+    peso: 70, talla: 170, mciAdministrados: 140, actividadCalibrada: 150,
+    isotopoId: "lu177", lote: numeroLote, medicoResponsable: "Dr. Test",
+    usuarioNombre: PERSONAS.tecnicoA.nombre, usuarioEmail: PERSONAS.tecnicoA.email, observacion: "",
+  });
+
+  await loguearComo(PERSONAS.admin);
+  await setSedeAuditando(PERSONAS.admin.email, SEDE_B); // DESALINEADO a propósito
+
+  const estado = await estadoPorLoteDosisUnica([{ id: loteRef.id, fechaVencimiento: "2027-06-01" }], { anulaciones: new Map(), prefijo: "lote_", hoyISO: hoy() });
+  assert.equal(estado.get(loteRef.id).estado, "no-verificable");
+  assert.ok(estado.get(loteRef.id).error, "tiene que guardar el error real, para poder mostrar un mensaje claro");
+
+  const { disponibles, noVerificables } = await lotesDisponiblesParaAdministrar([{ id: loteRef.id, fechaVencimiento: "2027-06-01" }], { anulaciones: new Map(), prefijo: "lote_", hoyISO: hoy() });
+  assert.equal(disponibles.length, 0, "nunca disponible por default -- falla CERRADO");
+  assert.deepEqual(noVerificables.map((l) => l.id), [loteRef.id]);
+
+  await setSedeAuditando(PERSONAS.admin.email, SEDE_A);
+});
+
+test("disponiblesDesdeEstadoPorLote / lotesDisponiblesParaAdministrar: orden por vencimiento, el que vence antes primero", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  const lotes = [];
+  for (const [sufijo, vencimiento] of [["C", "2027-03-01"], ["A", "2027-01-01"], ["B", "2027-02-01"]]) {
+    const numeroLote = `SELECTOR-ORDEN-${sufijo}-${Date.now()}`;
+    const loteRef = await addMibgLote({
+      sedeId: SEDE_A, sedeNombre: "FUESMEN Central", isotopoId: "lutecio177",
+      numeroLote, proveedor: "Tecnonuclear", actividadCalibrada: 150, volumen: 10,
+      fechaHoraCalibracion: new Date(), fechaVencimiento: vencimiento, conformidad: true,
+      usuarioNombre: PERSONAS.tecnicoA.nombre, usuarioEmail: PERSONAS.tecnicoA.email, observacion: "",
+    });
+    lotes.push({ id: loteRef.id, fechaVencimiento: vencimiento });
+  }
+
+  const { disponibles } = await lotesDisponiblesParaAdministrar(lotes, { anulaciones: new Map(), prefijo: "lote_", hoyISO: hoy() });
+  assert.deepEqual(disponibles.map((l) => l.fechaVencimiento), ["2027-01-01", "2027-02-01", "2027-03-01"]);
 });
