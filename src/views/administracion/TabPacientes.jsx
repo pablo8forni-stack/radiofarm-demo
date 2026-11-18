@@ -9,7 +9,7 @@ import { dedupeLotesPorFarm } from "../../helpers/dedupeLotesPorFarm.js";
 import { QRScanner } from "../../components/scanner/QRScanner.jsx";
 import { ModalAnularActa } from "../../components/actas/ModalAnularActa.jsx";
 import { CartelFichasFaltantes } from "../../components/actas/CartelFichasFaltantes.jsx";
-import { fmtF, fmtTs, fmtHora, fmtFechaISO, hoy, capitalizarPalabras, agruparPorFecha } from "../../helpers/formato.js";
+import { fmtF, fmtTs, fmtHora, fmtFechaISO, hoy, normalizarNombrePaciente, agruparPorFecha } from "../../helpers/formato.js";
 import { descargarArchivo } from "../../helpers/descargarArchivo.js";
 import { nombreArchivoLibro } from "../../helpers/nombreArchivoLibro.js";
 import { parseQR } from "../../helpers/qr.js";
@@ -895,7 +895,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
         // en actas.js); para "mibg" administrarMibgTransaction lo vuelve a
         // resolver DENTRO de su transacción y pisa este valor, así que
         // mandarlo acá también no hace daño.
-        pacienteFicha: fichaNormalizada, fichaIntentoNro: fichaEstado?.intento, pacienteNombre: nombre.trim(), pacienteDni: dni.trim(),
+        pacienteFicha: fichaNormalizada, fichaIntentoNro: fichaEstado?.intento, pacienteNombre: normalizarNombrePaciente(nombre), pacienteDni: dni.trim(),
         // peso/talla: NUNCA se mandan para I-131 (decisión de Pablo -- las
         // técnicas de esa sección no toman esos datos), aunque hayan quedado
         // cargados en el estado (p. ej. de un escaneo de pulsera anterior en
@@ -1019,7 +1019,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
       setGuardandoTransaccionReal(true);
       administrarLutecioTransaction(lutecioLoteSeleccionado, {
         sedeId, sedeNombre: catalogo.sedes[sedeId]?.nombre,
-        pacienteFicha: fichaNormalizada, pacienteNombre: nombre.trim(), pacienteDni: dni.trim(),
+        pacienteFicha: fichaNormalizada, pacienteNombre: normalizarNombrePaciente(nombre), pacienteDni: dni.trim(),
         peso: parseFloat(peso) || 0, talla: parseFloat(talla) || 0,
         mciAdministrados: parseFloat(actividadAdministrada) || 0, actividadCalibrada: loteElegido.actividadCalibrada,
         isotopoId, lote: loteElegido.numeroLote,
@@ -1050,7 +1050,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
     addActaPaciente({
       sedeId, sedeNombre: catalogo.sedes[sedeId]?.nombre,
       pacienteFicha: fichaNormalizada, fichaIntentoNro: fichaEstado?.intento,
-      pacienteNombre: nombre.trim(), pacienteDni: dni.trim(),
+      pacienteNombre: normalizarNombrePaciente(nombre), pacienteDni: dni.trim(),
       peso: parseFloat(peso) || 0, talla: parseFloat(talla) || 0,
       estudio: estudio === "Otro" ? estudioOtro.trim() : estudio, mciAdministrados: parseFloat(mci) || 0,
       isotopoId,
@@ -1615,7 +1615,14 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
                 )}
               </div>
             )}
-            <Input label="Apellido y nombre" value={nombre} onChange={(e) => setNombre(capitalizarPalabras(e.target.value))} placeholder="García Juan" />
+            <Input
+              label="Apellido y nombre"
+              value={nombre}
+              onChange={(e) => setNombre(e.target.value)}
+              onBlur={() => setNombre((n) => normalizarNombrePaciente(n))}
+              className="uppercase"
+              placeholder="García Juan"
+            />
             {/* inputMode="numeric": confirmado con datos reales (601
                 actas revisadas, todos los tipos) -- 100% numérico, ningún
                 caso con letras hasta hoy. No es una restricción dura (el

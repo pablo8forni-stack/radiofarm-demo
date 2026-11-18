@@ -232,7 +232,9 @@ describe("TabPacientes -- reconciliación de campos Ficha/Nombre/DNI/Peso/Talla"
     fireEvent.input(document.activeElement, { target: { value: document.activeElement.value + "2" } });
 
     expect(labelInput("Peso (kg)").value).toBe("42");
-    expect(labelInput("Apellido y nombre").value).toBe("Garcia Pedro");
+    // Paso B1: tipear DNI después mueve el foco afuera de "Apellido y
+    // nombre" -- blur dispara normalizarNombrePaciente (mayúscula).
+    expect(labelInput("Apellido y nombre").value).toBe("GARCIA PEDRO");
     expect(labelInput("DNI").value).toBe("28668919");
     expect(labelInput("Talla (cm)").value).toBe("");
   });
@@ -979,7 +981,8 @@ describe("TabPacientes -- MIBG/Lutecio-177: el formulario espera la transacción
     const boton = screen.getByRole("button", { name: "Guardar registro" });
     expect(boton).toBeTruthy();
     expect(boton.disabled).toBe(false);
-    expect(labelInput("Apellido y nombre").value).toBe("Paciente MIBG Test");
+    // Paso B1: ya pasó por blur (foco se movió a otros campos) -- mayúscula.
+    expect(labelInput("Apellido y nombre").value).toBe("PACIENTE MIBG TEST");
     expect(labelInput("DNI").value).toBe("12345678");
   });
 
@@ -1157,7 +1160,8 @@ describe("TabPacientes -- MIBG/Lutecio-177: el formulario espera la transacción
     const boton = screen.getByRole("button", { name: "Guardar registro" });
     expect(boton).toBeTruthy();
     expect(boton.disabled).toBe(false);
-    expect(labelInput("Apellido y nombre").value).toBe("Paciente Lutecio Test");
+    // Paso B1: ya pasó por blur (foco se movió a otros campos) -- mayúscula.
+    expect(labelInput("Apellido y nombre").value).toBe("PACIENTE LUTECIO TEST");
     expect(labelInput("Médico responsable").value).toBe("Dr. Test");
   });
 
@@ -1711,3 +1715,93 @@ describe("TabPacientes -- admin auditando sede distinta de la propia: picker Lut
 });
 
 }); // cierra "TabPacientes -- paso 5: picker MIBG/Lutecio con useLotesDisponibles"
+
+// Paso B1 (9/11, decisión de Pablo): nombres de pacientes en MAYÚSCULA
+// COMPLETA. El valor crudo tipeado NUNCA se transforma en onChange (sólo se
+// VE en mayúscula por CSS, className="uppercase") -- normalizarNombrePaciente
+// (trim + colapso de espacios + mayúscula con locale "es") corre recién en
+// onBlur, y de nuevo en guardar() como red de seguridad para el caso en que
+// el campo nunca llegó a perder el foco antes de guardar.
+describe("TabPacientes -- normalización de nombre de paciente en MAYÚSCULA (paso B1)", () => {
+  beforeEach(() => {
+    catalogo.stock.central.mibi = [{ lote: "LOTE-NOMBRE", cantidad: 10, vencimiento: "2026-12-31" }];
+    marcacionesHoyParaTest = [{ id: "m1", farmId: "mibi", lote: "LOTE-NOMBRE", fecha: new Date() }];
+  });
+  afterEach(() => {
+    catalogo.stock.central.mibi = [];
+    marcacionesHoyParaTest = [];
+    marcacionesHoyCallbacks = [];
+  });
+
+  async function llegarAFormularioConFichaOk(user, numeroFicha) {
+    render(<TabPacientes catalogo={catalogo} usuario={usuario} esAdmin={false} onToast={vi.fn()} nav={null} />);
+    await user.click(await screen.findByText("+ Manual"));
+    const fichaInput = labelInput("N° de Ficha");
+    await user.type(fichaInput, numeroFicha);
+    fichaInput.blur();
+    await screen.findByText("Verificando N° de Ficha...");
+    await act(async () => {
+      resolverFichaIntentoDeferido.resolver({ intento: "1" });
+      await resolverFichaIntentoDeferido.promesa;
+    });
+  }
+
+  test("mientras se tipea, el valor crudo NO se transforma (se ve en mayúscula sólo por CSS)", async () => {
+    const user = userEvent.setup();
+    await llegarAFormularioConFichaOk(user, "900101");
+    const nombreInput = labelInput("Apellido y nombre");
+
+    await user.type(nombreInput, "maría   josé");
+    // Mutación: si normalizarNombrePaciente se aplicara en onChange, el
+    // valor ya estaría recortado/colapsado/en mayúscula ACÁ, antes de salir
+    // del campo -- este assert tiene que fallar si eso pasa.
+    expect(nombreInput.value).toBe("maría   josé");
+    expect(nombreInput.className).toContain("uppercase");
+  });
+
+  test("'García Núñez' -> blur -> 'GARCÍA NÚÑEZ' (acentos y ñ se conservan)", async () => {
+    const user = userEvent.setup();
+    await llegarAFormularioConFichaOk(user, "900102");
+    const nombreInput = labelInput("Apellido y nombre");
+
+    await user.type(nombreInput, "García Núñez");
+    fireEvent.blur(nombreInput);
+    expect(nombreInput.value).toBe("GARCÍA NÚÑEZ");
+  });
+
+  test("'  maría   josé ' -> blur -> 'MARÍA JOSÉ' (recorta puntas y colapsa espacios dobles)", async () => {
+    const user = userEvent.setup();
+    await llegarAFormularioConFichaOk(user, "900103");
+    const nombreInput = labelInput("Apellido y nombre");
+
+    fireEvent.input(nombreInput, { target: { value: "  maría   josé " } });
+    fireEvent.blur(nombreInput);
+    expect(nombreInput.value).toBe("MARÍA JOSÉ");
+  });
+
+  test("guardar() normaliza aunque el campo nunca haya pasado por blur (mutación: sacar la normalización de guardar() rompe este test)", async () => {
+    const { addActaPaciente } = await import("../../services/firestore/actas.js");
+    const user = userEvent.setup();
+    await llegarAFormularioConFichaOk(user, "900104");
+
+    await user.type(labelInput("DNI"), "30111222");
+    await user.selectOptions(labelInput("Radiofármaco utilizado"), "mibi");
+    await elegirLotePorTexto(user, "LOTE-NOMBRE");
+    await user.selectOptions(labelInput("Estudio"), "Ecografía");
+    await user.type(labelInput("Dosis administrada (mCi)"), "10");
+
+    // fireEvent.input (no userEvent.type + blur): deja cargado el nombre sin
+    // disparar el evento blur de React en ningún momento -- el caso real
+    // que guardar() tiene que seguir cubriendo igual.
+    const nombreInput = labelInput("Apellido y nombre");
+    fireEvent.input(nombreInput, { target: { value: "ana   gomez" } });
+    expect(nombreInput.value).toBe("ana   gomez");
+
+    // fireEvent.click (no userEvent.click): dispara el onClick de React sin
+    // simular el cambio de foco que un click real movería -- nombreInput
+    // sigue sin haber pasado por blur en ningún momento de este test.
+    fireEvent.click(screen.getByRole("button", { name: "Guardar registro" }));
+    await vi.waitFor(() => expect(addActaPaciente).toHaveBeenCalledTimes(1));
+    expect(addActaPaciente.mock.calls[0][0].pacienteNombre).toBe("ANA GOMEZ");
+  });
+});

@@ -72,7 +72,23 @@ export const slugify = (s) =>
 // Mayúscula la primera letra de cada palabra (nombre y apellido en un mismo
 // campo) sin tocar el resto de lo tipeado -- no fuerza minúsculas, así no
 // pelea con apellidos que ya traen mayúsculas propias.
+// Sin uso hoy (9/11 -- paso B1, nombres de pacientes en mayúscula completa):
+// era la función que usaban TabPacientes.jsx y TabAgendaI131.jsx para el
+// nombre del paciente, reemplazada ahí por normalizarNombrePaciente. No se
+// borra sin que Pablo lo confirme -- ver reporte.
 export const capitalizarPalabras = (s) => s.replace(/(^|\s)\S/g, (c) => c.toUpperCase());
+
+// Nombre de paciente en MAYÚSCULA COMPLETA (9/11, decisión de Pablo -- VM
+// RIS ya entrega los nombres así, la administrativa copia campo por campo).
+// .toLocaleUpperCase("es") -- NO .toUpperCase() liso -- para que "ñ"/vocales
+// con tilde salgan bien en cualquier navegador (ver TabPacientes.test.jsx
+// para el caso real "ñ"+acento en distintas posiciones). trim() +
+// replace(/\s+/g," ") recorta puntas y colapsa espacios dobles -- cambia el
+// LARGO del string a propósito, por eso esta función se llama sólo en
+// onBlur/guardar, nunca en onChange (ahí correría el riesgo de saltar el
+// cursor en un input controlado en celular -- ver TabPacientes.jsx).
+export const normalizarNombrePaciente = (s) =>
+  (s || "").trim().replace(/\s+/g, " ").toLocaleUpperCase("es");
 
 // Agrupa una lista YA ordenada (no reordena nada) en bloques por fecha,
 // insertando un separador cada vez que la fecha cambia respecto al item

@@ -1,5 +1,5 @@
 import { describe, test, expect, vi } from "vitest";
-import { hoy } from "./formato.js";
+import { hoy, normalizarNombrePaciente } from "./formato.js";
 
 // hoy() es el "hoyISO" real que usa el resto de la app (actasPorRango,
 // lotesDelMes, y ahora estadoPorLoteDosisUnica/mibgLotes.js para el
@@ -45,5 +45,36 @@ describe("hoy() -- fecha LOCAL (Mendoza), nunca por toISOString/UTC", () => {
       if (tzOriginal === undefined) delete process.env.TZ;
       else process.env.TZ = tzOriginal;
     }
+  });
+});
+
+// Paso B1 (9/11, decisión de Pablo): nombres de pacientes en MAYÚSCULA
+// COMPLETA de ahora en adelante -- VM RIS ya entrega los nombres así.
+describe("normalizarNombrePaciente() -- mayúscula completa, locale es (acentos y ñ)", () => {
+  test("'García Núñez' -> 'GARCÍA NÚÑEZ'", () => {
+    expect(normalizarNombrePaciente("García Núñez")).toBe("GARCÍA NÚÑEZ");
+  });
+
+  test("'  maría   josé ' -> 'MARÍA JOSÉ' (recorta puntas y colapsa espacios dobles)", () => {
+    expect(normalizarNombrePaciente("  maría   josé ")).toBe("MARÍA JOSÉ");
+  });
+
+  // ñ y acento en posiciones distintas (principio/medio/final de palabra) --
+  // .toLocaleUpperCase("es"), no .toUpperCase() liso, es lo que garantiza
+  // que ninguno de estos se corrompa en cualquier entorno/navegador.
+  test("ñ y vocales acentuadas en distintas posiciones no se corrompen", () => {
+    expect(normalizarNombrePaciente("ñandú")).toBe("ÑANDÚ");
+    expect(normalizarNombrePaciente("peña")).toBe("PEÑA");
+    expect(normalizarNombrePaciente("áéíóú")).toBe("ÁÉÍÓÚ");
+  });
+
+  test("string vacío o sólo espacios -> string vacío", () => {
+    expect(normalizarNombrePaciente("")).toBe("");
+    expect(normalizarNombrePaciente("   ")).toBe("");
+  });
+
+  test("undefined/null -> string vacío (mismo fallback que el resto de los helpers de formato)", () => {
+    expect(normalizarNombrePaciente(undefined)).toBe("");
+    expect(normalizarNombrePaciente(null)).toBe("");
   });
 });

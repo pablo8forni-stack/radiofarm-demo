@@ -1,6 +1,6 @@
 import { TIPO_LABEL_I131 } from "../constants/tipoI131.js";
 import { TIPOS_TURNO_VALIDOS } from "./turnosI131.js";
-import { fmtFLarga } from "./formato.js";
+import { fmtFLarga, normalizarNombrePaciente } from "./formato.js";
 
 // Importación de turnos desde un archivo "Excel" (Parte C, uso regular, no
 // script de una sola vez) -- a propósito NO se parsea un .xlsx real: la
@@ -102,7 +102,7 @@ function validarFilaTurno(cols, idx, numeroFila) {
     // previa, en vez de quedar oculto en un formato numérico ambiguo.
     resumen: `${raw.pacienteNombre || "(sin nombre)"} · ${raw.tipoDosis || "—"} · ${fechaTurno ? fmtFLarga(fechaTurno) : (raw.fechaTurno || "—")}`,
     datos: {
-      fechaTurno: fechaTurno || "", pacienteNombre: raw.pacienteNombre, pacienteDni,
+      fechaTurno: fechaTurno || "", pacienteNombre: normalizarNombrePaciente(raw.pacienteNombre), pacienteDni,
       telefono: raw.telefono, tipoDosis: tipoDosis || "", actividadPrevista,
       obraSocial: raw.obraSocial, fechaBarrido, notas: raw.notas,
     },

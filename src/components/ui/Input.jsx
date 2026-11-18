@@ -1,4 +1,4 @@
-export function Input({ label, hint, type, ...p }) {
+export function Input({ label, hint, type, className, ...p }) {
   return (
     <div className="flex flex-col gap-1">
       {label && <label className="text-base font-semibold text-gray-600">{label}</label>}
@@ -10,7 +10,12 @@ export function Input({ label, hint, type, ...p }) {
         // escribir reemplace el valor entero, en cualquier input numérico de
         // la app (cantidad de ingreso/egreso/transferencia, stock mínimo...).
         onFocus={type === "number" ? (e) => e.target.select() : undefined}
-        className="border border-gray-200 rounded-xl px-3 py-2 text-base focus:outline-none focus:ring-2 focus:ring-blue-400 bg-white min-h-11 md:min-h-0"
+        // className del llamador SUMADO, no reemplazado -- antes, pasar
+        // className acá hubiera borrado el estilo base entero (ningún
+        // llamador lo hacía todavía, confirmado -- este es el primero,
+        // TabPacientes.jsx#nombre, para mostrar el valor en mayúscula
+        // mientras se tipea sin tocar el string real, ver normalizarNombrePaciente).
+        className={`border border-gray-200 rounded-xl px-3 py-2 text-base focus:outline-none focus:ring-2 focus:ring-blue-400 bg-white min-h-11 md:min-h-0 ${className || ""}`}
         {...p}
       />
       {hint && <span className="text-xs text-gray-400">{hint}</span>}
