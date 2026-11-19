@@ -817,7 +817,8 @@ service cloud.firestore {
                        // se copia uno como si fuera el otro (corrección de
                        // diseño posterior a la auditoría v4).
                        d.actividadCalibrada is number && d.actividadCalibrada > 0 &&
-                       d.actividadAdministrada is number && d.actividadAdministrada > 0)
+                       d.actividadAdministrada is number && d.actividadAdministrada > 0 &&
+                       sitioInyeccionValido(d))
                     : d.tipo == 'i131_vial'
                       ? (tieneAccesoI131() &&
                          d.lote is string && d.lote.size() > 0 &&
@@ -902,7 +903,14 @@ service cloud.firestore {
                              // referencia denormalizado del lote (lo que
                              // llegó) -- mismo criterio que MIBG, dos hechos
                              // distintos.
-                             d.actividadCalibrada is number && d.actividadCalibrada > 0)))
+                             d.actividadCalibrada is number && d.actividadCalibrada > 0))
+                        // sitioInyeccionValido(d) FUERA del ternario
+                        // isotopoId != 'lu177' (arriba) -- aplica una sola
+                        // vez a Tc-99m Y Lutecio-177 juntos, sin duplicar el
+                        // helper en las dos ramas. Sigue DENTRO del
+                        // paréntesis de d.tipo == 'paciente' -- no afecta a
+                        // 'marcacion' (la rama ": (d.lote..." de abajo).
+                        && sitioInyeccionValido(d))
                      : (d.lote is string && d.lote.size() > 0 &&
                         d.farmId is string && d.farmId.size() > 0 &&
                         d.mciMarcacion is number && d.mciMarcacion > 0 &&
@@ -1238,6 +1246,32 @@ service cloud.firestore {
     // lote/MIBG.
     function usoPropioLibre(sedeId, numero, n) {
       return !exists(/databases/$(database)/documents/fichasUsadas/$(sedeId + '_' + numero + '_' + n));
+    }
+    // Sitio de inyección (9/11 cliente, endurecimiento de reglas ~20-21/11):
+    // obligatorio para Tc-99m/Lutecio-177 ('paciente') y MIBG ('i131_mibg'),
+    // nunca para el resto de I-131 oral ni para 'marcacion'/'elucion'/
+    // 'anulacion' -- por eso vive en un helper aparte, llamado una sola vez
+    // dentro de cada una de esas dos cláusulas, nunca en el nivel de
+    // actaValida() donde afectaría a todos los tipos.
+    //
+    // d.fichaIntentoNro -- NO d.intentoNro -- es el único campo de intento
+    // común a los 3 tipos (Tc-99m plano no tiene d.intentoNro, ver nota en
+    // fichaIntentoHabilitado más abajo). Ya viene validado como string en
+    // ['1'..'5'] por la cláusula que llama a este helper ANTES de llegar
+    // acá (fichaValida/fichaIntentoHabilitado, más arriba en el mismo &&),
+    // así que no hace falta re-chequear su tipo.
+    //
+    // Opción B (decisión de Pablo, 19/11): "No registrado" sólo es válido
+    // si el acta es un intento mayor a 1 (una recarga real) -- un intento 1
+    // (ficha nueva, sin historial) nunca puede guardarse con NR, aunque
+    // alguien lo mande directo por SDK sin pasar por la UI (que ya lo
+    // impide del lado cliente, ver permiteSitioNR en TabPacientes.jsx).
+    function sitioInyeccionValido(d) {
+      return d.sitioInyeccion in ['DMD', 'DMI', 'PCD', 'PCI', 'MUD', 'MUI', 'OTRO', 'NA', 'NR'] &&
+        (d.sitioInyeccion != 'OTRO' ||
+          (d.sitioInyeccionOtro is string &&
+           d.sitioInyeccionOtro.size() > 0 && d.sitioInyeccionOtro.size() <= 40)) &&
+        (d.sitioInyeccion != 'NR' || d.fichaIntentoNro != '1');
     }
     function fichaIntentoHabilitado(sedeId, numero, intentoNro) {
       return usoPropioLibre(sedeId, numero, intentoNro) &&

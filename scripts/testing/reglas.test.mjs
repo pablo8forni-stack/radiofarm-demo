@@ -175,6 +175,7 @@ test("control positivo: técnico SÍ puede crear un acta de paciente con N° de 
     tipo: "paciente", fecha: serverTimestamp(), sedeId: SEDE_A, farmId: FARM_ID, lote: loteDePrueba(),
     usuarioEmail: PERSONAS.tecnicoA.email, mciAdministrados: 10, pacienteFicha: fichaDePrueba(), fichaIntentoNro: "1", isotopoId: "tc99m",
     pacienteNombre: "Test", pacienteDni: "1", estudio: "Test",
+    sitioInyeccion: "DMD",
   });
   const snap = await getDoc(ref);
   assert.ok(snap.exists());
@@ -199,6 +200,7 @@ function actaPacienteBase(overrides = {}) {
     tipo: "paciente", fecha: serverTimestamp(), sedeId: SEDE_A,
     usuarioEmail: PERSONAS.tecnicoA.email, mciAdministrados: 10, pacienteFicha: fichaDePrueba(), fichaIntentoNro: "1", isotopoId: "tc99m",
     pacienteNombre: "Test", pacienteDni: "1", estudio: "Test",
+    sitioInyeccion: "DMD",
     ...overrides,
   };
 }
@@ -2482,6 +2484,7 @@ function mibgActaBase(loteId, overrides = {}) {
     // intentoHabilitado en firestore.rules. Default "1" (primer intento);
     // los tests que reproducen el bug de re-administración lo pisan a "2".
     intentoNro: "1",
+    sitioInyeccion: "DMD",
     ...overrides,
   };
 }
@@ -2740,6 +2743,7 @@ function lutecioActaBase(loteId, overrides = {}) {
     lote: "LU177-TEST", loteDosisUnicaId: loteId,
     // intentoNro: ver mibgActaBase, mismo esquema y mismo tope de 5.
     intentoNro: "1",
+    sitioInyeccion: "DMD",
     ...overrides,
   };
 }
@@ -2947,6 +2951,7 @@ test("administrativa: NO lee actas tipo paciente de su propia sede", async () =>
     tipo: "paciente", fecha: serverTimestamp(), sedeId: SEDE_A, farmId: FARM_ID, lote: loteDePrueba(),
     usuarioEmail: PERSONAS.admin.email, pacienteFicha: fichaDePrueba(), fichaIntentoNro: "1",
     pacienteNombre: "X", pacienteDni: "1", isotopoId: "tc99m", mciAdministrados: 1, estudio: "Test",
+    sitioInyeccion: "DMD",
   });
 
   await loguearComo(PERSONAS.administrativa);
@@ -3245,6 +3250,7 @@ test("actas: admin crea 'paciente' en sede ajena -- rechazado; en la propia -- p
     tipo: "paciente", fecha: serverTimestamp(), sedeId: SEDE_A,
     usuarioEmail: PERSONAS.admin.email, mciAdministrados: 1, isotopoId: "tc99m", sinRadiofarmaco: true,
     pacienteFicha: ficha2, fichaIntentoNro: "1", pacienteNombre: "Test", pacienteDni: "1",
+    sitioInyeccion: "NA",
   });
 });
 
@@ -3360,4 +3366,187 @@ test("fichasUsadas: técnico y administrativa sin cambios -- su propia sede sigu
   await getDocs(query(collection(db, "fichasUsadas"), where("sedeId", "==", SEDE_A), orderBy("pacienteFichaNum", "desc"), limit(10)));
   await loguearComo(PERSONAS.administrativa);
   await getDocs(query(collection(db, "fichasUsadas"), where("sedeId", "==", SEDE_A), orderBy("pacienteFichaNum", "desc"), limit(10)));
+});
+
+// ===========================================================================
+// Sitio de inyección (endurecimiento de reglas, ~20-21/11, Opción B para
+// NR) -- SOLO reglas, sin deploy a ningún proyecto. sitioInyeccionValido()
+// se aplica una sola vez en 'paciente' (Tc-99m y Lutecio-177 juntos) y una
+// sola vez en 'i131_mibg' -- nunca en el resto de I-131 oral ni en
+// 'marcacion'/'elucion'/'anulacion'. Los controles de "I-131 oral y
+// marcacion/elucion sin el campo siguen aceptados" NO se repiten acá --
+// ya los cubren, sin tocarlos, varios tests preexistentes de este mismo
+// archivo (ej. "control positivo: anular la acta libera el intento 2 de
+// la misma ficha" crea un i131_barrido sin sitioInyeccion y sigue
+// pasando; lo mismo elucionBase() en sus propios tests).
+// ===========================================================================
+
+const CODIGOS_SITIO_SIN_NR = ["DMD", "DMI", "PCD", "PCI", "MUD", "MUI", "NA"];
+
+for (const codigo of CODIGOS_SITIO_SIN_NR) {
+  test(`sitio de inyección -- Tc-99m con '${codigo}' es aceptado`, async () => {
+    await loguearComo(PERSONAS.tecnicoA);
+    const ref = await addDoc(collection(db, "actas"), actaPacienteBase({ sitioInyeccion: codigo, farmId: FARM_ID, lote: loteDePrueba() }));
+    const snap = await getDoc(ref);
+    assert.ok(snap.exists());
+    assert.equal(snap.data().sitioInyeccion, codigo);
+  });
+
+  test(`sitio de inyección -- Lutecio-177 con '${codigo}' es aceptado`, async () => {
+    await loguearComo(PERSONAS.tecnicoA);
+    const lote = await addDoc(collection(db, "mibg_lote"), mibgLoteBase({ isotopoId: "lutecio177", usuarioEmail: PERSONAS.tecnicoA.email, usuarioNombre: PERSONAS.tecnicoA.nombre }));
+    const ref = doc(db, "actas", `lote_${lote.id}_1`);
+    await setDoc(ref, lutecioActaBase(lote.id, { sitioInyeccion: codigo, usuarioEmail: PERSONAS.tecnicoA.email, usuarioNombre: PERSONAS.tecnicoA.nombre }));
+    const snap = await getDoc(ref);
+    assert.ok(snap.exists());
+    assert.equal(snap.data().sitioInyeccion, codigo);
+  });
+
+  test(`sitio de inyección -- MIBG con '${codigo}' es aceptado`, async () => {
+    await loguearComo(PERSONAS.tecnicoA);
+    const lote = await addDoc(collection(db, "mibg_lote"), mibgLoteBase({ usuarioEmail: PERSONAS.tecnicoA.email, usuarioNombre: PERSONAS.tecnicoA.nombre }));
+    const ref = doc(db, "actas", `mibg_${lote.id}_1`);
+    await setDoc(ref, mibgActaBase(lote.id, { sitioInyeccion: codigo, usuarioEmail: PERSONAS.tecnicoA.email, usuarioNombre: PERSONAS.tecnicoA.nombre }));
+    const snap = await getDoc(ref);
+    assert.ok(snap.exists());
+    assert.equal(snap.data().sitioInyeccion, codigo);
+  });
+}
+
+// Caso borde del plan: Tc-99m sin radiofármaco SÍ puede usar NA -- la
+// excepción sinRadiofarmaco y sitioInyeccionValido son chequeos
+// independientes dentro del mismo && de actaValida, sin conflicto entre sí.
+test("sitio de inyección -- Tc-99m sinRadiofarmaco=true con 'NA' es aceptado", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  const ref = await addDoc(collection(db, "actas"), actaPacienteBase({ sinRadiofarmaco: true, sitioInyeccion: "NA" }));
+  const snap = await getDoc(ref);
+  assert.ok(snap.exists());
+  assert.equal(snap.data().sitioInyeccion, "NA");
+});
+
+test("sitio de inyección -- OTRO con sitioInyeccionOtro de 1 carácter es aceptado", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  const ref = await addDoc(collection(db, "actas"), actaPacienteBase({ farmId: FARM_ID, lote: loteDePrueba(), sitioInyeccion: "OTRO", sitioInyeccionOtro: "X" }));
+  assert.ok((await getDoc(ref)).exists());
+});
+
+test("sitio de inyección -- OTRO con sitioInyeccionOtro de 40 caracteres (límite) es aceptado", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  const ref = await addDoc(collection(db, "actas"), actaPacienteBase({ farmId: FARM_ID, lote: loteDePrueba(), sitioInyeccion: "OTRO", sitioInyeccionOtro: "X".repeat(40) }));
+  assert.ok((await getDoc(ref)).exists());
+});
+
+// NR en intento 2 -- probado sólo con Tc-99m, representativo: fichaIntentoHabilitado
+// es la MISMA función compartida por 'paciente' e 'i131_mibg' (ver
+// firestore.rules), no hay lógica distinta por tipo que probar acá. Mismo
+// patrón que "control positivo: anular la acta libera el intento 2 de la
+// misma ficha" (más arriba en este archivo) para dejar el intento 1 anulado
+// sin necesitar crear la acta 1 real.
+test("sitio de inyección -- NR en intento 2 (ficha con el intento 1 anulado) es aceptado -- Tc-99m", async () => {
+  await loguearComo(PERSONAS.admin);
+  await setSedeAuditando(PERSONAS.admin.email, SEDE_A);
+  const ficha = fichaDePrueba();
+  await setDoc(doc(db, "fichasUsadas", fichaUsadaId(SEDE_A, ficha, "1")), fichaUsadaDoc(ficha, "1"));
+  await setDoc(doc(db, "actas", `anula_ficha_${SEDE_A}_${ficha}_1`), anulacionFichaDoc(SEDE_A, ficha, "1"));
+
+  const ref = await addDoc(collection(db, "actas"), actaPacienteBase({
+    pacienteFicha: ficha, fichaIntentoNro: "2", farmId: FARM_ID, lote: loteDePrueba(),
+    sitioInyeccion: "NR", usuarioEmail: PERSONAS.admin.email,
+  }));
+  const snap = await getDoc(ref);
+  assert.ok(snap.exists());
+  assert.equal(snap.data().sitioInyeccion, "NR");
+});
+
+// --- Negativas ---
+
+test("sitio de inyección -- Tc-99m sin el campo es rechazada", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  const { sitioInyeccion: _s, ...sinSitio } = actaPacienteBase({ farmId: FARM_ID, lote: loteDePrueba() });
+  await assertPermissionDenied(() => addDoc(collection(db, "actas"), sinSitio));
+});
+
+test("sitio de inyección -- Lutecio-177 sin el campo es rechazada", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  const lote = await addDoc(collection(db, "mibg_lote"), mibgLoteBase({ isotopoId: "lutecio177", usuarioEmail: PERSONAS.tecnicoA.email, usuarioNombre: PERSONAS.tecnicoA.nombre }));
+  const { sitioInyeccion: _s, ...sinSitio } = lutecioActaBase(lote.id, { usuarioEmail: PERSONAS.tecnicoA.email, usuarioNombre: PERSONAS.tecnicoA.nombre });
+  await assertPermissionDenied(() => setDoc(doc(db, "actas", `lote_${lote.id}_1`), sinSitio));
+});
+
+test("sitio de inyección -- MIBG sin el campo es rechazada", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  const lote = await addDoc(collection(db, "mibg_lote"), mibgLoteBase({ usuarioEmail: PERSONAS.tecnicoA.email, usuarioNombre: PERSONAS.tecnicoA.nombre }));
+  const { sitioInyeccion: _s, ...sinSitio } = mibgActaBase(lote.id, { usuarioEmail: PERSONAS.tecnicoA.email, usuarioNombre: PERSONAS.tecnicoA.nombre });
+  await assertPermissionDenied(() => setDoc(doc(db, "actas", `mibg_${lote.id}_1`), sinSitio));
+});
+
+test("sitio de inyección -- código inválido ('GLUTEO') es rechazado", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  await assertPermissionDenied(() => addDoc(collection(db, "actas"), actaPacienteBase({ farmId: FARM_ID, lote: loteDePrueba(), sitioInyeccion: "GLUTEO" })));
+});
+
+test("sitio de inyección -- código vacío ('') es rechazado", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  await assertPermissionDenied(() => addDoc(collection(db, "actas"), actaPacienteBase({ farmId: FARM_ID, lote: loteDePrueba(), sitioInyeccion: "" })));
+});
+
+test("sitio de inyección -- OTRO sin sitioInyeccionOtro es rechazado", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  await assertPermissionDenied(() => addDoc(collection(db, "actas"), actaPacienteBase({ farmId: FARM_ID, lote: loteDePrueba(), sitioInyeccion: "OTRO" })));
+});
+
+test("sitio de inyección -- OTRO con sitioInyeccionOtro de 41 caracteres es rechazado", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  await assertPermissionDenied(() => addDoc(collection(db, "actas"), actaPacienteBase({ farmId: FARM_ID, lote: loteDePrueba(), sitioInyeccion: "OTRO", sitioInyeccionOtro: "X".repeat(41) })));
+});
+
+test("sitio de inyección -- NR en intento 1 es rechazado -- Tc-99m", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  await assertPermissionDenied(() => addDoc(collection(db, "actas"), actaPacienteBase({ farmId: FARM_ID, lote: loteDePrueba(), sitioInyeccion: "NR" })));
+});
+
+test("sitio de inyección -- NR en intento 1 es rechazado -- Lutecio-177", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  const lote = await addDoc(collection(db, "mibg_lote"), mibgLoteBase({ isotopoId: "lutecio177", usuarioEmail: PERSONAS.tecnicoA.email, usuarioNombre: PERSONAS.tecnicoA.nombre }));
+  await assertPermissionDenied(() => setDoc(doc(db, "actas", `lote_${lote.id}_1`), lutecioActaBase(lote.id, { sitioInyeccion: "NR", usuarioEmail: PERSONAS.tecnicoA.email, usuarioNombre: PERSONAS.tecnicoA.nombre })));
+});
+
+test("sitio de inyección -- NR en intento 1 es rechazado -- MIBG", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  const lote = await addDoc(collection(db, "mibg_lote"), mibgLoteBase({ usuarioEmail: PERSONAS.tecnicoA.email, usuarioNombre: PERSONAS.tecnicoA.nombre }));
+  await assertPermissionDenied(() => setDoc(doc(db, "actas", `mibg_${lote.id}_1`), mibgActaBase(lote.id, { sitioInyeccion: "NR", usuarioEmail: PERSONAS.tecnicoA.email, usuarioNombre: PERSONAS.tecnicoA.nombre })));
+});
+
+// --- Control crítico (Paso 0, punto 2 del pedido) ---
+
+// Simula una acta ANTERIOR al endurecimiento (sin sitioInyeccion) con el SDK
+// admin, bypaseando las reglas a propósito SOLO para plantar el dato -- la
+// app real nunca escribe así. Mismo patrón ya usado en transacciones.test.mjs
+// (crearLoteSinVencimientoDirecto), mismo guard: sólo contra el emulador
+// local, nunca contra staging/producción.
+test("sitio de inyección -- control: anular una acta VIEJA (sin sitioInyeccion) sigue aceptado", async () => {
+  if (process.env.USE_FIRESTORE_EMULATOR !== "1") {
+    throw new Error("Este test sólo corre contra el emulador local -- nunca contra staging/producción.");
+  }
+  const { initializeApp, getApps } = await import("firebase-admin/app");
+  const { getFirestore } = await import("firebase-admin/firestore");
+  if (!getApps().length) initializeApp({ projectId: "radiofarm-fuesmen-staging" });
+  const ficha = fichaDePrueba();
+  const actaViejaRef = getFirestore().collection("actas").doc();
+  await actaViejaRef.set({
+    tipo: "paciente", fecha: new Date(), sedeId: SEDE_A,
+    usuarioEmail: PERSONAS.tecnicoA.email, mciAdministrados: 10,
+    pacienteFicha: ficha, fichaIntentoNro: "1", isotopoId: "tc99m",
+    pacienteNombre: "Paciente Vieja Sin Sitio", pacienteDni: "1", estudio: "Test",
+    farmId: FARM_ID, lote: loteDePrueba(),
+    // sin sitioInyeccion a propósito -- simula una acta de antes del endurecimiento.
+  });
+
+  await loguearComo(PERSONAS.admin);
+  const anulaRef = doc(db, "actas", `anula_${actaViejaRef.id}`);
+  await setDoc(anulaRef, {
+    tipo: "anulacion", anulaId: actaViejaRef.id, sedeId: SEDE_A,
+    fecha: serverTimestamp(), motivo: "Test control sitio", usuarioNombre: "Admin", usuarioEmail: PERSONAS.admin.email,
+  });
+  assert.ok((await getDoc(anulaRef)).exists());
 });

@@ -230,6 +230,7 @@ test("MIBG: técnico (no admin) SÍ puede administrar un lote recién llegado", 
 
   const ficha = fichaDePrueba();
   await administrarMibgTransaction(loteRef.id, {
+    sitioInyeccion: "DMD",
     sedeId: SEDE_A, sedeNombre: "FUESMEN Central",
     pacienteFicha: ficha, pacienteNombre: "Paciente Test MIBG", pacienteDni: "1",
     numeroLote, actividadCalibrada: 20, volumen: 2, actividadAdministrada: 18,
@@ -254,6 +255,7 @@ test("Lutecio-177: técnico (no admin) SÍ puede administrar un lote recién lle
 
   const ficha = fichaDePrueba();
   await administrarLutecioTransaction(loteRef.id, {
+    sitioInyeccion: "DMD",
     sedeId: SEDE_A, sedeNombre: "FUESMEN Central",
     pacienteFicha: ficha, pacienteNombre: "Paciente Test Lutecio", pacienteDni: "2",
     peso: 70, talla: 170, mciAdministrados: 140, actividadCalibrada: 150,
@@ -274,6 +276,7 @@ test("MIBG: administrar un loteId inexistente da el mensaje amigable, no permiss
   await loguearComo(PERSONAS.tecnicoA);
   await assert.rejects(
     () => administrarMibgTransaction("id-inexistente-12345", {
+      sitioInyeccion: "DMD",
       sedeId: SEDE_A, sedeNombre: "FUESMEN Central",
       pacienteFicha: fichaDePrueba(), pacienteNombre: "Paciente Test", pacienteDni: "9",
       numeroLote: "X", actividadCalibrada: 20, volumen: 2, actividadAdministrada: 18,
@@ -293,6 +296,7 @@ test("Tc-99m (addActaPaciente): CON pacienteDni, el marcador fichasUsadas lo tie
   await loguearComo(PERSONAS.tecnicoA);
   const ficha = fichaDePrueba();
   await addActaPaciente({
+    sitioInyeccion: "DMD",
     sedeId: SEDE_A, farmId: FARM_ID, lote: loteDePrueba(), mciAdministrados: 10,
     pacienteFicha: ficha, fichaIntentoNro: "1", isotopoId: "tc99m",
     pacienteNombre: "Paciente Test Tc99m", pacienteDni: "11111111", estudio: "Test",
@@ -306,6 +310,7 @@ test("Tc-99m (addActaPaciente): SIN pacienteDni (cliente viejo), el marcador se 
   await loguearComo(PERSONAS.tecnicoA);
   const ficha = fichaDePrueba();
   await addActaPaciente({
+    sitioInyeccion: "DMD",
     sedeId: SEDE_A, farmId: FARM_ID, lote: loteDePrueba(), mciAdministrados: 10,
     pacienteFicha: ficha, fichaIntentoNro: "1", isotopoId: "tc99m",
     pacienteNombre: "Paciente Test Tc99m Viejo", estudio: "Test",
@@ -359,6 +364,7 @@ test("MIBG: CON pacienteDni, el marcador fichasUsadas lo tiene", async () => {
   });
   const ficha = fichaDePrueba();
   await administrarMibgTransaction(loteRef.id, {
+    sitioInyeccion: "DMD",
     sedeId: SEDE_A, sedeNombre: "FUESMEN Central",
     pacienteFicha: ficha, pacienteNombre: "Paciente Test MIBG DNI", pacienteDni: "33333333",
     numeroLote, actividadCalibrada: 20, volumen: 2, actividadAdministrada: 18,
@@ -383,6 +389,7 @@ test("MIBG: SIN pacienteDni es rechazado -- ya era obligatorio en el acta antes 
   });
   await assert.rejects(() =>
     administrarMibgTransaction(loteRef.id, {
+      sitioInyeccion: "DMD",
       sedeId: SEDE_A, sedeNombre: "FUESMEN Central",
       pacienteFicha: fichaDePrueba(), pacienteNombre: "Paciente Test MIBG Sin DNI",
       numeroLote, actividadCalibrada: 20, volumen: 2, actividadAdministrada: 18,
@@ -403,6 +410,7 @@ test("Lutecio-177: CON pacienteDni, el marcador fichasUsadas lo tiene", async ()
   });
   const ficha = fichaDePrueba();
   await administrarLutecioTransaction(loteRef.id, {
+    sitioInyeccion: "DMD",
     sedeId: SEDE_A, sedeNombre: "FUESMEN Central",
     pacienteFicha: ficha, pacienteNombre: "Paciente Test Lutecio DNI", pacienteDni: "44444444",
     peso: 70, talla: 170, mciAdministrados: 140, actividadCalibrada: 150,
@@ -425,6 +433,7 @@ test("Lutecio-177: SIN pacienteDni (cliente viejo), el marcador se crea igual", 
   });
   const ficha = fichaDePrueba();
   await administrarLutecioTransaction(loteRef.id, {
+    sitioInyeccion: "DMD",
     sedeId: SEDE_A, sedeNombre: "FUESMEN Central",
     pacienteFicha: ficha, pacienteNombre: "Paciente Test Lutecio Viejo",
     peso: 70, talla: 170, mciAdministrados: 140, actividadCalibrada: 150,
@@ -454,6 +463,7 @@ test("usoActivoDeLote: encuentra la administración real de un lote, sin acotar 
   });
   const ficha = fichaDePrueba();
   await administrarLutecioTransaction(loteRef.id, {
+    sitioInyeccion: "DMD",
     sedeId: SEDE_A, sedeNombre: "FUESMEN Central",
     pacienteFicha: ficha, pacienteNombre: "Paciente Test Uso Activo", pacienteDni: "33333333",
     peso: 70, talla: 170, mciAdministrados: 140, actividadCalibrada: 150,
@@ -499,6 +509,7 @@ test("usoActivoDeLote: uso ANULADO -- excluido, vuelve a estar disponible", asyn
   });
   const ficha = fichaDePrueba();
   await administrarLutecioTransaction(loteRef.id, {
+    sitioInyeccion: "DMD",
     sedeId: SEDE_A, sedeNombre: "FUESMEN Central",
     pacienteFicha: ficha, pacienteNombre: "Paciente Test Uso Anulado", pacienteDni: "44444444",
     peso: 70, talla: 170, mciAdministrados: 140, actividadCalibrada: 150,
@@ -544,6 +555,7 @@ test("usoActivoDeLote: flujo de corrección -- anular intento 1 y administrar in
 
   const fichaIntento1 = fichaDePrueba();
   await administrarLutecioTransaction(loteRef.id, {
+    sitioInyeccion: "DMD",
     sedeId: SEDE_A, sedeNombre: "FUESMEN Central",
     pacienteFicha: fichaIntento1, pacienteNombre: "Paciente MAL Tipeado", pacienteDni: "66666666",
     peso: 70, talla: 170, mciAdministrados: 140, actividadCalibrada: 150,
@@ -560,6 +572,7 @@ test("usoActivoDeLote: flujo de corrección -- anular intento 1 y administrar in
   await loguearComo(PERSONAS.tecnicoA);
   const fichaIntento2 = fichaDePrueba();
   await administrarLutecioTransaction(loteRef.id, {
+    sitioInyeccion: "DMD",
     sedeId: SEDE_A, sedeNombre: "FUESMEN Central",
     pacienteFicha: fichaIntento2, pacienteNombre: "Paciente Corregido", pacienteDni: "77777777",
     peso: 70, talla: 170, mciAdministrados: 140, actividadCalibrada: 150,
@@ -592,6 +605,7 @@ test("Libro 4 -- pipeline real: lote de este mes con uso activo sale 'usado', co
   });
   const ficha = fichaDePrueba();
   await administrarLutecioTransaction(loteRef.id, {
+    sitioInyeccion: "DMD",
     sedeId: SEDE_A, sedeNombre: "FUESMEN Central",
     pacienteFicha: ficha, pacienteNombre: "Paciente Test Pipeline", pacienteDni: "55555555",
     peso: 70, talla: 170, mciAdministrados: 140, actividadCalibrada: 150,
@@ -644,6 +658,7 @@ test("estadoPorLoteDosisUnica: lote usado + 160 actas 'paciente' MÁS NUEVAS -- 
     usuarioNombre: PERSONAS.tecnicoA.nombre, usuarioEmail: PERSONAS.tecnicoA.email, observacion: "",
   });
   await administrarLutecioTransaction(loteRef.id, {
+    sitioInyeccion: "DMD",
     sedeId: SEDE_A, sedeNombre: "FUESMEN Central",
     pacienteFicha: fichaDePrueba(), pacienteNombre: "Paciente Selector 150", pacienteDni: "1",
     peso: 70, talla: 170, mciAdministrados: 140, actividadCalibrada: 150,
@@ -654,6 +669,7 @@ test("estadoPorLoteDosisUnica: lote usado + 160 actas 'paciente' MÁS NUEVAS -- 
   const base = Date.now();
   for (let i = 0; i < 160; i++) {
     await addActaPaciente({
+      sitioInyeccion: "DMD",
       sedeId: SEDE_A, sedeNombre: "FUESMEN Central",
       pacienteFicha: `${base}${String(i).padStart(4, "0")}`.slice(-15), fichaIntentoNro: "1",
       pacienteNombre: `Paciente Ruido Selector ${i}`, pacienteDni: `${91000000 + i}`,
@@ -677,6 +693,7 @@ test("estadoPorLoteDosisUnica: uso ANULADO -- el lote reaparece como disponible 
     usuarioNombre: PERSONAS.tecnicoA.nombre, usuarioEmail: PERSONAS.tecnicoA.email, observacion: "",
   });
   await administrarLutecioTransaction(loteRef.id, {
+    sitioInyeccion: "DMD",
     sedeId: SEDE_A, sedeNombre: "FUESMEN Central",
     pacienteFicha: fichaDePrueba(), pacienteNombre: "Paciente Selector Anulado", pacienteDni: "2",
     peso: 70, talla: 170, mciAdministrados: 140, actividadCalibrada: 150,
@@ -799,6 +816,7 @@ test("estadoPorLoteDosisUnica: MIBG con el mismo criterio (prefijo 'mibg_') -- u
     usuarioNombre: PERSONAS.tecnicoA.nombre, usuarioEmail: PERSONAS.tecnicoA.email, observacion: "",
   });
   await administrarMibgTransaction(loteRef.id, {
+    sitioInyeccion: "DMD",
     sedeId: SEDE_A, sedeNombre: "FUESMEN Central",
     pacienteFicha: fichaDePrueba(), pacienteNombre: "Paciente Selector MIBG", pacienteDni: "3",
     numeroLote, actividadCalibrada: 20, volumen: 2, actividadAdministrada: 18,
@@ -835,6 +853,7 @@ test("estadoPorLoteDosisUnica: admin con sedeAuditando en OTRA sede -- el lote q
     usuarioNombre: PERSONAS.tecnicoA.nombre, usuarioEmail: PERSONAS.tecnicoA.email, observacion: "",
   });
   await administrarLutecioTransaction(loteRef.id, {
+    sitioInyeccion: "DMD",
     sedeId: SEDE_A, sedeNombre: "FUESMEN Central",
     pacienteFicha: fichaDePrueba(), pacienteNombre: "Paciente No Verificable", pacienteDni: "4",
     peso: 70, talla: 170, mciAdministrados: 140, actividadCalibrada: 150,
@@ -894,6 +913,7 @@ test("TÉCNICO (no admin): lote usado -- 'usado' con el uso real, leído loguead
     usuarioNombre: PERSONAS.tecnicoA.nombre, usuarioEmail: PERSONAS.tecnicoA.email, observacion: "",
   });
   await administrarLutecioTransaction(loteRef.id, {
+    sitioInyeccion: "DMD",
     sedeId: SEDE_A, sedeNombre: "FUESMEN Central",
     pacienteFicha: fichaDePrueba(), pacienteNombre: "Paciente Técnico Usado", pacienteDni: "11",
     peso: 70, talla: 170, mciAdministrados: 140, actividadCalibrada: 150,
@@ -918,6 +938,7 @@ test("TÉCNICO (no admin): uso ANULADO (por admin) -- el técnico lo vuelve a ve
     usuarioNombre: PERSONAS.tecnicoA.nombre, usuarioEmail: PERSONAS.tecnicoA.email, observacion: "",
   });
   await administrarLutecioTransaction(loteRef.id, {
+    sitioInyeccion: "DMD",
     sedeId: SEDE_A, sedeNombre: "FUESMEN Central",
     pacienteFicha: fichaDePrueba(), pacienteNombre: "Paciente Técnico Uso Anulado", pacienteDni: "12",
     peso: 70, talla: 170, mciAdministrados: 140, actividadCalibrada: 150,
@@ -1086,6 +1107,7 @@ test("administrarMibgTransaction: admin con sedeAuditando en OTRA sede -- result
     // para un admin), sin asumir el formato exacto del mensaje.
     await assert.rejects(
       () => administrarMibgTransaction(loteRef.id, {
+        sitioInyeccion: "DMD",
         sedeId: SEDE_A, sedeNombre: NOMBRE_SEDE[SEDE_A],
         pacienteFicha: fichaDePrueba(), pacienteNombre: "Paciente Admin Desalineado MIBG", pacienteDni: "SEDEDESALIN1",
         usuarioNombre: PERSONAS.admin.nombre, usuarioEmail: PERSONAS.admin.email, observacion: "",
@@ -1111,6 +1133,7 @@ test("administrarLutecioTransaction: admin con sedeAuditando en OTRA sede -- res
     // Mismo motivo/mismo formato de mensaje que MIBG -- ver comentario ahí.
     await assert.rejects(
       () => administrarLutecioTransaction(loteRef.id, {
+        sitioInyeccion: "DMD",
         sedeId: SEDE_A, sedeNombre: NOMBRE_SEDE[SEDE_A],
         pacienteFicha: fichaDePrueba(), pacienteNombre: "Paciente Admin Desalineado Lutecio", pacienteDni: "SEDEDESALIN2",
         peso: 70, talla: 170, mciAdministrados: 140, actividadCalibrada: 150,
@@ -1165,6 +1188,7 @@ test("estadoDeUnLoteListado: usado SIN correcciones -- 'usado' con 1 sola lectur
     usuarioNombre: PERSONAS.tecnicoA.nombre, usuarioEmail: PERSONAS.tecnicoA.email, observacion: "",
   });
   await administrarLutecioTransaction(loteRef.id, {
+    sitioInyeccion: "DMD",
     sedeId: SEDE_A, sedeNombre: "FUESMEN Central",
     pacienteFicha: fichaDePrueba(), pacienteNombre: "Paciente Paso6 Usado1", pacienteDni: "60001",
     peso: 70, talla: 170, mciAdministrados: 140, actividadCalibrada: 150,
@@ -1189,6 +1213,7 @@ test("estadoDeUnLoteListado: lote usado Y vencido -- gana 'usado', NUNCA 'vencid
     usuarioNombre: PERSONAS.tecnicoA.nombre, usuarioEmail: PERSONAS.tecnicoA.email, observacion: "",
   });
   await administrarLutecioTransaction(loteRef.id, {
+    sitioInyeccion: "DMD",
     sedeId: SEDE_A, sedeNombre: "FUESMEN Central",
     pacienteFicha: fichaDePrueba(), pacienteNombre: "Paciente Paso6 UsadoVenc", pacienteDni: "60002",
     peso: 70, talla: 170, mciAdministrados: 140, actividadCalibrada: 150,
@@ -1237,6 +1262,7 @@ test("estadoDeUnLoteListado: intento 1 anulado + intento 2 vigente -- 'usado' co
     usuarioNombre: PERSONAS.tecnicoA.nombre, usuarioEmail: PERSONAS.tecnicoA.email, observacion: "",
   });
   await administrarLutecioTransaction(loteRef.id, {
+    sitioInyeccion: "DMD",
     sedeId: SEDE_A, sedeNombre: "FUESMEN Central",
     pacienteFicha: fichaDePrueba(), pacienteNombre: "Paciente Paso6 Intento1", pacienteDni: "60003",
     peso: 70, talla: 170, mciAdministrados: 140, actividadCalibrada: 150,
@@ -1251,6 +1277,7 @@ test("estadoDeUnLoteListado: intento 1 anulado + intento 2 vigente -- 'usado' co
 
   await loguearComo(PERSONAS.tecnicoA);
   await administrarLutecioTransaction(loteRef.id, {
+    sitioInyeccion: "DMD",
     sedeId: SEDE_A, sedeNombre: "FUESMEN Central",
     pacienteFicha: fichaDePrueba(), pacienteNombre: "Paciente Paso6 Intento2", pacienteDni: "60004",
     peso: 70, talla: 170, mciAdministrados: 140, actividadCalibrada: 150,
@@ -1276,6 +1303,7 @@ test("estadoDeUnLoteListado: lote usado + 160 actas 'paciente' MÁS NUEVAS -- si
     usuarioNombre: PERSONAS.tecnicoA.nombre, usuarioEmail: PERSONAS.tecnicoA.email, observacion: "",
   });
   await administrarLutecioTransaction(loteRef.id, {
+    sitioInyeccion: "DMD",
     sedeId: SEDE_A, sedeNombre: "FUESMEN Central",
     pacienteFicha: fichaDePrueba(), pacienteNombre: "Paciente Paso6 Fuera150", pacienteDni: "60005",
     peso: 70, talla: 170, mciAdministrados: 140, actividadCalibrada: 150,
@@ -1286,6 +1314,7 @@ test("estadoDeUnLoteListado: lote usado + 160 actas 'paciente' MÁS NUEVAS -- si
   const base = Date.now();
   for (let i = 0; i < 160; i++) {
     await addActaPaciente({
+      sitioInyeccion: "DMD",
       sedeId: SEDE_A, sedeNombre: "FUESMEN Central",
       pacienteFicha: `${base}${String(i).padStart(4, "0")}`.slice(-15), fichaIntentoNro: "1",
       pacienteNombre: `Paciente Ruido Paso6 ${i}`, pacienteDni: `${92000000 + i}`,
@@ -1309,6 +1338,7 @@ test("estadoDeUnLoteListado: admin con sedeAuditando en OTRA sede -- 'no-verific
     usuarioNombre: PERSONAS.tecnicoA.nombre, usuarioEmail: PERSONAS.tecnicoA.email, observacion: "",
   });
   await administrarLutecioTransaction(loteRef.id, {
+    sitioInyeccion: "DMD",
     sedeId: SEDE_A, sedeNombre: "FUESMEN Central",
     pacienteFicha: fichaDePrueba(), pacienteNombre: "Paciente Paso6 NoVerif", pacienteDni: "60006",
     peso: 70, talla: 170, mciAdministrados: 140, actividadCalibrada: 150,
@@ -1348,6 +1378,7 @@ test("estadoListadoLoteDosisUnica: batch mixto (anulado/usado/vencido-sin-uso) -
     fechaVencimiento: "2020-01-01", conformidad: true, usuarioNombre: PERSONAS.tecnicoA.nombre, usuarioEmail: PERSONAS.tecnicoA.email, observacion: "",
   });
   await administrarLutecioTransaction(loteUsado.id, {
+    sitioInyeccion: "DMD",
     sedeId: SEDE_A, sedeNombre: "FUESMEN Central", pacienteFicha: fichaDePrueba(), pacienteNombre: "Paciente Paso6 Batch", pacienteDni: "60007",
     peso: 70, talla: 170, mciAdministrados: 140, actividadCalibrada: 150, isotopoId: "lu177", lote: nUsado, medicoResponsable: "Dr. Test",
     usuarioNombre: PERSONAS.tecnicoA.nombre, usuarioEmail: PERSONAS.tecnicoA.email, observacion: "",
