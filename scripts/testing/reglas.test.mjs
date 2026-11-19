@@ -10,7 +10,8 @@ import {
   PERSONAS, SEDE_A, SEDE_B, FARM_ID, db, loguearComo, prepararFixturesGlobales, loteDePrueba, fichaDePrueba, cerrarConexiones,
   crearLoteDirecto, borrarLote,
 } from "./fixtures.mjs";
-import { addActaI131Vial, addActaI131Extraccion } from "../../src/services/firestore/actas.js";
+import { addActaI131Vial, addActaI131Extraccion, anularActaTransaction, resolverFichaIntento, addActaPaciente, datosFichaUsada } from "../../src/services/firestore/actas.js";
+import { administrarLutecioTransaction } from "../../src/services/firestore/mibgLotes.js";
 import { setSedeAuditando, setRol } from "../../src/services/auth.js";
 import { LIMITE_FICHAS_USADAS } from "../../src/services/firestore/fichasDescartadas.js";
 
@@ -3549,4 +3550,153 @@ test("sitio de inyección -- control: anular una acta VIEJA (sin sitioInyeccion)
     fecha: serverTimestamp(), motivo: "Test control sitio", usuarioNombre: "Admin", usuarioEmail: PERSONAS.admin.email,
   });
   assert.ok((await getDoc(anulaRef)).exists());
+});
+
+// ===========================================================================
+// Regresión real (bug encontrado por Pablo en staging, 19/11): el test de
+// arriba ("control: anular una acta VIEJA...") planta la acta vieja SIN su
+// fichasUsadas -- eso resultó ser justo el caso que NO pasa con una acta
+// real cargada por la app (crearActaConFicha siempre escribe acta +
+// fichasUsadas juntos en el mismo batch). El caso que de verdad hay que
+// cubrir es: acta vieja CON fichasUsadas real (sin sitioInyeccion, de antes
+// del 18/11), anulada con la función REAL -- ahí resolverFichaIntento SÍ
+// tiene que avanzar a intento 2, y NR en ese intento 2 tiene que guardar.
+// Se planta sólo la PRIMERA escritura (acta+fichasUsadas) con el SDK admin,
+// simulando el estado en que habría quedado una carga real de antes de este
+// cambio -- todo lo demás (anular, resolver intento, recargar) usa las
+// funciones REALES del cliente, nunca addDoc/setDoc crudo.
+// ===========================================================================
+test("sitio de inyección -- recarga REAL (cadena completa) de acta Tc-99m vieja con fichasUsadas real: resolverFichaIntento da '2', NR se guarda", async () => {
+  if (process.env.USE_FIRESTORE_EMULATOR !== "1") {
+    throw new Error("Este test sólo corre contra el emulador local -- nunca contra staging/producción.");
+  }
+  const { initializeApp, getApps } = await import("firebase-admin/app");
+  const { getFirestore } = await import("firebase-admin/firestore");
+  if (!getApps().length) initializeApp({ projectId: "radiofarm-fuesmen-staging" });
+  const admin = getFirestore();
+
+  const ficha = fichaDePrueba();
+  const dataActaVieja = {
+    sedeId: SEDE_A, usuarioEmail: PERSONAS.tecnicoA.email, mciAdministrados: 10,
+    pacienteFicha: ficha, fichaIntentoNro: "1", isotopoId: "tc99m",
+    pacienteNombre: "Paciente Real Vieja", pacienteDni: "1", estudio: "Test",
+    sinRadiofarmaco: true,
+    // SIN sitioInyeccion -- simula una carga real de antes del 18/11.
+  };
+  const actaRef = admin.collection("actas").doc();
+  await actaRef.set({ ...dataActaVieja, tipo: "paciente", fecha: new Date() });
+  // fichasUsadas con datosFichaUsada REAL (services/firestore/actas.js) --
+  // la misma forma exacta que escribe crearActaConFicha -- esto es justo lo
+  // que le faltaba al acta de staging (plantada con addDoc crudo, sin esto).
+  // datosFichaUsada() pone fecha: serverTimestamp() del SDK CLIENTE -- el
+  // SDK admin no sabe serializar ese sentinel, se pisa con un Date plano
+  // sólo para este plantado (datosFichaUsada real sigue siendo la fuente
+  // de la FORMA del resto de los campos).
+  await admin.collection("fichasUsadas").doc(fichaUsadaId(SEDE_A, ficha, "1"))
+    .set({ ...datosFichaUsada(dataActaVieja, "paciente", actaRef.id), fecha: new Date() });
+
+  // 1) Anular con la función REAL del cliente (no un setDoc a mano).
+  await loguearComo(PERSONAS.admin);
+  await setSedeAuditando(PERSONAS.admin.email, SEDE_A);
+  await anularActaTransaction({ id: actaRef.id, ...dataActaVieja, tipo: "paciente" }, "Test regresión real", PERSONAS.admin);
+
+  // 2) resolverFichaIntento REAL tiene que dar intento 2 -- a diferencia
+  // del caso de staging, acá SÍ hay un fichasUsadas real para detectar
+  // como anulado.
+  await loguearComo(PERSONAS.tecnicoA);
+  const resultado = await resolverFichaIntento(SEDE_A, ficha);
+  assert.deepEqual(resultado, { intento: "2" });
+
+  // 3) Recargar con NR en intento 2, con addActaPaciente REAL -- tiene que
+  // guardar. addActaPaciente/crearActaConFicha no devuelven un ref (el
+  // batch.commit() resuelve a undefined) -- se confirma por el marcador
+  // fichasUsadas del intento 2 (id determinístico) y desde ahí se llega a
+  // la acta real para confirmar sitioInyeccion.
+  await addActaPaciente({
+    sedeId: SEDE_A, sedeNombre: "FUESMEN Central",
+    pacienteFicha: ficha, fichaIntentoNro: resultado.intento,
+    pacienteNombre: "Paciente Real Corregido", pacienteDni: "2",
+    isotopoId: "tc99m", sinRadiofarmaco: true, estudio: "Test", mciAdministrados: 10,
+    sitioInyeccion: "NR",
+    usuarioNombre: PERSONAS.tecnicoA.nombre, usuarioEmail: PERSONAS.tecnicoA.email,
+  });
+  const fichaUsada2Snap = await getDoc(doc(db, "fichasUsadas", fichaUsadaId(SEDE_A, ficha, "2")));
+  assert.ok(fichaUsada2Snap.exists(), "la recarga con NR en intento 2 tiene que haber guardado");
+  const actaFinalSnap = await getDoc(doc(db, "actas", fichaUsada2Snap.data().actaId));
+  assert.equal(actaFinalSnap.data().sitioInyeccion, "NR");
+});
+
+// Control negativo con la MISMA cadena real (no addDoc crudo): una ficha
+// NUEVA, sin ningún historial -- resolverFichaIntento da intento 1 de
+// entrada (correctamente, nunca se usó antes) y NR en ese intento 1 sigue
+// rechazado. Contraste directo con el test de arriba: la diferencia entre
+// "se guarda" y "se rechaza" es exclusivamente el intento resuelto.
+test("sitio de inyección -- control negativo (cadena real): ficha NUEVA sin historial, NR en intento 1 sigue rechazado", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  const ficha = fichaDePrueba();
+  const resultado = await resolverFichaIntento(SEDE_A, ficha);
+  assert.deepEqual(resultado, { intento: "1" });
+  await assertPermissionDenied(() => addActaPaciente({
+    sedeId: SEDE_A, sedeNombre: "FUESMEN Central",
+    pacienteFicha: ficha, fichaIntentoNro: resultado.intento,
+    pacienteNombre: "Paciente Nuevo Sin Historial", pacienteDni: "3",
+    isotopoId: "tc99m", sinRadiofarmaco: true, estudio: "Test", mciAdministrados: 10,
+    sitioInyeccion: "NR",
+    usuarioNombre: PERSONAS.tecnicoA.nombre, usuarioEmail: PERSONAS.tecnicoA.email,
+  }));
+});
+
+// Misma cadena para Lutecio-177 -- NO se duplica para MIBG además porque
+// fichaIntentoHabilitado/resolverFichaIntento son la MISMA función
+// compartida por los 3 tipos (ver firestore.rules), ya ejercitada arriba
+// con Tc-99m; lo único que cambia acá es la transacción de guardado real
+// (administrarLutecioTransaction, que resuelve fichaIntentoNro INTERNO a
+// su propia transacción con el mismo algoritmo). Cubrir Lutecio-177 además
+// de Tc-99m alcanza para confirmar que ninguno de los 2 caminos de guardado
+// (batch vs. transacción) tiene un bug propio distinto.
+test("sitio de inyección -- recarga REAL (cadena completa) de acta Lutecio-177 vieja con fichasUsadas real: resolverFichaIntento da '2', NR se guarda", async () => {
+  if (process.env.USE_FIRESTORE_EMULATOR !== "1") {
+    throw new Error("Este test sólo corre contra el emulador local -- nunca contra staging/producción.");
+  }
+  const { initializeApp, getApps } = await import("firebase-admin/app");
+  const { getFirestore } = await import("firebase-admin/firestore");
+  if (!getApps().length) initializeApp({ projectId: "radiofarm-fuesmen-staging" });
+  const admin = getFirestore();
+
+  await loguearComo(PERSONAS.tecnicoA);
+  const lote = await addDoc(collection(db, "mibg_lote"), mibgLoteBase({ isotopoId: "lutecio177", usuarioEmail: PERSONAS.tecnicoA.email, usuarioNombre: PERSONAS.tecnicoA.nombre }));
+
+  const ficha = fichaDePrueba();
+  const actaId = `lote_${lote.id}_1`;
+  const dataActaVieja = {
+    sedeId: SEDE_A, isotopoId: "lu177",
+    pacienteFicha: ficha, fichaIntentoNro: "1", pacienteNombre: "Paciente Lutecio Vieja", pacienteDni: "1",
+    medicoResponsable: "Dr. Test", mciAdministrados: 90, actividadCalibrada: 150,
+    lote: "LU177-TEST-VIEJA", loteDosisUnicaId: lote.id, intentoNro: "1",
+    // SIN sitioInyeccion -- simula una carga real de antes del 18/11.
+  };
+  await admin.collection("actas").doc(actaId).set({ ...dataActaVieja, tipo: "paciente", fecha: new Date() });
+  await admin.collection("fichasUsadas").doc(fichaUsadaId(SEDE_A, ficha, "1"))
+    .set({ ...datosFichaUsada(dataActaVieja, "paciente", actaId), fecha: new Date() });
+
+  await loguearComo(PERSONAS.admin);
+  await setSedeAuditando(PERSONAS.admin.email, SEDE_A);
+  await anularActaTransaction({ id: actaId, ...dataActaVieja, tipo: "paciente" }, "Test regresión real lutecio", PERSONAS.admin);
+
+  await loguearComo(PERSONAS.tecnicoA);
+  const resultado = await resolverFichaIntento(SEDE_A, ficha);
+  assert.deepEqual(resultado, { intento: "2" });
+
+  await administrarLutecioTransaction(lote.id, {
+    sedeId: SEDE_A, sedeNombre: "FUESMEN Central",
+    pacienteFicha: ficha, pacienteNombre: "Paciente Lutecio Corregido", pacienteDni: "2",
+    peso: 70, talla: 170, mciAdministrados: 90, actividadCalibrada: 150,
+    isotopoId: "lu177", lote: "LU177-TEST-VIEJA", medicoResponsable: "Dr. Test",
+    sitioInyeccion: "NR",
+    usuarioNombre: PERSONAS.tecnicoA.nombre, usuarioEmail: PERSONAS.tecnicoA.email,
+  });
+  const fichaUsada2Snap = await getDoc(doc(db, "fichasUsadas", fichaUsadaId(SEDE_A, ficha, "2")));
+  assert.ok(fichaUsada2Snap.exists(), "la recarga con NR en intento 2 tiene que haber guardado");
+  const actaFinalSnap = await getDoc(doc(db, "actas", fichaUsada2Snap.data().actaId));
+  assert.equal(actaFinalSnap.data().sitioInyeccion, "NR");
 });
