@@ -3,6 +3,7 @@ import { BloqueFirma } from "./BloqueFirma.jsx";
 import { claseFilaAnulada, claseCampoAnulado, LeyendaAnulado } from "./marcadoAnulada.jsx";
 import { fmtFechaHora, tipoTextoCSV, dosisRegistro, textoConformidad } from "./actasFormatoImpresion.js";
 import { TEXTO_SIN_RADIOFARMACO } from "../../constants/sinRadiofarmaco.js";
+import { etiquetaSitioInyeccionDeActa } from "../../constants/sitioInyeccion.js";
 
 // El CSV de Libro 2 tiene 26 columnas (ver TabPacientes.jsx#filaCSV) porque
 // además de los datos del paciente lleva 7 columnas del lote vinculado
@@ -63,6 +64,13 @@ export function ImprimibleLibro2Pacientes({ actas, anulaciones, lotesPorId, sede
                       Lote vinculado {lote.numeroLote} · {lote.proveedor} · {lote.actividadCalibrada} mCi/{lote.volumen} mL ·
                       Vence {lote.fechaVencimiento} · Conformidad: {textoConformidad(lote)}
                     </div>
+                  )}
+                  {/* Sitio de inyección (9/11): sólo Tc-99m/MIBG/Lutecio-177
+                      lo llevan -- "—" en los demás tipos no se muestra (nunca
+                      aplicó), mismo criterio que el panel de lote vinculado
+                      de arriba. */}
+                  {(a.tipo === "paciente" || a.tipo === "i131_mibg") && (
+                    <div className="text-[9px] text-gray-600 mt-0.5">Sitio de inyección: {etiquetaSitioInyeccionDeActa(a)}</div>
                   )}
                 </td>
               </tr>

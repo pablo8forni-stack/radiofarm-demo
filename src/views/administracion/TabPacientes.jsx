@@ -21,6 +21,7 @@ import { crearGuardDeSecuencia } from "../../helpers/guardSecuencia.js";
 import { TIPO_LABEL_I131 } from "../../constants/tipoI131.js";
 import { UMBRAL_SOSPECHA } from "../../helpers/huecosFicha.js";
 import { TEXTO_SIN_RADIOFARMACO } from "../../constants/sinRadiofarmaco.js";
+import { SITIOS_INYECCION, etiquetaSitioInyeccionDeActa } from "../../constants/sitioInyeccion.js";
 import {
   listenActas, addActaPaciente, actasPorRango, anularActaTransaction, listenAnulacionesActas,
   addActaI131Ablativa, addActaI131Dosis, addActaI131Barrido, addActaI131DosisBarrido,
@@ -281,6 +282,18 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
   // revela este campo. Lo que se guarda en el acta es el texto tipeado acá,
   // nunca el literal "Otro".
   const [estudioOtro, setEstudioOtro] = useState("");
+  // Sitio de inyección (9/11, decisión de Pablo): obligatorio para Tc-99m/
+  // MIBG/Lutecio-177 de ahora en adelante, NUNCA para I-131 oral. "Otro" no
+  // sale de la colección -- mismo patrón que estudioOtro arriba.
+  const [sitioInyeccion, setSitioInyeccion] = useState("");
+  const [sitioInyeccionOtro, setSitioInyeccionOtro] = useState("");
+  // permiteSitioNR: SOLO true durante la recarga de una acta ANULADA que no
+  // traía sitioInyeccion (acta vieja, de antes de este cambio) -- ver
+  // confirmarAnulacion más abajo. Se resetea a false en todos los demás
+  // caminos (limpiarForm, handleQRResult, abrirNuevo, cerrar/cancelar,
+  // guardado exitoso) para que "No registrado" nunca se ofrezca en una
+  // carga nueva de verdad.
+  const [permiteSitioNR, setPermiteSitioNR] = useState(false);
   const [farmId, setFarmId] = useState(""); const [lote, setLote] = useState("");
   const [obs, setObs] = useState("");
   // Sede de trabajo (2026-11, "sede de trabajo del admin"): ya NO es un
@@ -681,6 +694,19 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
           setActividadAdministrada(String(acta.mciAdministrados ?? ""));
         }
       }
+      // Sitio de inyección (9/11): "Anular" en este listado sólo existe para
+      // tipo "paciente" (Tc-99m/Lutecio-177) o "i131_mibg" (ver el botón más
+      // abajo, esAdmin && (a.tipo === "paciente" || a.tipo === "i131_mibg"))
+      // -- los dos únicos casos que llegan hasta acá son justo los 3
+      // isótopos que llevan este campo, nunca I-131 oral. Si el acta anulada
+      // ya trae sitioInyeccion, se precarga normal; si no (acta de antes de
+      // este cambio), el select arranca vacío y se habilita "No registrado"
+      // SOLO para esta carga puntual.
+      if (acta.sitioInyeccion) {
+        setSitioInyeccion(acta.sitioInyeccion); setSitioInyeccionOtro(acta.sitioInyeccionOtro || ""); setPermiteSitioNR(false);
+      } else {
+        setSitioInyeccion(""); setSitioInyeccionOtro(""); setPermiteSitioNR(true);
+      }
       setMostrarForm(true);
     } catch (e) {
       onToast(e.message, "error");
@@ -689,6 +715,10 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
 
   function handleQRResult(raw) {
     setMostrarQR(false);
+    // Alta nueva (lectura de pulsera), nunca corrección de acta anulada --
+    // "No registrado" no tiene sentido acá, aunque este camino no pase por
+    // limpiarForm().
+    setPermiteSitioNR(false);
     const data = parseQR(raw);
     if (data) {
       setNombre(data.pacienteNombre); setDni(data.pacienteDni);
@@ -715,6 +745,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
 
   function limpiarForm() {
     setFichaNro(""); setFichaEstado(null); setNombre(""); setDni(""); setPeso(""); setTalla(""); setEstudio(""); setEstudioOtro(""); setMci(""); setFarmId(""); setLote(""); setObs("");
+    setSitioInyeccion(""); setSitioInyeccionOtro(""); setPermiteSitioNR(false);
     setMostrarIsotopo(false); setIsotopoId("tc99m"); setMedicoResponsable("");
     setTipoI131("barrido"); setActividadAdministrada(""); setIndicacion(""); setDosisVinculada(""); setMibgLoteSeleccionado(""); setLutecioLoteSeleccionado("");
     setExtraccionVinculada(""); setSinExtraccionVial(false);
@@ -753,6 +784,15 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
   ];
 
   const tipoI131Actual = TIPOS_I131.find((t) => t.id === tipoI131);
+
+  // Sitio de inyección (9/11): Tc-99m (!esI131) y Lutecio-177 (idem, esLutecio
+  // siempre cae en !esI131) comparten la rama "else" de confirmarAnulacion y
+  // el guardado por addActaPaciente/administrarLutecioTransaction; MIBG es el
+  // único "caso distinto" (esI131 con isotopoId "i131") que también lo lleva
+  // -- mismo criterio exacto que ya usa la UI de MIBG en la línea de abajo
+  // (esI131 && tipoI131Actual.categoria === "mibg"). El resto de I-131 (todas
+  // las demás categorías de tipoI131Actual) nunca lo muestra ni lo manda.
+  const mostrarSitioInyeccion = !esI131 || tipoI131Actual.categoria === "mibg";
 
   // Aviso INFORMATIVO (nunca auto-completa ni preselecciona nada -- la
   // técnica decide) si este DNI ya tiene un registro de I-131 en los
@@ -887,6 +927,32 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
   function guardar() {
     const fichaNormalizada = normalizarFicha(fichaNro);
     if (!fichaNormalizada || !nombre.trim() || !dni.trim() || fichaEstado?.tipo !== "ok") return;
+    // Sitio de inyección: validado ACÁ (no sólo en el disabled del botón,
+    // ver más abajo) -- mismo criterio que el resto de los campos
+    // obligatorios de este guardar(). "NR" sólo es válido si permiteSitioNR
+    // sigue activo en este mismo render (defensa real, no sólo visual: el
+    // valor del select no alcanza por sí solo como barrera).
+    if (mostrarSitioInyeccion) {
+      if (!sitioInyeccion) return;
+      if (sitioInyeccion === "OTRO" && !sitioInyeccionOtro.trim()) return;
+      // Caso real que puede dejar esto desalineado sin pasar por la UI del
+      // select: escanear una pulsera (QRScanner, ver handleQRResult) MIENTRAS
+      // se está corrigiendo una acta vieja con "No registrado" ya elegido --
+      // ese escaneo resetea permiteSitioNR a false pero no toca sitioInyeccion,
+      // dejando "NR" seleccionado sin permiso. Con error visible (a
+      // diferencia del resto de los `return` silenciosos de más arriba, que
+      // el botón deshabilitado ya vuelve inalcanzables) porque ACÁ sí puede
+      // pasar de verdad -- y se limpia la selección para que quede claro qué
+      // hay que volver a elegir.
+      if (sitioInyeccion === "NR" && !permiteSitioNR) {
+        setSitioInyeccion("");
+        onToast("El sitio de inyección se reinició (NR dejó de ser válido) -- volvé a elegirlo.", "error");
+        return;
+      }
+    }
+    const sitioInyeccionPayload = mostrarSitioInyeccion
+      ? { sitioInyeccion, ...(sitioInyeccion === "OTRO" ? { sitioInyeccionOtro: sitioInyeccionOtro.trim() } : {}) }
+      : {};
     if (esI131) {
       const base = {
         sedeId, sedeNombre: catalogo.sedes[sedeId]?.nombre,
@@ -967,6 +1033,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
         administrarMibgTransaction(mibgLoteSeleccionado, {
           ...base, numeroLote: loteElegido.numeroLote, actividadCalibrada: loteElegido.actividadCalibrada, volumen: loteElegido.volumen,
           actividadAdministrada: parseFloat(actividadAdministrada) || 0,
+          ...sitioInyeccionPayload,
         })
           .then(() => {
             ultimaFichaGuardadaRef.current = { sedeId, numero: parseInt(fichaNormalizada, 10) };
@@ -1025,6 +1092,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
         isotopoId, lote: loteElegido.numeroLote,
         medicoResponsable: medicoResponsable.trim(),
         usuarioNombre: usuario.nombre, usuarioEmail: usuario.email, observacion: obs.trim(),
+        ...sitioInyeccionPayload,
       })
         .then(() => {
           ultimaFichaGuardadaRef.current = { sedeId, numero: parseInt(fichaNormalizada, 10) };
@@ -1064,6 +1132,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
       // sólo se mandaba en el `base` de la rama esI131, ver arriba.
       ...(fechaRealAtencion ? { fechaRealAtencion: new Date(fechaRealAtencion) } : {}),
       usuarioNombre: usuario.nombre, usuarioEmail: usuario.email, observacion: obs.trim(),
+      ...sitioInyeccionPayload,
     })
       .then(() => { ultimaFichaGuardadaRef.current = { sedeId, numero: parseInt(fichaNormalizada, 10) }; })
       .catch((e) => onToast(e.message || "No se pudo guardar el registro", "error"));
@@ -1202,15 +1271,19 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
   // la dosis para los 3 diagnósticos) -- se centraliza acá para no repetir la
   // misma cadena de condiciones en la fila y en la tarjeta. Barrido no lleva
   // vínculo (se sacó de ahí, ver TIPOS_I131) así que siempre queda en "—".
+  // sitio: sólo para los 2 tipos que realmente llevan el campo (tipo
+  // "paciente" -- Tc-99m/Lutecio-177 -- o "i131_mibg"); null para los 6
+  // subtipos de I-131 oral, que nunca lo tuvieron ni lo van a tener.
   function detalleRegistro(a) {
-    if (a.tipo === "i131_ablativa" || a.tipo === "i131_dosis") return { principal: `Lote: ${a.lote || "—"}`, sub: a.indicacion || null };
+    const sitio = (a.tipo === "paciente" || a.tipo === "i131_mibg") ? etiquetaSitioInyeccionDeActa(a) : null;
+    if (a.tipo === "i131_ablativa" || a.tipo === "i131_dosis") return { principal: `Lote: ${a.lote || "—"}`, sub: a.indicacion || null, sitio };
     if (a.tipo === "i131_captacion" || a.tipo === "i131_centellograma" || a.tipo === "i131_captacion_centellograma") {
-      return { principal: a.dosisActaId ? "Vinculado a dosis" : "—", sub: null };
+      return { principal: a.dosisActaId ? "Vinculado a dosis" : "—", sub: null, sitio };
     }
-    if (a.tipo === "i131_barrido" || a.tipo === "i131_dosis_barrido") return { principal: "—", sub: null };
-    if (a.tipo === "i131_mibg") return { principal: `Lote MIBG: ${a.numeroLote || "—"}`, sub: null };
-    if (a.sinRadiofarmaco) return { principal: TEXTO_SIN_RADIOFARMACO, sub: null };
-    return { principal: a.isotopoId === "lu177" ? null : (a.farmNombre || "—"), sub: a.lote || null };
+    if (a.tipo === "i131_barrido" || a.tipo === "i131_dosis_barrido") return { principal: "—", sub: null, sitio };
+    if (a.tipo === "i131_mibg") return { principal: `Lote MIBG: ${a.numeroLote || "—"}`, sub: null, sitio };
+    if (a.sinRadiofarmaco) return { principal: TEXTO_SIN_RADIOFARMACO, sub: null, sitio };
+    return { principal: a.isotopoId === "lu177" ? null : (a.farmNombre || "—"), sub: a.lote || null, sitio };
   }
 
   // Misma magnitud física (actividad administrada) para Tc-99m/Lutecio
@@ -1258,7 +1331,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
   function filaPaciente(a) {
     const anulacion = anulaciones.get(a.id);
     const tipo = tipoInfo(a);
-    const { principal, sub } = detalleRegistro(a);
+    const { principal, sub, sitio } = detalleRegistro(a);
     const dosis = dosisRegistro(a);
     const lote = loteVinculadoDe(a);
     const expandido = loteExpandidoId === a.id;
@@ -1288,6 +1361,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
           <td className="px-3 py-2.5 text-xs text-gray-700">
             {principal}
             {sub && <div className="text-xs text-gray-400 font-mono mt-0.5">{sub}</div>}
+            {sitio && <div className="text-xs text-gray-400 mt-0.5">Sitio: {sitio}</div>}
           </td>
           <td className="px-3 py-2.5">
             {dosis ? (
@@ -1318,7 +1392,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
   function tarjetaPaciente(a) {
     const anulacion = anulaciones.get(a.id);
     const tipo = tipoInfo(a);
-    const { principal, sub } = detalleRegistro(a);
+    const { principal, sub, sitio } = detalleRegistro(a);
     const dosis = dosisRegistro(a);
     const lote = loteVinculadoDe(a);
     const expandido = loteExpandidoId === a.id;
@@ -1344,6 +1418,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
         <div className="text-xs text-gray-700">
           {principal}{sub && ` · ${sub}`}{dosis && <> · <span className="font-bold text-blue-700">{dosis.valor} {dosis.unidad}</span></>}
         </div>
+        {sitio && <div className="text-xs text-gray-500">Sitio: {sitio}</div>}
         {a.medicoResponsable && <div className="text-xs text-gray-500">Médico: {a.medicoResponsable}</div>}
         <div className="text-xs text-gray-500">Técnico: {a.usuarioNombre}</div>
         {a.observacion && <div className="text-xs text-gray-400 italic">{a.observacion}</div>}
@@ -1378,13 +1453,18 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
       // y cualquier otro registro sin este dato), ver loteVinculadoDe.
       lote?.numeroLote ?? "—", lote?.actividadCalibrada ?? "—", lote?.volumen ?? "—",
       lote ? fmtTs(lote.fechaHoraCalibracion) : "—", lote ? fmtF(lote.fechaVencimiento) : "—",
-      lote?.proveedor ?? "—", lote ? textoConformidad(lote).texto : "—"];
+      lote?.proveedor ?? "—", lote ? textoConformidad(lote).texto : "—",
+      // Columna nueva (9/11, sitio de inyección) AL FINAL a propósito, no en
+      // medio de las columnas ya existentes -- "—" en las actas que nunca
+      // llevan el campo (I-131 oral) o son de antes de este cambio, mismo
+      // criterio que el resto de las columnas "—".
+      etiquetaSitioInyeccionDeActa(a)];
   }
 
   function descargarCSV(lista, nombreArchivo) {
     const filas = [
       ["Fecha", "Hora", "Sede", "Tipo de registro", "N° Ficha", "Paciente", "DNI", "Médico responsable", "Peso (kg)", "Talla (cm)", "Estudio", "Radiofármaco", "Lote", "Dosis/Actividad", "Unidad", "Indicación", "Dosis vinculada (id)", "Técnico", "Observación",
-       "N° Lote vinculado", "Actividad calibrada (mCi)", "Volumen (mL)", "Fecha/hora calibración", "Vencimiento", "Proveedor", "Conformidad"],
+       "N° Lote vinculado", "Actividad calibrada (mCi)", "Volumen (mL)", "Fecha/hora calibración", "Vencimiento", "Proveedor", "Conformidad", "Sitio de inyección"],
       ...lista.map(filaCSV),
     ];
     const csv = filas.map((r) => r.map((x) => String(x).replace(/[\t\r\n]/g, " ")).join("\t")).join("\r\n");
@@ -1647,6 +1727,34 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
             {!esI131 && (<>
             <Input label="Peso (kg)" type="number" min={0} value={peso} onChange={(e) => setPeso(e.target.value)} placeholder="78" />
             <Input label="Talla (cm)" type="number" min={0} value={talla} onChange={(e) => setTalla(e.target.value)} placeholder="172" />
+            </>)}
+            {/* Sitio de inyección (9/11): obligatorio para Tc-99m/MIBG/
+                Lutecio-177 de ahora en adelante -- NUNCA para I-131 oral
+                (mostrarSitioInyeccion, ver más arriba). Arranca vacío a
+                propósito (sin valor por defecto), para que no se pueda
+                guardar por inercia -- la validación real está en guardar(),
+                esto es sólo la UI. "NR" (No registrado) sólo aparece
+                durante permiteSitioNR (recarga de acta anulada vieja sin el
+                campo, ver confirmarAnulacion) -- nunca en carga normal. */}
+            {mostrarSitioInyeccion && (<>
+            <Sel
+              label="Sitio de inyección"
+              value={sitioInyeccion}
+              onChange={(e) => { setSitioInyeccion(e.target.value); if (e.target.value !== "OTRO") setSitioInyeccionOtro(""); }}
+            >
+              <option value="">Seleccionar...</option>
+              {SITIOS_INYECCION.filter((s) => s.codigo !== "NR" || permiteSitioNR).map((s) => (
+                <option key={s.codigo} value={s.codigo}>{s.etiqueta}</option>
+              ))}
+            </Sel>
+            {sitioInyeccion === "OTRO" && (
+              <Input
+                label="¿Cuál?"
+                value={sitioInyeccionOtro}
+                onChange={(e) => setSitioInyeccionOtro(e.target.value.slice(0, 40))}
+                placeholder="Ej: vena yugular externa"
+              />
+            )}
             </>)}
             {/* Tc-99m es el 99% de los casos -- sin selector visible por
                 defecto, cero fricción. Este link revela el selector de
@@ -1950,6 +2058,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
             <Btn onClick={guardar} disabled={
               guardandoTransaccionReal ||
               !normalizarFicha(fichaNro) || !nombre.trim() || !dni.trim() || fichaEstado?.tipo !== "ok" ||
+              (mostrarSitioInyeccion && (!sitioInyeccion || (sitioInyeccion === "OTRO" && !sitioInyeccionOtro.trim()) || (sitioInyeccion === "NR" && !permiteSitioNR))) ||
               (esI131
                 ? ((tipoI131Actual.requierePermiso && !puedeCargarDosisI131) ||
                    (tipoI131Actual.categoria !== "barrido" && !actividadAdministrada) ||

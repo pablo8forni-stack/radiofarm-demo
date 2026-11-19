@@ -23,6 +23,19 @@ import { cleanup, render, screen, act, fireEvent } from "@testing-library/react"
 import userEvent from "@testing-library/user-event";
 import { TabPacientes } from "./TabPacientes.jsx";
 
+// Mock mínimo -- el QRScanner real necesita cámara/BarcodeDetector, nada de
+// eso existe en jsdom. Un botón que invoca onResult con el raw que el test
+// necesite alcanza; ningún test existente abre mostrarQR, así que esto no
+// les cambia nada.
+vi.mock("../../components/scanner/QRScanner.jsx", () => ({
+  QRScanner: ({ onResult }) => <button onClick={() => onResult("x")}>MOCK escanear (QR inválido)</button>,
+}));
+
+// descargarArchivo real usa Blob/URL.createObjectURL/<a>.click() -- mockeado
+// para poder leer el contenido CSV armado (el string tab-delimited) sin
+// depender de esos APIs en jsdom.
+vi.mock("../../helpers/descargarArchivo.js", () => ({ descargarArchivo: vi.fn() }));
+
 afterEach(cleanup);
 
 function crearDiferida() {
@@ -970,6 +983,9 @@ describe("TabPacientes -- MIBG/Lutecio-177: el formulario espera la transacción
     await user.click(screen.getByText("¿Es un caso distinto a Tc-99m?"));
     await user.selectOptions(labelInput("Isótopo"), "i131");
     await user.selectOptions(labelInput("Tipo de registro"), "mibg");
+    // Sitio de inyección (9/11): obligatorio para MIBG -- sin esto, Guardar
+    // queda bloqueado en todos estos tests.
+    await user.selectOptions(labelInput("Sitio de inyección"), "DMD");
     await user.selectOptions(labelInput("Lote de MIBG disponible"), "lote-mibg-1");
     await user.type(labelInput("Dosis administrada (mCi)"), "10");
 
@@ -1020,6 +1036,9 @@ describe("TabPacientes -- MIBG/Lutecio-177: el formulario espera la transacción
     await user.click(screen.getByText("¿Es un caso distinto a Tc-99m?"));
     await user.selectOptions(labelInput("Isótopo"), "i131");
     await user.selectOptions(labelInput("Tipo de registro"), "mibg");
+    // Sitio de inyección (9/11): obligatorio para MIBG -- sin esto, Guardar
+    // queda bloqueado en todos estos tests.
+    await user.selectOptions(labelInput("Sitio de inyección"), "DMD");
     await user.selectOptions(labelInput("Lote de MIBG disponible"), "lote-mibg-dc");
     await user.type(labelInput("Dosis administrada (mCi)"), "10");
 
@@ -1075,6 +1094,9 @@ describe("TabPacientes -- MIBG/Lutecio-177: el formulario espera la transacción
     await user.click(screen.getByText("¿Es un caso distinto a Tc-99m?"));
     await user.selectOptions(labelInput("Isótopo"), "i131");
     await user.selectOptions(labelInput("Tipo de registro"), "mibg");
+    // Sitio de inyección (9/11): obligatorio para MIBG -- sin esto, Guardar
+    // queda bloqueado en todos estos tests.
+    await user.selectOptions(labelInput("Sitio de inyección"), "DMD");
     await user.selectOptions(labelInput("Lote de MIBG disponible"), "lote-mibg-cancel");
     await user.type(labelInput("Dosis administrada (mCi)"), "10");
 
@@ -1118,6 +1140,9 @@ describe("TabPacientes -- MIBG/Lutecio-177: el formulario espera la transacción
     await user.click(screen.getByText("¿Es un caso distinto a Tc-99m?"));
     await user.selectOptions(labelInput("Isótopo"), "i131");
     await user.selectOptions(labelInput("Tipo de registro"), "mibg");
+    // Sitio de inyección (9/11): obligatorio para MIBG -- sin esto, Guardar
+    // queda bloqueado en todos estos tests.
+    await user.selectOptions(labelInput("Sitio de inyección"), "DMD");
     await user.selectOptions(labelInput("Lote de MIBG disponible"), "lote-mibg-2");
     await user.type(labelInput("Dosis administrada (mCi)"), "10");
 
@@ -1151,6 +1176,9 @@ describe("TabPacientes -- MIBG/Lutecio-177: el formulario espera la transacción
     await user.click(screen.getByText("¿Es un caso distinto a Tc-99m?"));
     await user.selectOptions(labelInput("Isótopo"), "lu177");
     await user.type(labelInput("Médico responsable"), "Dr. Test");
+    // Sitio de inyección (9/11): obligatorio para Lutecio-177 -- sin esto,
+    // Guardar queda bloqueado en todos estos tests.
+    await user.selectOptions(labelInput("Sitio de inyección"), "DMD");
     await user.selectOptions(labelInput("Lote de Lutecio-177 disponible"), "lote-lu-1");
     await user.type(labelInput("Dosis administrada (mCi)"), "1.5");
 
@@ -1190,6 +1218,9 @@ describe("TabPacientes -- MIBG/Lutecio-177: el formulario espera la transacción
     await user.click(screen.getByText("¿Es un caso distinto a Tc-99m?"));
     await user.selectOptions(labelInput("Isótopo"), "lu177");
     await user.type(labelInput("Médico responsable"), "Dr. Test");
+    // Sitio de inyección (9/11): obligatorio para Lutecio-177 -- sin esto,
+    // Guardar queda bloqueado en todos estos tests.
+    await user.selectOptions(labelInput("Sitio de inyección"), "DMD");
     await user.selectOptions(labelInput("Lote de Lutecio-177 disponible"), "lote-lu-dc");
     await user.type(labelInput("Dosis administrada (mCi)"), "1.5");
 
@@ -1228,6 +1259,9 @@ describe("TabPacientes -- MIBG/Lutecio-177: el formulario espera la transacción
     await user.click(screen.getByText("¿Es un caso distinto a Tc-99m?"));
     await user.selectOptions(labelInput("Isótopo"), "lu177");
     await user.type(labelInput("Médico responsable"), "Dr. Test");
+    // Sitio de inyección (9/11): obligatorio para Lutecio-177 -- sin esto,
+    // Guardar queda bloqueado en todos estos tests.
+    await user.selectOptions(labelInput("Sitio de inyección"), "DMD");
     await user.selectOptions(labelInput("Lote de Lutecio-177 disponible"), "lote-lu-2");
     await user.type(labelInput("Dosis administrada (mCi)"), "1.5");
 
@@ -1257,6 +1291,9 @@ async function llegarAFormMibg(user, numeroFicha) {
   await user.click(screen.getByText("¿Es un caso distinto a Tc-99m?"));
   await user.selectOptions(labelInput("Isótopo"), "i131");
   await user.selectOptions(labelInput("Tipo de registro"), "mibg");
+  // Sitio de inyección (9/11): obligatorio para MIBG -- sin esto, Guardar
+  // queda bloqueado para TODOS los tests que usan este helper.
+  await user.selectOptions(labelInput("Sitio de inyección"), "DMD");
 }
 
 async function llegarAFormLutecio(user, numeroFicha) {
@@ -1274,6 +1311,9 @@ async function llegarAFormLutecio(user, numeroFicha) {
   await user.click(screen.getByText("¿Es un caso distinto a Tc-99m?"));
   await user.selectOptions(labelInput("Isótopo"), "lu177");
   await user.type(labelInput("Médico responsable"), "Dr. Picker Test");
+  // Sitio de inyección (9/11): obligatorio para Lutecio-177 -- sin esto,
+  // Guardar queda bloqueado para TODOS los tests que usan este helper.
+  await user.selectOptions(labelInput("Sitio de inyección"), "DMD");
 }
 
 const loteMibgBase = (id, numeroLote) => ({
@@ -1789,6 +1829,7 @@ describe("TabPacientes -- normalización de nombre de paciente en MAYÚSCULA (pa
     await elegirLotePorTexto(user, "LOTE-NOMBRE");
     await user.selectOptions(labelInput("Estudio"), "Ecografía");
     await user.type(labelInput("Dosis administrada (mCi)"), "10");
+    await user.selectOptions(labelInput("Sitio de inyección"), "DMD");
 
     // fireEvent.input (no userEvent.type + blur): deja cargado el nombre sin
     // disparar el evento blur de React en ningún momento -- el caso real
@@ -1803,5 +1844,280 @@ describe("TabPacientes -- normalización de nombre de paciente en MAYÚSCULA (pa
     fireEvent.click(screen.getByRole("button", { name: "Guardar registro" }));
     await vi.waitFor(() => expect(addActaPaciente).toHaveBeenCalledTimes(1));
     expect(addActaPaciente.mock.calls[0][0].pacienteNombre).toBe("ANA GOMEZ");
+  });
+});
+
+// "Sitio de inyección" (9/11, decisión de Pablo): obligatorio de ahora en
+// adelante para Tc-99m/MIBG/Lutecio-177, NUNCA para I-131 oral. Sólo
+// cliente -- firestore.rules queda sin tocar (ver Paso 0 del pedido: las
+// reglas actuales ya aceptan un campo extra no declarado).
+describe("TabPacientes -- sitio de inyección", () => {
+  const admin = { nombre: "Admin Test", email: "admin@test.local", sede: "central", sedeAuditando: "central" };
+
+  beforeEach(() => {
+    catalogo.stock.central.mibi = [{ lote: "LOTE-SITIO", cantidad: 10, vencimiento: "2026-12-31" }];
+    marcacionesHoyParaTest = [{ id: "m1", farmId: "mibi", lote: "LOTE-SITIO", fecha: new Date() }];
+  });
+  afterEach(() => {
+    catalogo.stock.central.mibi = [];
+    marcacionesHoyParaTest = [];
+    marcacionesHoyCallbacks = [];
+    actasParaListado = [];
+    actasI131PorTipo = {};
+    actasI131Callbacks = {};
+  });
+
+  async function llegarAFormConFichaOk(user, numeroFicha, usuarioDeTest = usuario) {
+    render(<TabPacientes catalogo={catalogo} usuario={usuarioDeTest} esAdmin={usuarioDeTest === admin} onToast={vi.fn()} nav={null} />);
+    await user.click(await screen.findByText("+ Manual"));
+    const fichaInput = labelInput("N° de Ficha");
+    await user.type(fichaInput, numeroFicha);
+    fichaInput.blur();
+    await screen.findByText("Verificando N° de Ficha...");
+    await act(async () => {
+      resolverFichaIntentoDeferido.resolver({ intento: "1" });
+      await resolverFichaIntentoDeferido.promesa;
+    });
+  }
+
+  async function completarTc99mBasico(user, { dni = "30111222" } = {}) {
+    await user.type(labelInput("Apellido y nombre"), "Paciente Sitio Test");
+    await user.type(labelInput("DNI"), dni);
+    await user.selectOptions(labelInput("Radiofármaco utilizado"), "mibi");
+    await elegirLotePorTexto(user, "LOTE-SITIO");
+    await user.selectOptions(labelInput("Estudio"), "Ecografía");
+    await user.type(labelInput("Dosis administrada (mCi)"), "10");
+  }
+
+  test("Tc-99m sin sitio de inyección: Guardar queda deshabilitado y no guarda", async () => {
+    const { addActaPaciente } = await import("../../services/firestore/actas.js");
+    const user = userEvent.setup();
+    await llegarAFormConFichaOk(user, "800001");
+    await completarTc99mBasico(user);
+
+    const boton = screen.getByRole("button", { name: "Guardar registro" });
+    expect(boton.disabled).toBe(true);
+    fireEvent.click(boton);
+    expect(addActaPaciente).not.toHaveBeenCalled();
+  });
+
+  test("Tc-99m con sitio de inyección: guarda y el payload trae sitioInyeccion", async () => {
+    const { addActaPaciente } = await import("../../services/firestore/actas.js");
+    const user = userEvent.setup();
+    await llegarAFormConFichaOk(user, "800002");
+    await completarTc99mBasico(user, { dni: "30111223" });
+    await user.selectOptions(labelInput("Sitio de inyección"), "DMD");
+
+    await user.click(screen.getByRole("button", { name: "Guardar registro" }));
+    await vi.waitFor(() => expect(addActaPaciente).toHaveBeenCalledTimes(1));
+    expect(addActaPaciente.mock.calls[0][0].sitioInyeccion).toBe("DMD");
+    expect(addActaPaciente.mock.calls[0][0]).not.toHaveProperty("sitioInyeccionOtro");
+  });
+
+  test("OTRO sin '¿Cuál?': Guardar queda deshabilitado", async () => {
+    const { addActaPaciente } = await import("../../services/firestore/actas.js");
+    const user = userEvent.setup();
+    await llegarAFormConFichaOk(user, "800003");
+    await completarTc99mBasico(user, { dni: "30111224" });
+    await user.selectOptions(labelInput("Sitio de inyección"), "OTRO");
+
+    const boton = screen.getByRole("button", { name: "Guardar registro" });
+    expect(boton.disabled).toBe(true);
+    fireEvent.click(boton);
+    expect(addActaPaciente).not.toHaveBeenCalled();
+  });
+
+  test("OTRO con texto en '¿Cuál?': guarda y manda sitioInyeccionOtro", async () => {
+    const { addActaPaciente } = await import("../../services/firestore/actas.js");
+    const user = userEvent.setup();
+    await llegarAFormConFichaOk(user, "800004");
+    await completarTc99mBasico(user, { dni: "30111225" });
+    await user.selectOptions(labelInput("Sitio de inyección"), "OTRO");
+    await user.type(labelInput("¿Cuál?"), "Vena yugular externa");
+
+    await user.click(screen.getByRole("button", { name: "Guardar registro" }));
+    await vi.waitFor(() => expect(addActaPaciente).toHaveBeenCalledTimes(1));
+    expect(addActaPaciente.mock.calls[0][0].sitioInyeccion).toBe("OTRO");
+    expect(addActaPaciente.mock.calls[0][0].sitioInyeccionOtro).toBe("Vena yugular externa");
+  });
+
+  test("I-131 (Captación, no MIBG): el campo no aparece y el payload NO trae sitioInyeccion", async () => {
+    const { addActaI131Captacion } = await import("../../services/firestore/actas.js");
+    const user = userEvent.setup();
+    render(<TabPacientes catalogo={catalogo} usuario={usuarioConAccesoI131} esAdmin={false} onToast={vi.fn()} nav={null} />);
+    await user.click(await screen.findByText("+ Manual"));
+    const fichaInput = labelInput("N° de Ficha");
+    await user.type(fichaInput, "800005");
+    fichaInput.blur();
+    await screen.findByText("Verificando N° de Ficha...");
+    await act(async () => {
+      resolverFichaIntentoDeferido.resolver({ intento: "1" });
+      await resolverFichaIntentoDeferido.promesa;
+    });
+    await user.type(labelInput("Apellido y nombre"), "Paciente I131 Sitio");
+    await user.type(labelInput("DNI"), "30111226");
+    await user.click(screen.getByText("¿Es un caso distinto a Tc-99m?"));
+    await user.selectOptions(labelInput("Isótopo"), "i131");
+    await user.selectOptions(labelInput("Tipo de registro"), "captacion");
+
+    expect(screen.queryByText("Sitio de inyección")).toBeNull();
+
+    await user.type(labelInput("Actividad administrada (µCi)"), "10");
+    await user.click(screen.getByRole("button", { name: "Guardar registro" }));
+    await vi.waitFor(() => expect(addActaI131Captacion).toHaveBeenCalledTimes(1));
+    expect(addActaI131Captacion.mock.calls[0][0]).not.toHaveProperty("sitioInyeccion");
+  });
+
+  test("alta nueva ('+ Manual'): el select de sitio NO ofrece 'No registrado'", async () => {
+    const user = userEvent.setup();
+    await llegarAFormConFichaOk(user, "800006");
+    expect(screen.queryByRole("option", { name: "No registrado" })).toBeNull();
+  });
+
+  // Fixture de MIBG vieja (sin sitioInyeccion) para los tests de recarga --
+  // ver confirmarAnulacion en TabPacientes.jsx (el flujo detectado, ver
+  // reporte: precarga desde una acta real que se está anulando).
+  function actaMibgVieja(overrides = {}) {
+    return {
+      id: "acta-mibg-vieja", tipo: "i131_mibg", sedeId: "central",
+      pacienteFicha: "500", pacienteNombre: "PACIENTE MIBG VIEJO", pacienteDni: "5551111",
+      fecha: new Date(), mibgLoteId: "lote-mibg-recarga", actividadCalibrada: 20, actividadAdministrada: 15,
+      usuarioNombre: "Tec",
+      ...overrides,
+    };
+  }
+
+  async function abrirAnularYConfirmar(user) {
+    const botonesAnular = await screen.findAllByRole("button", { name: "Anular" });
+    await user.click(botonesAnular[0]);
+    await user.type(labelInput("Motivo de la anulación (obligatorio)"), "Test sitio");
+    await user.click(screen.getByRole("button", { name: "Confirmar anulación" }));
+    // confirmarAnulacion dispara resolverYSetFichaEstado (mismo mock
+    // deferido que la verificación de Ficha en "+ Manual") -- sin
+    // resolverlo, fichaEstado queda en "verificando" y Guardar sigue
+    // bloqueado por ESE motivo, sin importar el sitio de inyección.
+    await screen.findByText("Nuevo registro de paciente");
+    await act(async () => {
+      resolverFichaIntentoDeferido.resolver({ intento: "2" });
+      await resolverFichaIntentoDeferido.promesa;
+    });
+  }
+
+  test("recarga de acta MIBG vieja (sin sitioInyeccion): el select SÍ ofrece 'No registrado', y guarda con NR", async () => {
+    const mibgLotesMod = await import("../../services/firestore/mibgLotes.js");
+    vi.spyOn(mibgLotesMod, "listenMibgLotes").mockImplementation((cb) => listenerCon(cb, [
+      { id: "lote-mibg-recarga", sedeId: "central", isotopoId: "mibg", numeroLote: "NR-1", proveedor: "IPEN", actividadCalibrada: 20, volumen: 2, fechaHoraCalibracion: new Date(), fecha: new Date() },
+    ]));
+    vi.spyOn(mibgLotesMod, "administrarMibgTransaction").mockResolvedValueOnce();
+    const { anularActaTransaction } = await import("../../services/firestore/actas.js");
+
+    actasI131PorTipo.i131_mibg = [actaMibgVieja()];
+    const user = userEvent.setup();
+    render(<TabPacientes catalogo={catalogo} usuario={admin} esAdmin onToast={vi.fn()} nav={null} />);
+
+    await abrirAnularYConfirmar(user);
+    expect(anularActaTransaction).toHaveBeenCalled();
+
+    expect(screen.getByRole("option", { name: "No registrado" })).toBeTruthy();
+    await user.selectOptions(labelInput("Sitio de inyección"), "NR");
+
+    await user.click(screen.getByRole("button", { name: "Guardar registro" }));
+    await vi.waitFor(() => expect(mibgLotesMod.administrarMibgTransaction).toHaveBeenCalledTimes(1));
+    expect(mibgLotesMod.administrarMibgTransaction.mock.calls[0][1].sitioInyeccion).toBe("NR");
+  });
+
+  test("después de una recarga de acta vieja, abrir '+ Manual' no ofrece 'No registrado' (el flag se resetea)", async () => {
+    actasI131PorTipo.i131_mibg = [actaMibgVieja()];
+    const user = userEvent.setup();
+    render(<TabPacientes catalogo={catalogo} usuario={admin} esAdmin onToast={vi.fn()} nav={null} />);
+
+    await abrirAnularYConfirmar(user);
+    expect(screen.getByRole("option", { name: "No registrado" })).toBeTruthy();
+
+    // Cancelar (limpiarForm) y abrir un alta nueva -- NR no tiene que seguir
+    // ofrecido.
+    await user.click(screen.getByRole("button", { name: "Cancelar" }));
+    await user.click(await screen.findByText("+ Manual"));
+    expect(screen.queryByRole("option", { name: "No registrado" })).toBeNull();
+  });
+
+  test("recarga de acta MIBG que YA trae sitioInyeccion: precarga el sitio y no ofrece NR", async () => {
+    const mibgLotesMod = await import("../../services/firestore/mibgLotes.js");
+    vi.spyOn(mibgLotesMod, "listenMibgLotes").mockImplementation((cb) => listenerCon(cb, [
+      { id: "lote-mibg-recarga", sedeId: "central", isotopoId: "mibg", numeroLote: "NR-2", proveedor: "IPEN", actividadCalibrada: 20, volumen: 2, fechaHoraCalibracion: new Date(), fecha: new Date() },
+    ]));
+
+    actasI131PorTipo.i131_mibg = [actaMibgVieja({ id: "acta-mibg-con-sitio", sitioInyeccion: "PCD" })];
+    const user = userEvent.setup();
+    render(<TabPacientes catalogo={catalogo} usuario={admin} esAdmin onToast={vi.fn()} nav={null} />);
+
+    await abrirAnularYConfirmar(user);
+
+    expect(labelInput("Sitio de inyección").value).toBe("PCD");
+    expect(screen.queryByRole("option", { name: "No registrado" })).toBeNull();
+  });
+
+  // Defensa de guardar() (no sólo el estado del select): un caso real puede
+  // dejar sitioInyeccion="NR" sin permiso -- escanear una pulsera (QRScanner)
+  // MIENTRAS se está corrigiendo una acta vieja con NR ya elegido resetea
+  // permiteSitioNR a false (handleQRResult) sin tocar sitioInyeccion. Ver el
+  // mock de QRScanner al principio del archivo (el botón "MOCK escanear"
+  // invoca onResult con un QR inválido, que de cualquier forma resetea
+  // permiteSitioNR -- ver handleQRResult en TabPacientes.jsx).
+  test("interrupción por QR durante una recarga con NR seleccionado: Guardar queda deshabilitado (el select no es la única barrera)", async () => {
+    const mibgLotesMod = await import("../../services/firestore/mibgLotes.js");
+    vi.spyOn(mibgLotesMod, "listenMibgLotes").mockImplementation((cb) => listenerCon(cb, [
+      { id: "lote-mibg-recarga", sedeId: "central", isotopoId: "mibg", numeroLote: "NR-3", proveedor: "IPEN", actividadCalibrada: 20, volumen: 2, fechaHoraCalibracion: new Date(), fecha: new Date() },
+    ]));
+    actasI131PorTipo.i131_mibg = [actaMibgVieja()];
+    const user = userEvent.setup();
+    render(<TabPacientes catalogo={catalogo} usuario={admin} esAdmin onToast={vi.fn()} nav={null} />);
+
+    await abrirAnularYConfirmar(user);
+    await user.selectOptions(labelInput("Sitio de inyección"), "NR");
+    expect(screen.getByRole("button", { name: "Guardar registro" }).disabled).toBe(false);
+
+    await user.click(screen.getByText("Escanear pulsera"));
+    await user.click(screen.getByText("MOCK escanear (QR inválido)"));
+
+    // El QR inválido también dispara precargarSugerenciaFicha (parte de su
+    // rama de error) y deja N° de Ficha vacío -- se vuelve a cargar una
+    // ficha válida para que lo ÚNICO que pueda seguir bloqueando Guardar
+    // sea la desalineación sitio/permiso que este test realmente cubre.
+    const fichaInput = labelInput("N° de Ficha");
+    await user.type(fichaInput, "501");
+    fichaInput.blur();
+    await screen.findByText("Verificando N° de Ficha...");
+    await act(async () => {
+      resolverFichaIntentoDeferido.resolver({ intento: "1" });
+      await resolverFichaIntentoDeferido.promesa;
+    });
+
+    expect(screen.getByRole("button", { name: "Guardar registro" }).disabled).toBe(true);
+  });
+
+  test("CSV de Libro 2: 'Sitio de inyección' es la ÚLTIMA columna, con la etiqueta (no el código)", async () => {
+    const { descargarArchivo } = await import("../../helpers/descargarArchivo.js");
+    // filtroFecha arranca en hoy() -- el acta de hoy con sitioInyeccion
+    // "OTRO" + texto libre confirma además que el CSV muestra la etiqueta
+    // completa ("Otro: ..."), no el código crudo.
+    actasParaListado = [{
+      id: "acta-csv", tipo: "paciente", sedeId: "central", pacienteFicha: "900",
+      pacienteNombre: "Paciente CSV", pacienteDni: "1234",
+      fecha: new Date(), isotopoId: "tc99m", farmId: "mibi", lote: "LOTE-CSV", mciAdministrados: 10,
+      sitioInyeccion: "OTRO", sitioInyeccionOtro: "Vena yugular externa",
+    }];
+    const user = userEvent.setup();
+    render(<TabPacientes catalogo={catalogo} usuario={usuario} esAdmin={false} onToast={vi.fn()} nav={null} />);
+
+    await user.click(await screen.findByRole("button", { name: "↓ CSV" }));
+    expect(descargarArchivo).toHaveBeenCalledTimes(1);
+    const contenido = descargarArchivo.mock.calls[0][0];
+    const [header, fila] = contenido.split("\r\n");
+    const columnasHeader = header.split("\t");
+    const columnasFila = fila.split("\t");
+
+    expect(columnasHeader[columnasHeader.length - 1]).toBe("Sitio de inyección");
+    expect(columnasFila[columnasFila.length - 1]).toBe("Otro: Vena yugular externa");
   });
 });

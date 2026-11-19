@@ -7,6 +7,7 @@ import { descargarArchivo } from "../../helpers/descargarArchivo.js";
 import { actasPorPacienteDni } from "../../services/firestore/actas.js";
 import { esErrorDePermiso, esErrorSinConexion } from "../../helpers/erroresRed.js";
 import { TIPO_LABEL_I131, MOMENTO_LABEL } from "../../constants/tipoI131.js";
+import { etiquetaSitioInyeccionDeActa } from "../../constants/sitioInyeccion.js";
 
 // Historial completo de I-131 por paciente (Parte C, para auditorías ARN) --
 // agrupado por pacienteDni (identificador estable, a diferencia del N° de
@@ -63,7 +64,9 @@ function mensajeErrorTotal(error) {
 
 function detalleFila(a) {
   if (a.tipo === "i131_ablativa" || a.tipo === "i131_dosis") return `${a.actividadAdministrada} mCi · Lote ${a.lote}`;
-  if (a.tipo === "i131_mibg") return `${a.actividadCalibrada} mCi · Lote ${a.numeroLote}`;
+  // Sitio de inyección (9/11): único tipo de este historial que lo lleva --
+  // "—" para MIBG viejo, de antes de este cambio (etiquetaSitioInyeccionDeActa).
+  if (a.tipo === "i131_mibg") return `${a.actividadCalibrada} mCi · Lote ${a.numeroLote} · Sitio: ${etiquetaSitioInyeccionDeActa(a)}`;
   if (a.tipo === "i131_captacion" || a.tipo === "i131_centellograma" || a.tipo === "i131_captacion_centellograma" || a.tipo === "i131_dosis_barrido") {
     const base = a.actividadAdministrada != null ? `${a.actividadAdministrada} ${a.unidadActividad === "mCi" ? "mCi" : "µCi"}` : "—";
     return a.dosisActaId ? `${base} · Vinculado a dosis` : base;
@@ -85,6 +88,9 @@ function filaCSV(a) {
     a.dosisActaId || "—", a.momento ? (MOMENTO_LABEL[a.momento] || a.momento) : "—",
     a.porcentajeCaptacion != null ? `${a.porcentajeCaptacion.toFixed(2)}%` : "—",
     a.usuarioNombre, a.observacion || "—",
+    // Sitio de inyección (9/11) AL FINAL -- "—" para cualquier tipo que no
+    // sea i131_mibg (nunca lo llevó) y para MIBG viejo sin el campo.
+    a.tipo === "i131_mibg" ? etiquetaSitioInyeccionDeActa(a) : "—",
   ];
 }
 
@@ -96,7 +102,7 @@ function filaCSV(a) {
 function descargarCSV(lista, nombreArchivo, avisos) {
   const filas = [
     ...avisos.map((a) => [a]),
-    ["Fecha", "Hora", "Sede", "Tipo", "N° Ficha", "Paciente", "DNI", "Médico responsable", "Actividad administrada", "Unidad", "Lote", "Indicación", "Dosis vinculada (id)", "Momento", "%Captación", "Técnico", "Observación"],
+    ["Fecha", "Hora", "Sede", "Tipo", "N° Ficha", "Paciente", "DNI", "Médico responsable", "Actividad administrada", "Unidad", "Lote", "Indicación", "Dosis vinculada (id)", "Momento", "%Captación", "Técnico", "Observación", "Sitio de inyección"],
     ...lista.map(filaCSV),
   ];
   const csv = filas.map((r) => r.map((x) => String(x).replace(/[\t\r\n]/g, " ")).join("\t")).join("\r\n");
