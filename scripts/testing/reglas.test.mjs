@@ -10,8 +10,8 @@ import {
   PERSONAS, SEDE_A, SEDE_B, FARM_ID, db, loguearComo, prepararFixturesGlobales, loteDePrueba, fichaDePrueba, cerrarConexiones,
   crearLoteDirecto, borrarLote,
 } from "./fixtures.mjs";
-import { addActaI131Vial, addActaI131Extraccion, anularActaTransaction, resolverFichaIntento, addActaPaciente, datosFichaUsada } from "../../src/services/firestore/actas.js";
-import { administrarLutecioTransaction } from "../../src/services/firestore/mibgLotes.js";
+import { addActaI131Vial, addActaI131Extraccion, anularActaTransaction, resolverFichaIntento, addActaPaciente, addActaI131Captacion, datosFichaUsada } from "../../src/services/firestore/actas.js";
+import { administrarLutecioTransaction, administrarMibgTransaction } from "../../src/services/firestore/mibgLotes.js";
 import { setSedeAuditando, setRol } from "../../src/services/auth.js";
 import { LIMITE_FICHAS_USADAS } from "../../src/services/firestore/fichasDescartadas.js";
 
@@ -3699,4 +3699,163 @@ test("sitio de inyección -- recarga REAL (cadena completa) de acta Lutecio-177 
   assert.ok(fichaUsada2Snap.exists(), "la recarga con NR en intento 2 tiene que haber guardado");
   const actaFinalSnap = await getDoc(doc(db, "actas", fichaUsada2Snap.data().actaId));
   assert.equal(actaFinalSnap.data().sitioInyeccion, "NR");
+});
+
+// ===========================================================================
+// Paso T (19/11, SOLO CLIENTE -- firestore.rules SIN NINGÚN CAMBIO acá):
+// tipoAnulacion/reemplazaA son campos nuevos que el cliente ya manda, pero
+// ninguna regla los conoce todavía. Se verifica -- no se asume -- que las
+// reglas ACTUALES los aceptan como campo extra sin validar: ningún
+// allow create de `actas`/`fichasUsadas` restringe el conjunto de campos
+// (confirmado leyendo firestore.rules -- no hay ningún hasOnly()/size()
+// sobre actaValida/fichaUsadaValida/anulación). Permanentes a pedido de
+// Pablo (Paso 0 del Paso T): si una futura regla agrega esa restricción sin
+// contemplar estos 2 campos, estos tests avisan rompiendo.
+// ===========================================================================
+
+test("Paso T -- tipoAnulacion (campo extra, reglas SIN cambios): Tc-99m acepta la anulación con tipoAnulacion en los 2 docs", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  const ficha = fichaDePrueba();
+  await addActaPaciente({
+    sedeId: SEDE_A, sedeNombre: "FUESMEN Central",
+    pacienteFicha: ficha, fichaIntentoNro: "1", pacienteNombre: "Paso T Tc99m", pacienteDni: "1",
+    isotopoId: "tc99m", sinRadiofarmaco: true, estudio: "Test", mciAdministrados: 10, sitioInyeccion: "DMD",
+    usuarioNombre: PERSONAS.tecnicoA.nombre, usuarioEmail: PERSONAS.tecnicoA.email,
+  });
+  const fichaUsadaSnap = await getDoc(doc(db, "fichasUsadas", fichaUsadaId(SEDE_A, ficha, "1")));
+  const actaId = fichaUsadaSnap.data().actaId;
+
+  await loguearComo(PERSONAS.admin);
+  await setSedeAuditando(PERSONAS.admin.email, SEDE_A);
+  await anularActaTransaction({ id: actaId, sedeId: SEDE_A, pacienteFicha: ficha, fichaIntentoNro: "1" }, "Test Paso T", PERSONAS.admin, "error_carga");
+
+  const anulaActaSnap = await getDoc(doc(db, "actas", `anula_${actaId}`));
+  assert.equal(anulaActaSnap.data().tipoAnulacion, "error_carga");
+  const anulaFichaSnap = await getDoc(doc(db, "actas", `anula_ficha_${SEDE_A}_${ficha}_1`));
+  assert.equal(anulaFichaSnap.data().tipoAnulacion, "error_carga");
+});
+
+test("Paso T -- tipoAnulacion (campo extra, reglas SIN cambios): Lutecio-177 acepta la anulación con tipoAnulacion en los 2 docs", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  const lote = await addDoc(collection(db, "mibg_lote"), mibgLoteBase({ isotopoId: "lutecio177", usuarioEmail: PERSONAS.tecnicoA.email, usuarioNombre: PERSONAS.tecnicoA.nombre }));
+  const ficha = fichaDePrueba();
+  await administrarLutecioTransaction(lote.id, {
+    sedeId: SEDE_A, sedeNombre: "FUESMEN Central",
+    pacienteFicha: ficha, pacienteNombre: "Paso T Lutecio", pacienteDni: "1",
+    peso: 70, talla: 170, mciAdministrados: 90, actividadCalibrada: 150,
+    isotopoId: "lu177", lote: "LU177-PASO-T", medicoResponsable: "Dr. Test", sitioInyeccion: "DMD",
+    usuarioNombre: PERSONAS.tecnicoA.nombre, usuarioEmail: PERSONAS.tecnicoA.email,
+  });
+  const actaId = `lote_${lote.id}_1`;
+
+  await loguearComo(PERSONAS.admin);
+  await setSedeAuditando(PERSONAS.admin.email, SEDE_A);
+  await anularActaTransaction({ id: actaId, sedeId: SEDE_A, pacienteFicha: ficha, fichaIntentoNro: "1" }, "Test Paso T", PERSONAS.admin, "error_carga");
+
+  const anulaActaSnap = await getDoc(doc(db, "actas", `anula_${actaId}`));
+  assert.equal(anulaActaSnap.data().tipoAnulacion, "error_carga");
+  const anulaFichaSnap = await getDoc(doc(db, "actas", `anula_ficha_${SEDE_A}_${ficha}_1`));
+  assert.equal(anulaFichaSnap.data().tipoAnulacion, "error_carga");
+});
+
+test("Paso T -- tipoAnulacion (campo extra, reglas SIN cambios): MIBG acepta la anulación con tipoAnulacion en los 2 docs", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  const numeroLote = loteDePrueba();
+  const lote = await addDoc(collection(db, "mibg_lote"), mibgLoteBase({ numeroLote, usuarioEmail: PERSONAS.tecnicoA.email, usuarioNombre: PERSONAS.tecnicoA.nombre }));
+  const ficha = fichaDePrueba();
+  await administrarMibgTransaction(lote.id, {
+    sitioInyeccion: "DMD",
+    sedeId: SEDE_A, sedeNombre: "FUESMEN Central",
+    pacienteFicha: ficha, pacienteNombre: "Paso T MIBG", pacienteDni: "1",
+    numeroLote, actividadCalibrada: 150, volumen: 10, actividadAdministrada: 18,
+    usuarioNombre: PERSONAS.tecnicoA.nombre, usuarioEmail: PERSONAS.tecnicoA.email, observacion: "",
+  });
+  const actaId = `mibg_${lote.id}_1`;
+
+  await loguearComo(PERSONAS.admin);
+  await setSedeAuditando(PERSONAS.admin.email, SEDE_A);
+  await anularActaTransaction({ id: actaId, sedeId: SEDE_A, pacienteFicha: ficha, fichaIntentoNro: "1" }, "Test Paso T", PERSONAS.admin, "error_carga");
+
+  const anulaActaSnap = await getDoc(doc(db, "actas", `anula_${actaId}`));
+  assert.equal(anulaActaSnap.data().tipoAnulacion, "error_carga");
+  const anulaFichaSnap = await getDoc(doc(db, "actas", `anula_ficha_${SEDE_A}_${ficha}_1`));
+  assert.equal(anulaFichaSnap.data().tipoAnulacion, "error_carga");
+});
+
+test("Paso T -- tipoAnulacion (campo extra, reglas SIN cambios): I-131 oral (Captación) acepta la anulación con tipoAnulacion en los 2 docs", async () => {
+  await loguearComo(PERSONAS.admin);
+  await setSedeAuditando(PERSONAS.admin.email, SEDE_A);
+  const ficha = fichaDePrueba();
+  await addActaI131Captacion(i131Base("i131_captacion", {
+    pacienteFicha: ficha, usuarioEmail: PERSONAS.admin.email, actividadAdministrada: 90, unidadActividad: "uCi",
+  }));
+  const fichaUsadaSnap = await getDoc(doc(db, "fichasUsadas", fichaUsadaId(SEDE_A, ficha, "1")));
+  const actaId = fichaUsadaSnap.data().actaId;
+
+  await anularActaTransaction({ id: actaId, sedeId: SEDE_A, pacienteFicha: ficha, fichaIntentoNro: "1" }, "Test Paso T", PERSONAS.admin, "error_carga");
+
+  const anulaActaSnap = await getDoc(doc(db, "actas", `anula_${actaId}`));
+  assert.equal(anulaActaSnap.data().tipoAnulacion, "error_carga");
+  const anulaFichaSnap = await getDoc(doc(db, "actas", `anula_ficha_${SEDE_A}_${ficha}_1`));
+  assert.equal(anulaFichaSnap.data().tipoAnulacion, "error_carga");
+});
+
+test("Paso T -- reemplazaA (campo extra, reglas SIN cambios): addActaPaciente lo acepta y lo guarda", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  const ficha = fichaDePrueba();
+  await addActaPaciente({
+    sedeId: SEDE_A, sedeNombre: "FUESMEN Central",
+    pacienteFicha: ficha, fichaIntentoNro: "1", pacienteNombre: "Paso T reemplazaA", pacienteDni: "1",
+    isotopoId: "tc99m", sinRadiofarmaco: true, estudio: "Test", mciAdministrados: 10, sitioInyeccion: "DMD",
+    usuarioNombre: PERSONAS.tecnicoA.nombre, usuarioEmail: PERSONAS.tecnicoA.email,
+    reemplazaA: "acta-anulada-de-prueba",
+  });
+  const fichaUsadaSnap = await getDoc(doc(db, "fichasUsadas", fichaUsadaId(SEDE_A, ficha, "1")));
+  const actaSnap = await getDoc(doc(db, "actas", fichaUsadaSnap.data().actaId));
+  assert.equal(actaSnap.data().reemplazaA, "acta-anulada-de-prueba");
+});
+
+test("Paso T -- reemplazaA (campo extra, reglas SIN cambios): administrarLutecioTransaction lo acepta y lo guarda", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  const lote = await addDoc(collection(db, "mibg_lote"), mibgLoteBase({ isotopoId: "lutecio177", usuarioEmail: PERSONAS.tecnicoA.email, usuarioNombre: PERSONAS.tecnicoA.nombre }));
+  const ficha = fichaDePrueba();
+  await administrarLutecioTransaction(lote.id, {
+    sedeId: SEDE_A, sedeNombre: "FUESMEN Central",
+    pacienteFicha: ficha, pacienteNombre: "Paso T Lutecio reemplazaA", pacienteDni: "1",
+    peso: 70, talla: 170, mciAdministrados: 90, actividadCalibrada: 150,
+    isotopoId: "lu177", lote: "LU177-PASO-T-2", medicoResponsable: "Dr. Test", sitioInyeccion: "DMD",
+    usuarioNombre: PERSONAS.tecnicoA.nombre, usuarioEmail: PERSONAS.tecnicoA.email,
+    reemplazaA: "acta-anulada-de-prueba",
+  });
+  const actaSnap = await getDoc(doc(db, "actas", `lote_${lote.id}_1`));
+  assert.equal(actaSnap.data().reemplazaA, "acta-anulada-de-prueba");
+});
+
+test("Paso T -- reemplazaA (campo extra, reglas SIN cambios): administrarMibgTransaction lo acepta y lo guarda", async () => {
+  await loguearComo(PERSONAS.tecnicoA);
+  const numeroLote = loteDePrueba();
+  const lote = await addDoc(collection(db, "mibg_lote"), mibgLoteBase({ numeroLote, usuarioEmail: PERSONAS.tecnicoA.email, usuarioNombre: PERSONAS.tecnicoA.nombre }));
+  const ficha = fichaDePrueba();
+  await administrarMibgTransaction(lote.id, {
+    sitioInyeccion: "DMD",
+    sedeId: SEDE_A, sedeNombre: "FUESMEN Central",
+    pacienteFicha: ficha, pacienteNombre: "Paso T MIBG reemplazaA", pacienteDni: "1",
+    numeroLote, actividadCalibrada: 150, volumen: 10, actividadAdministrada: 18,
+    usuarioNombre: PERSONAS.tecnicoA.nombre, usuarioEmail: PERSONAS.tecnicoA.email, observacion: "",
+    reemplazaA: "acta-anulada-de-prueba",
+  });
+  const actaSnap = await getDoc(doc(db, "actas", `mibg_${lote.id}_1`));
+  assert.equal(actaSnap.data().reemplazaA, "acta-anulada-de-prueba");
+});
+
+test("Paso T -- reemplazaA (campo extra, reglas SIN cambios): addActaI131Captacion lo acepta y lo guarda", async () => {
+  await loguearComo(PERSONAS.admin);
+  const ficha = fichaDePrueba();
+  await addActaI131Captacion(i131Base("i131_captacion", {
+    pacienteFicha: ficha, usuarioEmail: PERSONAS.admin.email, actividadAdministrada: 90, unidadActividad: "uCi",
+    reemplazaA: "acta-anulada-de-prueba",
+  }));
+  const fichaUsadaSnap = await getDoc(doc(db, "fichasUsadas", fichaUsadaId(SEDE_A, ficha, "1")));
+  const actaSnap = await getDoc(doc(db, "actas", fichaUsadaSnap.data().actaId));
+  assert.equal(actaSnap.data().reemplazaA, "acta-anulada-de-prueba");
 });

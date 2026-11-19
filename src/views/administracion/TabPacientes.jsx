@@ -22,6 +22,7 @@ import { TIPO_LABEL_I131 } from "../../constants/tipoI131.js";
 import { UMBRAL_SOSPECHA } from "../../helpers/huecosFicha.js";
 import { TEXTO_SIN_RADIOFARMACO } from "../../constants/sinRadiofarmaco.js";
 import { SITIOS_INYECCION, etiquetaSitioInyeccionDeActa } from "../../constants/sitioInyeccion.js";
+import { etiquetaTipoAnulacion } from "../../constants/tipoAnulacion.js";
 import {
   listenActas, addActaPaciente, actasPorRango, anularActaTransaction, listenAnulacionesActas,
   addActaI131Ablativa, addActaI131Dosis, addActaI131Barrido, addActaI131DosisBarrido,
@@ -294,6 +295,20 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
   // guardado exitoso) para que "No registrado" nunca se ofrezca en una
   // carga nueva de verdad.
   const [permiteSitioNR, setPermiteSitioNR] = useState(false);
+  // reemplazaA (Paso T, 19/11): { id, ficha } de la acta anulada que esta
+  // carga viene a corregir -- SOLO se setea en confirmarAnulacion cuando el
+  // tipo elegido fue "error_carga" (mismo paciente, se reabre el
+  // formulario). Nunca con "estudio_no_realizado" (no hay nada que
+  // reemplazar: la ficha queda liberada para OTRO paciente, no para una
+  // corrección de este). Se guarda la FICHA junto con el id (no sólo el id)
+  // porque el técnico puede cambiar el N° de Ficha en el formulario ya
+  // reabierto (ej. se equivocó al tipear, o decide cargar un paciente
+  // distinto en vez de corregir) -- en guardar() sólo se manda reemplazaA
+  // si fichaNormalizada sigue siendo ESA ficha, nunca por la sola presencia
+  // del estado (ver guardar() más abajo). Se limpia en limpiarForm() --
+  // cubre tanto un guardado exitoso como cancelar la recarga (el botón
+  // "Cancelar"/la X ya llaman limpiarForm(), ver más abajo).
+  const [reemplazaA, setReemplazaA] = useState(null);
   const [farmId, setFarmId] = useState(""); const [lote, setLote] = useState("");
   const [obs, setObs] = useState("");
   // Sede de trabajo (2026-11, "sede de trabajo del admin"): ya NO es un
@@ -626,7 +641,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
   const mibgLotesPorId = useMemo(() => new Map(mibgLotes.map((l) => [l.id, l])), [mibgLotes]);
   const loteVinculadoDe = (a) => mibgLotesPorId.get(a.mibgLoteId || a.loteDosisUnicaId) || null;
 
-  async function confirmarAnulacion(acta, motivo) {
+  async function confirmarAnulacion(acta, motivo, tipoAnulacion) {
     try {
       // Anular la administración a un paciente (MIBG/Lutecio-177 incluidos)
       // es independiente de anular el lote -- son dos hechos distintos (el
@@ -637,8 +652,26 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
       // más arriba), así que esto solo ya dispara el recálculo, sin
       // necesitar un refrescar() manual acá -- listo para reasignarlo con el
       // dato de dosis corregido.
-      await anularActaTransaction(acta, motivo, usuario);
+      await anularActaTransaction(acta, motivo, usuario, tipoAnulacion);
       setMAnular(null);
+      // "Estudio no realizado" (Paso T, 19/11): a diferencia de "error de
+      // carga", acá no hay nada que corregir -- el paciente no vino, así
+      // que NO se precarga nada ni se reabre el formulario (serían datos de
+      // un estudio que nunca pasó). La ficha queda libre como intento
+      // siguiente, para este paciente si vuelve u otro distinto -- eso ya lo
+      // permite fichaIntentoHabilitado() en firestore.rules sin cambios,
+      // ver investigación de Paso T.
+      if (tipoAnulacion === "estudio_no_realizado") {
+        // mibgLoteId/loteDosisUnicaId (Paso T, punto 4d): mismo chequeo que
+        // `tieneLote` más abajo, pero ACÁ arriba (el branch "error_carga"
+        // nunca llega a definir esa constante) -- confirmado por código que
+        // el lote queda disponible sin ningún paso extra (ver
+        // usoActivoDeLote/estadoPorLoteDosisUnica en mibgLotes.js, excluyen
+        // la administración anulada).
+        const tieneLote = acta.mibgLoteId || acta.loteDosisUnicaId;
+        onToast(`Ficha liberada: estudio no realizado.${tieneLote ? " El lote sigue disponible para reasignar." : ""}`, "info", 8000);
+        return;
+      }
       // Sede de trabajo (2026-11): hallazgo real de Pablo -- precargar
       // ficha/nombre/DNI de un acta de OTRA sede en un registro nuevo de
       // la sede de trabajo mezclaría N° de Ficha entre sedes (es
@@ -667,6 +700,14 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
       // a tipo:"paciente") -- necesita su propia rama, no la reconoce el
       // criterio isotopoId de abajo (los 6 subtipos de I-131 no tienen ese
       // campo, distinguen por tipo).
+      // reemplazaA (Paso T): sólo con "error_carga" llegando hasta acá (el
+      // otro tipo ya retornó arriba) -- se manda en la acta nueva para
+      // trazabilidad, ver guardar(). Guarda también la ficha ORIGINAL de la
+      // acta anulada (acta.pacienteFicha, no fichaNormalizada -- ésta
+      // última todavía no existe en este punto, es del formulario que se
+      // está por reabrir) para poder comparar contra la ficha que el
+      // técnico termine tipeando.
+      setReemplazaA({ id: acta.id, ficha: acta.pacienteFicha || "" });
       setFichaNro(acta.pacienteFicha || ""); setNombre(acta.pacienteNombre); setDni(acta.pacienteDni);
       // Dispara el chequeo/resolución del intento siguiente de una (no
       // espera a que el técnico toque el campo) -- recién anulamos el
@@ -746,6 +787,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
   function limpiarForm() {
     setFichaNro(""); setFichaEstado(null); setNombre(""); setDni(""); setPeso(""); setTalla(""); setEstudio(""); setEstudioOtro(""); setMci(""); setFarmId(""); setLote(""); setObs("");
     setSitioInyeccion(""); setSitioInyeccionOtro(""); setPermiteSitioNR(false);
+    setReemplazaA(null);
     setMostrarIsotopo(false); setIsotopoId("tc99m"); setMedicoResponsable("");
     setTipoI131("barrido"); setActividadAdministrada(""); setIndicacion(""); setDosisVinculada(""); setMibgLoteSeleccionado(""); setLutecioLoteSeleccionado("");
     setExtraccionVinculada(""); setSinExtraccionVial(false);
@@ -936,6 +978,12 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
     function mensajeErrorGuardado(e, fallback) {
       return `NO SE GUARDÓ — ficha ${fichaNormalizada}, ${normalizarNombrePaciente(nombre)}. Volvé a cargarla. (${e.message || fallback})`;
     }
+    // reemplazaA (Paso T): sólo se manda si la ficha de ESTE guardado sigue
+    // siendo la misma que la de la acta anulada que lo originó -- si el
+    // técnico cambió el N° de Ficha en el formulario ya reabierto (error de
+    // tipeo, o decidió cargar un paciente distinto en vez de corregir),
+    // reemplazaA queda sin mandarse: ya no es una corrección de ESA acta.
+    const reemplazaAValido = reemplazaA && reemplazaA.ficha === fichaNormalizada ? reemplazaA.id : null;
     // Sitio de inyección: validado ACÁ (no sólo en el disabled del botón,
     // ver más abajo) -- mismo criterio que el resto de los campos
     // obligatorios de este guardar(). "NR" sólo es válido si permiteSitioNR
@@ -980,6 +1028,10 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
         // tardía detectada, ver fechaFichaSiguiente) -- NUNCA reemplaza
         // `fecha` (el timestamp automático real de guardado, inmodificable).
         ...(fechaRealAtencion ? { fechaRealAtencion: new Date(fechaRealAtencion) } : {}),
+        // reemplazaA (Paso T, 19/11): sólo presente cuando esta carga viene
+        // de confirmarAnulacion con "error de carga" -- alcanza acá también
+        // a MIBG (administrarMibgTransaction spreadea `base`, más abajo).
+        ...(reemplazaAValido ? { reemplazaA: reemplazaAValido } : {}),
         usuarioNombre: usuario.nombre, usuarioEmail: usuario.email, observacion: obs.trim(),
       };
       if (tipoI131Actual.requierePermiso && !puedeCargarDosisI131) return;
@@ -1100,6 +1152,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
         mciAdministrados: parseFloat(actividadAdministrada) || 0, actividadCalibrada: loteElegido.actividadCalibrada,
         isotopoId, lote: loteElegido.numeroLote,
         medicoResponsable: medicoResponsable.trim(),
+        ...(reemplazaAValido ? { reemplazaA: reemplazaAValido } : {}),
         usuarioNombre: usuario.nombre, usuarioEmail: usuario.email, observacion: obs.trim(),
         ...sitioInyeccionPayload,
       })
@@ -1140,6 +1193,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
       // Antes se perdía silenciosamente para este caso (el más común) --
       // sólo se mandaba en el `base` de la rama esI131, ver arriba.
       ...(fechaRealAtencion ? { fechaRealAtencion: new Date(fechaRealAtencion) } : {}),
+      ...(reemplazaAValido ? { reemplazaA: reemplazaAValido } : {}),
       usuarioNombre: usuario.nombre, usuarioEmail: usuario.email, observacion: obs.trim(),
       ...sitioInyeccionPayload,
     })
@@ -1363,7 +1417,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
                 pegado al nombre del paciente cuando peso Y talla eran 0. */}
             {(a.peso != null || a.talla != null) && <div className="text-xs font-normal text-gray-400">{a.peso != null && `${a.peso}kg`}{a.talla != null && ` · ${a.talla}cm`}</div>}
             {a.medicoResponsable && <div className="text-xs font-normal text-gray-400">Médico: {a.medicoResponsable}</div>}
-            {anulacion && <div className="text-xs text-orange-500 font-semibold">ANULADO: {anulacion.motivo}</div>}
+            {anulacion && <div className="text-xs text-orange-500 font-semibold">ANULADO{etiquetaTipoAnulacion(anulacion.tipoAnulacion) ? ` (${etiquetaTipoAnulacion(anulacion.tipoAnulacion)})` : ""}: {anulacion.motivo}</div>}
           </td>
           <td className="px-3 py-2.5 text-xs font-mono text-gray-500">{a.pacienteDni}</td>
           <td className="px-3 py-2.5 text-xs text-gray-700">{a.estudio || "—"}</td>
@@ -1431,7 +1485,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
         {a.medicoResponsable && <div className="text-xs text-gray-500">Médico: {a.medicoResponsable}</div>}
         <div className="text-xs text-gray-500">Técnico: {a.usuarioNombre}</div>
         {a.observacion && <div className="text-xs text-gray-400 italic">{a.observacion}</div>}
-        {anulacion && <div className="text-xs text-orange-500 font-semibold">ANULADO: {anulacion.motivo}</div>}
+        {anulacion && <div className="text-xs text-orange-500 font-semibold">ANULADO{etiquetaTipoAnulacion(anulacion.tipoAnulacion) ? ` (${etiquetaTipoAnulacion(anulacion.tipoAnulacion)})` : ""}: {anulacion.motivo}</div>}
         {expandido && lote && (
           <div className="bg-gray-50 rounded-xl p-3 mt-1"><DetalleLote lote={lote} /></div>
         )}
@@ -2141,7 +2195,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
           resumen={`${mAnular.pacienteNombre} (DNI ${mAnular.pacienteDni})`}
           notaExtra={
             mAnular.sedeId === sedeId
-              ? "Después de confirmar se abre el formulario precargado con estos mismos datos para que corrijas sólo lo que estaba mal."
+              ? "Elegí 'Error de carga' para reabrir el formulario precargado con estos mismos datos y corregir sólo lo que estaba mal, o 'Estudio no realizado' para sólo liberar la ficha, sin reabrir nada."
               : `Es un registro de ${catalogo.sedes[mAnular.sedeId]?.nombre || "otra sede"} -- no se precarga ningún dato: la corrección se carga desde los libros de esa sede, no desde acá.`
           }
           onConfirm={confirmarAnulacion}

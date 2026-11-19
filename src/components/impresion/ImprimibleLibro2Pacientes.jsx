@@ -58,7 +58,7 @@ export function ImprimibleLibro2Pacientes({ actas, anulaciones, lotesPorId, sede
                 <td className={`py-1 pr-1 ${campo}`}>{dosis ? `${dosis.valor} ${dosis.unidad}` : "—"}</td>
                 <td className={`py-1 pr-1 ${campo}`}>{a.usuarioNombre}</td>
                 <td className="py-1">
-                  {anulacion ? <LeyendaAnulado motivo={anulacion.motivo} /> : (a.observacion || "—")}
+                  {anulacion ? <LeyendaAnulado motivo={anulacion.motivo} tipo={anulacion.tipoAnulacion} /> : (a.observacion || "—")}
                   {lote && (
                     <div className="text-[9px] text-gray-600 mt-0.5">
                       Lote vinculado {lote.numeroLote} · {lote.proveedor} · {lote.actividadCalibrada} mCi/{lote.volumen} mL ·

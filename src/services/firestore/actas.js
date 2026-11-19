@@ -524,7 +524,13 @@ export function addActaElucion(data, esPrimeraVez) {
 // Lutecio-177 al anular su acta de uso. Genérica: los tipos SIN ficha
 // (marcación, elución, lotes, movimientos) no llevan estos campos, así
 // que acá no pasa nada extra para ellos.
-export function anularActaTransaction(acta, motivo, usuario) {
+// tipoAnulacion (Paso T, 19/11, sólo cliente -- firestore.rules todavía no
+// lo exige): undefined para los 5 llamadores sin ficha (elución, marcación,
+// lotes MIBG/Lutecio-177) -- el spread condicional evita escribir un
+// `undefined` crudo, mismo motivo que pacienteDni en datosFichaUsada más
+// arriba. Va en LOS DOS tx.set (acta y ficha) para que ambos marcadores de
+// anulación lleven el mismo dato, igual que ya pasa con motivo.
+export function anularActaTransaction(acta, motivo, usuario, tipoAnulacion) {
   const anulacionRef = doc(actasCol, `anula_${acta.id}`);
   const fichaAnulaRef = acta.pacienteFicha && acta.fichaIntentoNro
     ? anulaFichaRef(acta.sedeId, acta.pacienteFicha, acta.fichaIntentoNro)
@@ -536,6 +542,7 @@ export function anularActaTransaction(acta, motivo, usuario) {
       tx.set(anulacionRef, {
         tipo: "anulacion", anulaId: acta.id, sedeId: acta.sedeId,
         fecha: serverTimestamp(), motivo,
+        ...(tipoAnulacion ? { tipoAnulacion } : {}),
         usuarioNombre: usuario.nombre, usuarioEmail: usuario.email,
       });
       if (fichaAnulaRef) {
@@ -545,6 +552,7 @@ export function anularActaTransaction(acta, motivo, usuario) {
         tx.set(fichaAnulaRef, {
           tipo: "anulacion", anulaId: `ficha_${acta.sedeId}_${acta.pacienteFicha}_${acta.fichaIntentoNro}`, sedeId: acta.sedeId,
           fecha: serverTimestamp(), motivo,
+          ...(tipoAnulacion ? { tipoAnulacion } : {}),
           usuarioNombre: usuario.nombre, usuarioEmail: usuario.email,
         });
       }

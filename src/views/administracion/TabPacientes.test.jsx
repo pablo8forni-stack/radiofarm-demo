@@ -288,6 +288,10 @@ describe("TabPacientes -- sede de trabajo del admin: anular un acta de OTRA sede
     const botonesAnular = await screen.findAllByRole("button", { name: "Anular" });
     await user.click(botonesAnular[0]);
     await user.type(labelInput("Motivo de la anulación (obligatorio)"), "Test");
+    // Paso T (19/11): "Error de carga" -- el guard de sede (abajo) se prueba
+    // independientemente del tipo elegido, pero el botón ahora exige elegir
+    // uno (acta.pacienteFicha está presente) antes de poder confirmar.
+    await user.click(screen.getByRole("button", { name: "Error de carga (mismo paciente)" }));
     await user.click(screen.getByRole("button", { name: "Confirmar anulación" }));
 
     // No se abre "Nuevo registro de paciente" con los datos precargados --
@@ -310,6 +314,7 @@ describe("TabPacientes -- sede de trabajo del admin: anular un acta de OTRA sede
     const botonesAnular = await screen.findAllByRole("button", { name: "Anular" });
     await user.click(botonesAnular[0]);
     await user.type(labelInput("Motivo de la anulación (obligatorio)"), "Test");
+    await user.click(screen.getByRole("button", { name: "Error de carga (mismo paciente)" }));
     await user.click(screen.getByRole("button", { name: "Confirmar anulación" }));
 
     await screen.findByText("Nuevo registro de paciente");
@@ -1991,6 +1996,10 @@ describe("TabPacientes -- sitio de inyección", () => {
     const botonesAnular = await screen.findAllByRole("button", { name: "Anular" });
     await user.click(botonesAnular[0]);
     await user.type(labelInput("Motivo de la anulación (obligatorio)"), "Test sitio");
+    // Paso T (19/11): todos los llamadores de este helper esperan que se
+    // reabra el formulario precargado después -- "Error de carga" (nunca
+    // "Estudio no realizado", que no reabre nada, ver tipoAnulacion_*.test.jsx).
+    await user.click(screen.getByRole("button", { name: "Error de carga (mismo paciente)" }));
     await user.click(screen.getByRole("button", { name: "Confirmar anulación" }));
     // confirmarAnulacion dispara resolverYSetFichaEstado (mismo mock
     // deferido que la verificación de Ficha en "+ Manual") -- sin
@@ -2174,6 +2183,7 @@ describe("TabPacientes -- sitio de inyección", () => {
     // 1) Anular la que YA trae sitio ("PACIENTE CON SITIO", índice 1).
     await user.click(botones[1]);
     await user.type(labelInput("Motivo de la anulación (obligatorio)"), "Test 1");
+    await user.click(screen.getByRole("button", { name: "Error de carga (mismo paciente)" }));
     await user.click(screen.getByRole("button", { name: "Confirmar anulación" }));
     await screen.findByText("Nuevo registro de paciente");
     await act(async () => {
@@ -2191,6 +2201,7 @@ describe("TabPacientes -- sitio de inyección", () => {
     // lista, mismo orden, ver nota de arriba).
     await user.click(botones[0]);
     await user.type(labelInput("Motivo de la anulación (obligatorio)"), "Test 2");
+    await user.click(screen.getByRole("button", { name: "Error de carga (mismo paciente)" }));
     await user.click(screen.getByRole("button", { name: "Confirmar anulación" }));
     await screen.findByText("Nuevo registro de paciente");
     await act(async () => {
@@ -2356,5 +2367,172 @@ describe("TabPacientes -- mensaje de error de los 4 flujos optimistas de guardar
     await vi.waitFor(() => expect(onToast).toHaveBeenCalledTimes(2));
 
     assertMensajeError(onToast, { ficha: "700004", nombreMayuscula: "DIAZ MARIA", original: "permisos insuficientes" });
+  });
+});
+
+// Paso T (19/11): tipo de anulación obligatorio para actas con ficha --
+// "Error de carga" sigue el comportamiento de siempre (reabre precargado +
+// reemplazaA); "Estudio no realizado" SOLO anula, sin reabrir nada ni
+// mandar reemplazaA (no hay nada que reemplazar: el paciente no vino).
+describe("TabPacientes -- Paso T: tipo de anulación (Error de carga / Estudio no realizado)", () => {
+  const adminPasoT = { nombre: "Admin Test", email: "admin@test.local", sede: "central", sedeAuditando: "central" };
+  const actaConFicha = {
+    id: "acta-paso-t", tipo: "paciente", sedeId: "central", pacienteFicha: "300",
+    pacienteNombre: "PACIENTE ORIGINAL", pacienteDni: "30999888",
+    fecha: new Date(), isotopoId: "tc99m", farmId: "mibi", lote: "LOTE-PASO-T",
+    mciAdministrados: 10, estudio: "Ecografía", sitioInyeccion: "DMD", usuarioNombre: "Tec",
+  };
+
+  beforeEach(() => { actasParaListado = [actaConFicha]; anulacionesParaTest = []; });
+  afterEach(() => {
+    actasParaListado = []; anulacionesParaTest = []; actasI131PorTipo = {};
+    catalogo.stock.central.mibi = []; marcacionesHoyParaTest = [];
+  });
+
+  async function anular(user, tipoLabel) {
+    const botonesAnular = await screen.findAllByRole("button", { name: "Anular" });
+    await user.click(botonesAnular[0]);
+    await user.type(labelInput("Motivo de la anulación (obligatorio)"), "Motivo Paso T");
+    await user.click(screen.getByRole("button", { name: tipoLabel }));
+    await user.click(screen.getByRole("button", { name: "Confirmar anulación" }));
+  }
+
+  test("'Error de carga': reabre el formulario precargado y manda reemplazaA al guardar", async () => {
+    const { anularActaTransaction, addActaPaciente } = await import("../../services/firestore/actas.js");
+    const user = userEvent.setup();
+    render(<TabPacientes catalogo={catalogo} usuario={adminPasoT} esAdmin onToast={vi.fn()} nav={null} />);
+
+    await anular(user, "Error de carga (mismo paciente)");
+
+    expect(anularActaTransaction).toHaveBeenCalledWith(actaConFicha, "Motivo Paso T", adminPasoT, "error_carga");
+    await screen.findByText("Nuevo registro de paciente");
+    await act(async () => {
+      resolverFichaIntentoDeferido.resolver({ intento: "2" });
+      await resolverFichaIntentoDeferido.promesa;
+    });
+
+    await user.click(screen.getByRole("button", { name: "Guardar registro" }));
+    await vi.waitFor(() => expect(addActaPaciente).toHaveBeenCalledTimes(1));
+    expect(addActaPaciente.mock.calls[0][0].reemplazaA).toBe("acta-paso-t");
+  });
+
+  // reemplazaA SOLO si la ficha del guardado sigue siendo la de la acta
+  // anulada -- si el técnico cambia el N° de Ficha en el formulario ya
+  // reabierto (tipeo, o decide cargar OTRO paciente en vez de corregir),
+  // ya no es una corrección de esa acta puntual.
+  test("'Error de carga' pero cambia el N° de ficha antes de guardar: NO manda reemplazaA", async () => {
+    const { addActaPaciente } = await import("../../services/firestore/actas.js");
+    const user = userEvent.setup();
+    render(<TabPacientes catalogo={catalogo} usuario={adminPasoT} esAdmin onToast={vi.fn()} nav={null} />);
+
+    await anular(user, "Error de carga (mismo paciente)");
+    await screen.findByText("Nuevo registro de paciente");
+    await act(async () => {
+      resolverFichaIntentoDeferido.resolver({ intento: "2" });
+      await resolverFichaIntentoDeferido.promesa;
+    });
+
+    const fichaInput = labelInput("N° de Ficha");
+    await user.clear(fichaInput);
+    await user.type(fichaInput, "999999");
+    fichaInput.blur();
+    await act(async () => {
+      resolverFichaIntentoDeferido.resolver({ intento: "1" });
+      await resolverFichaIntentoDeferido.promesa;
+    });
+
+    await user.click(screen.getByRole("button", { name: "Guardar registro" }));
+    await vi.waitFor(() => expect(addActaPaciente).toHaveBeenCalledTimes(1));
+    expect(addActaPaciente.mock.calls[0][0]).not.toHaveProperty("reemplazaA");
+  });
+
+  test("Cancelar la recarga y cargar un paciente distinto ('+ Manual'): NO manda reemplazaA", async () => {
+    const { addActaPaciente } = await import("../../services/firestore/actas.js");
+    catalogo.stock.central.mibi = [{ lote: "LOTE-OTRO", cantidad: 10, vencimiento: "2026-12-31" }];
+    marcacionesHoyParaTest = [{ id: "m-paso-t", farmId: "mibi", lote: "LOTE-OTRO", fecha: new Date() }];
+    const user = userEvent.setup();
+    render(<TabPacientes catalogo={catalogo} usuario={adminPasoT} esAdmin onToast={vi.fn()} nav={null} />);
+
+    await anular(user, "Error de carga (mismo paciente)");
+    await screen.findByText("Nuevo registro de paciente");
+    await act(async () => {
+      resolverFichaIntentoDeferido.resolver({ intento: "2" });
+      await resolverFichaIntentoDeferido.promesa;
+    });
+    await user.click(screen.getByRole("button", { name: "Cancelar" }));
+    expect(screen.queryByText("Nuevo registro de paciente")).toBeNull();
+
+    await user.click(await screen.findByText("+ Manual"));
+    const fichaInput = labelInput("N° de Ficha");
+    await user.clear(fichaInput);
+    await user.type(fichaInput, "400");
+    fichaInput.blur();
+    await act(async () => {
+      resolverFichaIntentoDeferido.resolver({ intento: "1" });
+      await resolverFichaIntentoDeferido.promesa;
+    });
+    await user.type(labelInput("Apellido y nombre"), "otro paciente");
+    await user.type(labelInput("DNI"), "11112222");
+    await user.selectOptions(labelInput("Radiofármaco utilizado"), "mibi");
+    await elegirLotePorTexto(user, "LOTE-OTRO");
+    await user.selectOptions(labelInput("Estudio"), "Ecografía");
+    await user.type(labelInput("Dosis administrada (mCi)"), "10");
+    await user.selectOptions(labelInput("Sitio de inyección"), "DMD");
+
+    await user.click(screen.getByRole("button", { name: "Guardar registro" }));
+    await vi.waitFor(() => expect(addActaPaciente).toHaveBeenCalledTimes(1));
+    expect(addActaPaciente.mock.calls[0][0]).not.toHaveProperty("reemplazaA");
+  });
+
+  test("'Estudio no realizado': NO reabre el formulario, NO manda reemplazaA, toast de ficha liberada", async () => {
+    const { anularActaTransaction } = await import("../../services/firestore/actas.js");
+    const onToast = vi.fn();
+    const user = userEvent.setup();
+    render(<TabPacientes catalogo={catalogo} usuario={adminPasoT} esAdmin onToast={onToast} nav={null} />);
+
+    await anular(user, "Estudio no realizado (ficha liberada)");
+
+    expect(anularActaTransaction).toHaveBeenCalledWith(actaConFicha, "Motivo Paso T", adminPasoT, "estudio_no_realizado");
+    expect(screen.queryByText("Nuevo registro de paciente")).toBeNull();
+    expect(onToast).toHaveBeenCalledWith("Ficha liberada: estudio no realizado.", "info", 8000);
+  });
+
+  test("muestra el tipo de anulación en la fila (pantalla)", async () => {
+    anulacionesParaTest = [{ id: "anula_acta-paso-t", anulaId: "acta-paso-t", motivo: "Motivo viejo", tipoAnulacion: "error_carga" }];
+    render(<TabPacientes catalogo={catalogo} usuario={adminPasoT} esAdmin onToast={vi.fn()} nav={null} />);
+
+    // El texto está repartido en 3 nodos (ANULADO{...etiqueta...}: {motivo}),
+    // así que no hay un único nodo con el string completo -- se matchea por
+    // textContent del contenedor, no por getByText de un string literal.
+    expect(await screen.findAllByText((_, el) => el?.textContent === "ANULADO (Error de carga (mismo paciente)): Motivo viejo")).not.toHaveLength(0);
+  });
+
+  test("anulación vieja sin tipoAnulacion: se muestra igual que siempre, sin paréntesis", async () => {
+    anulacionesParaTest = [{ id: "anula_acta-paso-t", anulaId: "acta-paso-t", motivo: "Motivo viejo" }];
+    render(<TabPacientes catalogo={catalogo} usuario={adminPasoT} esAdmin onToast={vi.fn()} nav={null} />);
+
+    expect(await screen.findAllByText((_, el) => el?.textContent === "ANULADO: Motivo viejo")).not.toHaveLength(0);
+  });
+
+  // Punto 4d: "Estudio no realizado" en MIBG/Lutecio-177 (acta CON lote) --
+  // el toast agrega la aclaración de que el lote sigue disponible, mismo
+  // criterio que confirmarAnulacion ya usa para "error_carga" (tieneLote).
+  test("'Estudio no realizado' en MIBG (acta con lote): el toast agrega que el lote sigue disponible para reasignar", async () => {
+    actasI131PorTipo.i131_mibg = [{
+      id: "acta-mibg-paso-t", tipo: "i131_mibg", sedeId: "central", pacienteFicha: "901",
+      pacienteNombre: "Paciente MIBG Paso T", pacienteDni: "40111333",
+      fecha: new Date(), mibgLoteId: "lote-mibg-paso-t", actividadCalibrada: 20, actividadAdministrada: 15, usuarioNombre: "Tec",
+    }];
+    const onToast = vi.fn();
+    const user = userEvent.setup();
+    render(<TabPacientes catalogo={catalogo} usuario={adminPasoT} esAdmin onToast={onToast} nav={null} />);
+
+    const botonesAnular = await screen.findAllByRole("button", { name: "Anular" });
+    await user.click(botonesAnular[0]);
+    await user.type(labelInput("Motivo de la anulación (obligatorio)"), "Motivo MIBG");
+    await user.click(screen.getByRole("button", { name: "Estudio no realizado (ficha liberada)" }));
+    await user.click(screen.getByRole("button", { name: "Confirmar anulación" }));
+
+    expect(onToast).toHaveBeenCalledWith("Ficha liberada: estudio no realizado. El lote sigue disponible para reasignar.", "info", 8000);
   });
 });

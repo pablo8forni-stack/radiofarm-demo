@@ -10,6 +10,7 @@ import { descargarArchivo } from "../../helpers/descargarArchivo.js";
 import { compararPorSedeYFichaDescendente } from "../../helpers/fichaPaciente.js";
 import { listenActas, actasPorRango, anularActaTransaction, listenAnulacionesActas } from "../../services/firestore/actas.js";
 import { TIPO_LABEL_I131 } from "../../constants/tipoI131.js";
+import { etiquetaTipoAnulacion } from "../../constants/tipoAnulacion.js";
 
 const TIPOS_I131 = ["i131_ablativa", "i131_dosis", "i131_barrido", "i131_dosis_barrido", "i131_mibg", "i131_captacion", "i131_centellograma", "i131_captacion_centellograma"];
 
@@ -96,13 +97,20 @@ export function TabRegistrosI131({ catalogo, usuario, esAdmin, onToast }) {
   // (corrección de diseño -- el lote es la llegada del vial, la acta es la
   // dosis realmente inyectada). El lote sigue válido y queda disponible
   // para reasignar apenas se anula esta acta.
-  async function confirmarAnulacion(acta, motivo) {
+  //
+  // tipoAnulacion (Paso T, 19/11): a diferencia de TabPacientes.jsx, ACÁ
+  // nunca hay formulario que reabrir en NINGÚN caso (ver arriba) -- así que
+  // "error_carga" vs "estudio_no_realizado" sólo cambia el toast, nunca
+  // reemplazaA (no se crea ninguna acta nueva desde esta pantalla).
+  async function confirmarAnulacion(acta, motivo, tipoAnulacion) {
     try {
-      await anularActaTransaction(acta, motivo, usuario);
-      const mensaje = acta.mibgLoteId
-        ? "MIBG anulado. El lote sigue siendo válido y quedó disponible para reasignar (a este paciente u otro) con el dato de dosis corregido -- volvé a cargarlo en Libro 2."
-        : `${TIPO_LABEL_I131[acta.tipo]?.label || acta.tipo} anulado. Para corregirlo, volvé a cargarlo en Libro 2 (Pacientes) eligiendo I-131.`;
-      onToast(mensaje, "info", acta.mibgLoteId ? 10000 : 8000);
+      await anularActaTransaction(acta, motivo, usuario, tipoAnulacion);
+      const mensaje = tipoAnulacion === "estudio_no_realizado"
+        ? `Ficha liberada: estudio no realizado.${acta.mibgLoteId ? " El lote sigue disponible para reasignar." : ""}`
+        : acta.mibgLoteId
+          ? "MIBG anulado. El lote sigue siendo válido y quedó disponible para reasignar (a este paciente u otro) con el dato de dosis corregido -- volvé a cargarlo en Libro 2."
+          : `${TIPO_LABEL_I131[acta.tipo]?.label || acta.tipo} anulado. Para corregirlo, volvé a cargarlo en Libro 2 (Pacientes) eligiendo I-131.`;
+      onToast(mensaje, "info", tipoAnulacion === "estudio_no_realizado" ? 8000 : acta.mibgLoteId ? 10000 : 8000);
       setMAnular(null);
     } catch (e) {
       onToast(e.message, "error");
@@ -164,7 +172,7 @@ export function TabRegistrosI131({ catalogo, usuario, esAdmin, onToast }) {
               {a.pacienteNombre}
             </button>
           ) : a.pacienteNombre}
-          {anulacion && <div className="text-xs text-orange-500 font-semibold">ANULADO: {anulacion.motivo}</div>}
+          {anulacion && <div className="text-xs text-orange-500 font-semibold">ANULADO{etiquetaTipoAnulacion(anulacion.tipoAnulacion) ? ` (${etiquetaTipoAnulacion(anulacion.tipoAnulacion)})` : ""}: {anulacion.motivo}</div>}
         </td>
         <td className="px-3 py-2.5 text-xs font-mono text-gray-500">{a.pacienteDni}</td>
         <td className="px-3 py-2.5 text-xs text-gray-700">{a.medicoResponsable || "—"}</td>
@@ -200,7 +208,7 @@ export function TabRegistrosI131({ catalogo, usuario, esAdmin, onToast }) {
         <div className="text-xs text-gray-700">{detalleFila(a)}</div>
         <div className="text-xs text-gray-500">Técnico: {a.usuarioNombre}</div>
         {a.observacion && <div className="text-xs text-gray-400 italic">{a.observacion}</div>}
-        {anulacion && <div className="text-xs text-orange-500 font-semibold">ANULADO: {anulacion.motivo}</div>}
+        {anulacion && <div className="text-xs text-orange-500 font-semibold">ANULADO{etiquetaTipoAnulacion(anulacion.tipoAnulacion) ? ` (${etiquetaTipoAnulacion(anulacion.tipoAnulacion)})` : ""}: {anulacion.motivo}</div>}
         {esAdmin && !anulacion && (
           <div className="flex justify-end mt-0.5">
             <button onClick={() => setMAnular(a)} className="text-xs text-orange-500 hover:text-orange-700 font-semibold px-2 py-1 rounded-lg hover:bg-orange-50 transition min-h-11 md:min-h-0">
@@ -386,7 +394,7 @@ export function TabRegistrosI131({ catalogo, usuario, esAdmin, onToast }) {
         <ModalAnularActa
           acta={mAnular}
           resumen={`${TIPO_LABEL_I131[mAnular.tipo]?.label || mAnular.tipo} — ${mAnular.pacienteNombre} (DNI ${mAnular.pacienteDni})`}
-          notaExtra={mAnular.tipo === "i131_mibg" ? "Anular este registro también anula el lote físico usado -- nunca se reutiliza. Para corregir, registrá el lote de nuevo en la pestaña MIBG y cargá el acta correcta." : null}
+          notaExtra={mAnular.tipo === "i131_mibg" ? "El lote físico sigue siendo válido -- anular esta administración lo deja disponible para reasignar (casi siempre al mismo paciente, con el dato de dosis corregido). Si no se vuelve a cargar, el lote queda igual disponible, sin ningún paso extra." : null}
           onConfirm={confirmarAnulacion}
           onClose={() => setMAnular(null)}
         />
