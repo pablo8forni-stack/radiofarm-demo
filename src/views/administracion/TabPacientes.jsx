@@ -927,6 +927,15 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
   function guardar() {
     const fichaNormalizada = normalizarFicha(fichaNro);
     if (!fichaNormalizada || !nombre.trim() || !dni.trim() || fichaEstado?.tipo !== "ok") return;
+    // Mensaje de error de los 4 flujos OPTIMISTAS (fire-and-forget, ver más
+    // abajo) de este guardar() -- el formulario ya se cerró para cuando el
+    // .catch corre, así que sin ficha/nombre el error queda sin decir CUÁL
+    // registro falló. fichaNormalizada/nombre quedan capturados por
+    // clausura en el momento del click, no se pisan por limpiarForm() de
+    // después (ver bug real reportado por Pablo en staging, 19/11).
+    function mensajeErrorGuardado(e, fallback) {
+      return `NO SE GUARDÓ — ficha ${fichaNormalizada}, ${normalizarNombrePaciente(nombre)}. Volvé a cargarla. (${e.message || fallback})`;
+    }
     // Sitio de inyección: validado ACÁ (no sólo en el disabled del botón,
     // ver más abajo) -- mismo criterio que el resto de los campos
     // obligatorios de este guardar(). "NR" sólo es válido si permiteSitioNR
@@ -985,7 +994,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
         if (!actividadAdministrada || !lote.trim()) return;
         tipoI131Actual.fn({ ...base, ...vinculoExtraccion, actividadAdministrada: parseFloat(actividadAdministrada) || 0, unidadActividad: "mCi", lote: lote.trim(), indicacion: indicacion.trim() })
           .then(() => { ultimaFichaGuardadaRef.current = { sedeId, numero: parseInt(fichaNormalizada, 10) }; })
-          .catch((e) => onToast(e.message || "No se pudo guardar el registro", "error"));
+          .catch((e) => onToast(mensajeErrorGuardado(e, "No se pudo guardar el registro"), "error", 12000));
         onToast(`${tipoI131Actual.label} registrada — consultala en la pestaña Gestión I-131`);
       } else if (tipoI131Actual.categoria === "diagnostico") {
         if (!actividadAdministrada) return;
@@ -1001,7 +1010,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
           dosisActaId: tipoI131Actual.sinVinculoDosis ? null : (dosisVinculada || null),
         })
           .then(() => { ultimaFichaGuardadaRef.current = { sedeId, numero: parseInt(fichaNormalizada, 10) }; })
-          .catch((e) => onToast(e.message || "No se pudo guardar el registro", "error"));
+          .catch((e) => onToast(mensajeErrorGuardado(e, "No se pudo guardar el registro"), "error", 12000));
         onToast(`${tipoI131Actual.label} registrado — consultalo en la pestaña Gestión I-131`);
       } else if (tipoI131Actual.categoria === "mibg") {
         // A diferencia del resto (fire-and-forget, offline-safe), esto es
@@ -1058,7 +1067,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
       } else {
         tipoI131Actual.fn(base)
           .then(() => { ultimaFichaGuardadaRef.current = { sedeId, numero: parseInt(fichaNormalizada, 10) }; })
-          .catch((e) => onToast(e.message || "No se pudo guardar el barrido", "error"));
+          .catch((e) => onToast(mensajeErrorGuardado(e, "No se pudo guardar el barrido"), "error", 12000));
         onToast("Barrido corporal registrado — consultalo en la pestaña Gestión I-131");
       }
       limpiarForm(); setMostrarForm(false);
@@ -1135,7 +1144,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
       ...sitioInyeccionPayload,
     })
       .then(() => { ultimaFichaGuardadaRef.current = { sedeId, numero: parseInt(fichaNormalizada, 10) }; })
-      .catch((e) => onToast(e.message || "No se pudo guardar el registro", "error"));
+      .catch((e) => onToast(mensajeErrorGuardado(e, "No se pudo guardar el registro"), "error", 12000));
     onToast("Registro guardado"); limpiarForm(); setMostrarForm(false);
   }
 

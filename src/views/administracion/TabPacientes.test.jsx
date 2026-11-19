@@ -2202,3 +2202,159 @@ describe("TabPacientes -- sitio de inyección", () => {
     expect(screen.queryByRole("option", { name: "No registrado" })).toBeTruthy();
   });
 });
+
+// Mensaje de error de los 4 flujos OPTIMISTAS de guardar() (bug real
+// reportado por Pablo en staging, 19/11): el formulario ya se cierra antes
+// de que la promesa resuelva (fire-and-forget, offline-safe, a propósito --
+// no se toca), así que si el server rechaza, el .catch tiene que decir QUÉ
+// registro falló -- mismo patrón en los 4 (Tc-99m, dosis, diagnóstico,
+// barrido), nunca en MIBG/Lutecio-177 (esos SÍ esperan la transacción real
+// antes de cerrar, no son optimistas, no se tocan acá).
+describe("TabPacientes -- mensaje de error de los 4 flujos optimistas de guardar()", () => {
+  beforeEach(() => {
+    catalogo.stock.central.mibi = [{ lote: "LOTE-ERR", cantidad: 10, vencimiento: "2026-12-31" }];
+    marcacionesHoyParaTest = [{ id: "m1", farmId: "mibi", lote: "LOTE-ERR", fecha: new Date() }];
+  });
+  afterEach(() => {
+    catalogo.stock.central.mibi = [];
+    marcacionesHoyParaTest = [];
+    marcacionesHoyCallbacks = [];
+    actasI131PorTipo = {};
+    actasI131Callbacks = {};
+  });
+
+  // guardar() llama onToast DOS veces en estos 4 flujos: primero el éxito
+  // optimista (síncrono, antes de que la promesa resuelva), después el
+  // error real del .catch -- se busca la ÚLTIMA llamada, no la primera.
+  function assertMensajeError(onToast, { ficha, nombreMayuscula, original }) {
+    expect(onToast).toHaveBeenCalledTimes(2);
+    const [msg, tipo, duracion] = onToast.mock.calls[onToast.mock.calls.length - 1];
+    expect(msg).toContain(`ficha ${ficha}`);
+    expect(msg).toContain(nombreMayuscula);
+    expect(msg).toContain("Volvé a cargarla");
+    expect(msg).toContain(original);
+    expect(tipo).toBe("error");
+    expect(duracion).toBe(12000);
+  }
+
+  test("Tc-99m (addActaPaciente): el toast de error trae ficha, nombre en MAYÚSCULA y el mensaje original", async () => {
+    const actasMod = await import("../../services/firestore/actas.js");
+    vi.spyOn(actasMod, "addActaPaciente").mockRejectedValueOnce(new Error("permisos insuficientes"));
+    const user = userEvent.setup();
+    const onToast = vi.fn();
+    render(<TabPacientes catalogo={catalogo} usuario={usuario} esAdmin={false} onToast={onToast} nav={null} />);
+    await user.click(await screen.findByText("+ Manual"));
+    const fichaInput = labelInput("N° de Ficha");
+    await user.type(fichaInput, "700001");
+    fichaInput.blur();
+    await screen.findByText("Verificando N° de Ficha...");
+    await act(async () => {
+      resolverFichaIntentoDeferido.resolver({ intento: "1" });
+      await resolverFichaIntentoDeferido.promesa;
+    });
+    await user.type(labelInput("Apellido y nombre"), "perez pedro");
+    await user.type(labelInput("DNI"), "30111222");
+    await user.selectOptions(labelInput("Radiofármaco utilizado"), "mibi");
+    await elegirLotePorTexto(user, "LOTE-ERR");
+    await user.selectOptions(labelInput("Estudio"), "Ecografía");
+    await user.type(labelInput("Dosis administrada (mCi)"), "10");
+    await user.selectOptions(labelInput("Sitio de inyección"), "DMD");
+
+    await user.click(screen.getByRole("button", { name: "Guardar registro" }));
+    await vi.waitFor(() => expect(actasMod.addActaPaciente).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(onToast).toHaveBeenCalledTimes(2));
+
+    assertMensajeError(onToast, { ficha: "700001", nombreMayuscula: "PEREZ PEDRO", original: "permisos insuficientes" });
+  });
+
+  test("I-131 'dosis' (Dosis ablativa, addActaI131Ablativa): el toast de error trae ficha, nombre en MAYÚSCULA y el mensaje original", async () => {
+    const actasMod = await import("../../services/firestore/actas.js");
+    vi.spyOn(actasMod, "addActaI131Ablativa").mockRejectedValueOnce(new Error("permisos insuficientes"));
+    const user = userEvent.setup();
+    const onToast = vi.fn();
+    render(<TabPacientes catalogo={catalogo} usuario={usuarioConAccesoI131} esAdmin={false} onToast={onToast} nav={null} />);
+    await user.click(await screen.findByText("+ Manual"));
+    const fichaInput = labelInput("N° de Ficha");
+    await user.type(fichaInput, "700002");
+    fichaInput.blur();
+    await screen.findByText("Verificando N° de Ficha...");
+    await act(async () => {
+      resolverFichaIntentoDeferido.resolver({ intento: "1" });
+      await resolverFichaIntentoDeferido.promesa;
+    });
+    await user.type(labelInput("Apellido y nombre"), "gomez ana");
+    await user.type(labelInput("DNI"), "30111223");
+    await user.click(screen.getByText("¿Es un caso distinto a Tc-99m?"));
+    await user.selectOptions(labelInput("Isótopo"), "i131");
+    await user.selectOptions(labelInput("Tipo de registro"), "ablativa");
+    await user.type(labelInput("Actividad administrada (mCi)"), "100");
+    await user.type(labelInput("Lote / cápsula"), "I131-ERR-1");
+    const checkboxCapsula = screen.getByLabelText("Es una cápsula sellada (sin extracción de vial)");
+    await user.click(checkboxCapsula);
+
+    await user.click(screen.getByRole("button", { name: "Guardar registro" }));
+    await vi.waitFor(() => expect(actasMod.addActaI131Ablativa).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(onToast).toHaveBeenCalledTimes(2));
+
+    assertMensajeError(onToast, { ficha: "700002", nombreMayuscula: "GOMEZ ANA", original: "permisos insuficientes" });
+  });
+
+  test("I-131 'diagnostico' (Captación, addActaI131Captacion): el toast de error trae ficha, nombre en MAYÚSCULA y el mensaje original", async () => {
+    const actasMod = await import("../../services/firestore/actas.js");
+    vi.spyOn(actasMod, "addActaI131Captacion").mockRejectedValueOnce(new Error("permisos insuficientes"));
+    const user = userEvent.setup();
+    const onToast = vi.fn();
+    render(<TabPacientes catalogo={catalogo} usuario={usuarioConAccesoI131} esAdmin={false} onToast={onToast} nav={null} />);
+    await user.click(await screen.findByText("+ Manual"));
+    const fichaInput = labelInput("N° de Ficha");
+    await user.type(fichaInput, "700003");
+    fichaInput.blur();
+    await screen.findByText("Verificando N° de Ficha...");
+    await act(async () => {
+      resolverFichaIntentoDeferido.resolver({ intento: "1" });
+      await resolverFichaIntentoDeferido.promesa;
+    });
+    await user.type(labelInput("Apellido y nombre"), "lopez juan");
+    await user.type(labelInput("DNI"), "30111224");
+    await user.click(screen.getByText("¿Es un caso distinto a Tc-99m?"));
+    await user.selectOptions(labelInput("Isótopo"), "i131");
+    await user.selectOptions(labelInput("Tipo de registro"), "captacion");
+    await user.type(labelInput("Actividad administrada (µCi)"), "10");
+
+    await user.click(screen.getByRole("button", { name: "Guardar registro" }));
+    await vi.waitFor(() => expect(actasMod.addActaI131Captacion).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(onToast).toHaveBeenCalledTimes(2));
+
+    assertMensajeError(onToast, { ficha: "700003", nombreMayuscula: "LOPEZ JUAN", original: "permisos insuficientes" });
+  });
+
+  test("I-131 'barrido' (Barrido corporal, addActaI131Barrido): el toast de error trae ficha, nombre en MAYÚSCULA y el mensaje original", async () => {
+    const actasMod = await import("../../services/firestore/actas.js");
+    vi.spyOn(actasMod, "addActaI131Barrido").mockRejectedValueOnce(new Error("permisos insuficientes"));
+    const user = userEvent.setup();
+    const onToast = vi.fn();
+    render(<TabPacientes catalogo={catalogo} usuario={usuario} esAdmin={false} onToast={onToast} nav={null} />);
+    await user.click(await screen.findByText("+ Manual"));
+    const fichaInput = labelInput("N° de Ficha");
+    await user.type(fichaInput, "700004");
+    fichaInput.blur();
+    await screen.findByText("Verificando N° de Ficha...");
+    await act(async () => {
+      resolverFichaIntentoDeferido.resolver({ intento: "1" });
+      await resolverFichaIntentoDeferido.promesa;
+    });
+    await user.type(labelInput("Apellido y nombre"), "diaz maria");
+    await user.type(labelInput("DNI"), "30111225");
+    await user.click(screen.getByText("¿Es un caso distinto a Tc-99m?"));
+    await user.selectOptions(labelInput("Isótopo"), "i131");
+    // "barrido" ya es el "Tipo de registro" por defecto -- no hace falta
+    // seleccionarlo, y no requiere actividadAdministrada ni extracción
+    // (ver guardar(), rama final "else").
+
+    await user.click(screen.getByRole("button", { name: "Guardar registro" }));
+    await vi.waitFor(() => expect(actasMod.addActaI131Barrido).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(onToast).toHaveBeenCalledTimes(2));
+
+    assertMensajeError(onToast, { ficha: "700004", nombreMayuscula: "DIAZ MARIA", original: "permisos insuficientes" });
+  });
+});
