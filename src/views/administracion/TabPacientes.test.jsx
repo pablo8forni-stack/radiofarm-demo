@@ -2120,4 +2120,85 @@ describe("TabPacientes -- sitio de inyección", () => {
     expect(columnasHeader[columnasHeader.length - 1]).toBe("Sitio de inyección");
     expect(columnasFila[columnasFila.length - 1]).toBe("Otro: Vena yugular externa");
   });
+
+  // Hueco de pruebas real (encontrado investigando el reporte de bug de
+  // Pablo en staging, build 4b05843): hasta acá sólo había un test de
+  // recarga de acta VIEJA para MIBG -- Tc-99m/Lutecio-177 comparten la
+  // misma rama "else" de confirmarAnulacion pero nunca tuvieron su propio
+  // test. Corrida de forma aislada, SÍ ofrece NR -- no reproduce el bug
+  // reportado (ver reporte para el detalle de qué más se probó).
+  test("recarga de acta Tc-99m vieja (sin sitioInyeccion): el select SÍ ofrece 'No registrado'", async () => {
+    actasParaListado = [{
+      id: "acta-tc99m-vieja", tipo: "paciente", sedeId: "central", pacienteFicha: "600",
+      pacienteNombre: "PACIENTE TC99M VIEJO", pacienteDni: "6661111",
+      fecha: new Date(), isotopoId: "tc99m", farmId: "mibi", lote: "LOTE-REPRO", mciAdministrados: 10,
+      usuarioNombre: "Tec",
+      // sin sitioInyeccion -- acta vieja
+    }];
+    const user = userEvent.setup();
+    render(<TabPacientes catalogo={catalogo} usuario={admin} esAdmin onToast={vi.fn()} nav={null} />);
+
+    await abrirAnularYConfirmar(user);
+
+    expect(screen.queryByRole("option", { name: "No registrado" })).toBeTruthy();
+  });
+
+  // Misma sesión de página: primero una recarga de acta CON sitio, Cancelar,
+  // y DESPUÉS una recarga de acta VIEJA sin sitio -- confirma que el orden
+  // de los clics no deja un permiteSitioNR mal seteado de la carga anterior.
+  // Tampoco reproduce el bug reportado.
+  test("recarga CON sitio + Cancelar, después recarga VIEJA sin sitio, en la misma sesión", async () => {
+    actasParaListado = [
+      {
+        id: "acta-tc99m-con-sitio", tipo: "paciente", sedeId: "central", pacienteFicha: "601",
+        pacienteNombre: "PACIENTE CON SITIO", pacienteDni: "6662222",
+        fecha: new Date(), isotopoId: "tc99m", farmId: "mibi", lote: "LOTE-REPRO2", mciAdministrados: 10,
+        usuarioNombre: "Tec", sitioInyeccion: "PCD",
+      },
+      {
+        id: "acta-tc99m-vieja2", tipo: "paciente", sedeId: "central", pacienteFicha: "602",
+        pacienteNombre: "PACIENTE VIEJO 2", pacienteDni: "6663333",
+        fecha: new Date(), isotopoId: "tc99m", farmId: "mibi", lote: "LOTE-REPRO2", mciAdministrados: 10,
+        usuarioNombre: "Tec",
+      },
+    ];
+    const user = userEvent.setup();
+    render(<TabPacientes catalogo={catalogo} usuario={admin} esAdmin onToast={vi.fn()} nav={null} />);
+
+    // actasOrdenadas ordena por ficha DESCENDENTE -- "602" (vieja2) va
+    // PRIMERO, "601" (con-sitio) SEGUNDO. El mock de anularActaTransaction
+    // no actualiza anulacionesParaTest, así que la lista y el orden de los
+    // botones no cambian entre pasos -- se verifica con el nombre precargado.
+    const botones = await screen.findAllByRole("button", { name: "Anular" });
+
+    // 1) Anular la que YA trae sitio ("PACIENTE CON SITIO", índice 1).
+    await user.click(botones[1]);
+    await user.type(labelInput("Motivo de la anulación (obligatorio)"), "Test 1");
+    await user.click(screen.getByRole("button", { name: "Confirmar anulación" }));
+    await screen.findByText("Nuevo registro de paciente");
+    await act(async () => {
+      resolverFichaIntentoDeferido.resolver({ intento: "1" });
+      await resolverFichaIntentoDeferido.promesa;
+    });
+    expect(labelInput("Apellido y nombre").value).toBe("PACIENTE CON SITIO");
+    expect(labelInput("Sitio de inyección").value).toBe("PCD");
+    expect(screen.queryByRole("option", { name: "No registrado" })).toBeNull();
+
+    // Cancelar.
+    await user.click(screen.getByRole("button", { name: "Cancelar" }));
+
+    // 2) Anular la VIEJA, sin sitio ("PACIENTE VIEJO 2", índice 0 -- misma
+    // lista, mismo orden, ver nota de arriba).
+    await user.click(botones[0]);
+    await user.type(labelInput("Motivo de la anulación (obligatorio)"), "Test 2");
+    await user.click(screen.getByRole("button", { name: "Confirmar anulación" }));
+    await screen.findByText("Nuevo registro de paciente");
+    await act(async () => {
+      resolverFichaIntentoDeferido.resolver({ intento: "1" });
+      await resolverFichaIntentoDeferido.promesa;
+    });
+    expect(labelInput("Apellido y nombre").value).toBe("PACIENTE VIEJO 2");
+
+    expect(screen.queryByRole("option", { name: "No registrado" })).toBeTruthy();
+  });
 });
