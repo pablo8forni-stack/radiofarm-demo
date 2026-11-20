@@ -135,6 +135,15 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
   const [centellogramaI131, setCentellogramaI131] = useState([]);
   const [captCentellogramaI131, setCaptCentellogramaI131] = useState([]);
   const [anulacionesRaw, setAnulacionesRaw] = useState([]);
+  // anulacionesListas/anulacionesError (Paso CSV con anuladas, 19/11): sin
+  // esto, "Vigente" era el estado INICIAL (anulacionesRaw arranca en []) --
+  // un CSV exportado antes de que llegue el primer snapshot, o con el
+  // listener caído, mostraría TODAS las filas como "Vigente" sin ningún
+  // aviso. Se resetean a false/false cada vez que cambia sedeEfectiva (ver
+  // el useEffect de abajo) -- auditar otra sede vuelve a esperar SU propio
+  // primer snapshot, no hereda el de la sede anterior.
+  const [anulacionesListas, setAnulacionesListas] = useState(false);
+  const [anulacionesError, setAnulacionesError] = useState(false);
   const [mAnular, setMAnular] = useState(null);
   const [loteExpandidoId, setLoteExpandidoId] = useState(null);
   const [mostrarForm, setMostrarForm] = useState(false);
@@ -396,7 +405,15 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
   const [lutecioLoteSeleccionado, setLutecioLoteSeleccionado] = useState("");
 
   useEffect(() => { if (sedeEfectiva) return listenActas("paciente", contarCallback("paciente", setPacientesTodas), { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
-  useEffect(() => { if (sedeEfectiva) return listenAnulacionesActas(contarCallback("anulaciones", setAnulacionesRaw), { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
+  useEffect(() => {
+    if (!sedeEfectiva) return;
+    setAnulacionesListas(false); setAnulacionesError(false);
+    return listenAnulacionesActas(
+      contarCallback("anulaciones", (datos) => { setAnulacionesRaw(datos); setAnulacionesListas(true); }),
+      { sedeId: sedeEfectiva },
+      () => setAnulacionesError(true)
+    );
+  }, [sedeEfectiva]);
   // Un listener por tipo de I-131 (mismo criterio que dosis/barrido ya
   // tenían) -- dosisI131/ablativaI131 alimentan además el picker "Dosis
   // relacionada" de los 3 diagnósticos originales (ver dosisParaVincular;
@@ -1504,10 +1521,30 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
     return TIPO_LABEL_I131[a.tipo]?.label || nombreIsotopo(a) || "Tc-99m";
   }
 
+  // "Reemplaza" (Paso CSV con anuladas, guard pedido por Pablo): fichaIntentoNro
+  // tiene que ser un entero válido para restarle 1 -- si falta o no es
+  // numérico (dato corrupto, o reemplazaA puesto a mano por fuera de la UI
+  // real, que siempre lo manda junto con un fichaIntentoNro válido), vacío
+  // es más seguro que mostrar "intento NaN".
+  function textoReemplaza(a) {
+    if (!a.reemplazaA) return "";
+    const intento = Number(a.fichaIntentoNro);
+    if (!Number.isInteger(intento)) return "";
+    return `Ficha ${a.pacienteFicha}, intento ${intento - 1}`;
+  }
+
   function filaCSV(a) {
     const d = a.fecha?.toDate ? a.fecha.toDate() : new Date(a.fecha);
     const dosis = dosisRegistro(a);
     const lote = loteVinculadoDe(a);
+    // anulaciones (Paso CSV con anuladas, 19/11): el MISMO Map que ya usa la
+    // pantalla para pintar "ANULADO" -- viene de listenAnulacionesActas, que
+    // trae TODAS las anulaciones de la sede SIN filtro de fecha (ver el
+    // useEffect más arriba). Por eso alcanza para el export por rango
+    // también (descargarResultadoRango, más abajo, usa este mismo filaCSV):
+    // una anulación de un día distinto al del acta (ej. acta del 18, anulada
+    // el 19) sigue apareciendo igual, sin ninguna lectura nueva.
+    const anulacion = anulaciones.get(a.id);
     return [d.toLocaleDateString("es-AR"), fmtHora(a.fecha),
       a.sedeNombre, tipoTextoCSV(a), a.pacienteFicha || "—", a.pacienteNombre, a.pacienteDni, a.medicoResponsable || "—",
       a.peso ?? "—", a.talla ?? "—", a.estudio || "—", a.sinRadiofarmaco ? TEXTO_SIN_RADIOFARMACO : (a.farmNombre || "—"), a.lote || a.numeroLote || "—",
@@ -1521,13 +1558,34 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
       // medio de las columnas ya existentes -- "—" en las actas que nunca
       // llevan el campo (I-131 oral) o son de antes de este cambio, mismo
       // criterio que el resto de las columnas "—".
-      etiquetaSitioInyeccionDeActa(a)];
+      etiquetaSitioInyeccionDeActa(a),
+      // Estado/Tipo/Motivo (Paso CSV con anuladas): "" (no "—") en Tipo
+      // cuando no hay anulación O es una anulación vieja sin tipoAnulacion --
+      // a propósito distinto del resto de las columnas, para poder filtrar
+      // en Excel por celda vacía sin confundir con un "—" que en otro lado
+      // significa "sin dato" (no "sin anular").
+      anulacion ? "Anulada" : "Vigente",
+      anulacion ? (etiquetaTipoAnulacion(anulacion.tipoAnulacion) || "") : "",
+      anulacion ? (anulacion.motivo || "") : "",
+      // "Reemplaza": SOLO si el acta misma trae reemplazaA -- derivarlo
+      // sólo de fichaIntentoNro (intento N implica intento N-1 anulado)
+      // afirmaría un reemplazo falso cuando la ficha se liberó ("estudio no
+      // realizado") y se reasignó a OTRO paciente: ese intento 2 también
+      // existe, pero no reemplaza nada del paciente de ESTE registro.
+      textoReemplaza(a),
+      // "Dosis/Actividad (vigente)": mismo valor que "Dosis/Actividad",
+      // vacío (nunca 0, nunca "—") en una fila anulada -- para que SUM() de
+      // Excel ignore la celda sola, sin que nadie tenga que filtrar por
+      // "Estado" a mano.
+      anulacion ? "" : (dosis?.valor ?? "—"),
+    ];
   }
 
   function descargarCSV(lista, nombreArchivo) {
     const filas = [
       ["Fecha", "Hora", "Sede", "Tipo de registro", "N° Ficha", "Paciente", "DNI", "Médico responsable", "Peso (kg)", "Talla (cm)", "Estudio", "Radiofármaco", "Lote", "Dosis/Actividad", "Unidad", "Indicación", "Dosis vinculada (id)", "Técnico", "Observación",
-       "N° Lote vinculado", "Actividad calibrada (mCi)", "Volumen (mL)", "Fecha/hora calibración", "Vencimiento", "Proveedor", "Conformidad", "Sitio de inyección"],
+       "N° Lote vinculado", "Actividad calibrada (mCi)", "Volumen (mL)", "Fecha/hora calibración", "Vencimiento", "Proveedor", "Conformidad", "Sitio de inyección",
+       "Estado", "Tipo de anulación", "Motivo de anulación", "Reemplaza", "Dosis/Actividad (vigente)"],
       ...lista.map(filaCSV),
     ];
     const csv = filas.map((r) => r.map((x) => String(x).replace(/[\t\r\n]/g, " ")).join("\t")).join("\r\n");
@@ -1539,7 +1597,13 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
   // era `libro2_pacientes_${filtroFecha || hoy()}.csv`: sin sede, y el
   // `|| hoy()` nunca se usaba en la práctica porque este botón sólo existe
   // con filtroFecha ya puesto (ver el `{filtroFecha ? (...` más abajo).
+  // Mismo freno acá dentro que el disabled del botón (más abajo) -- por si
+  // exportarCSV se llegara a invocar de otra forma en el futuro. Sin esto,
+  // un CSV exportado antes del primer snapshot (o con el listener caído)
+  // mostraría TODAS las filas como "Vigente" sin ningún aviso.
   function exportarCSV() {
+    if (anulacionesError) { onToast("No se pudo verificar qué actas están anuladas -- no se exportó el CSV. Recargá la página e intentá de nuevo.", "error"); return; }
+    if (!anulacionesListas) return;
     descargarCSV(actas, nombreArchivoLibro({ libro: "libro2", extension: "csv", periodo: filtroFecha, sedeShort: catalogo.sedes[sedeEfectiva]?.short }));
     onToast("Libro 2 exportado");
   }
@@ -1575,6 +1639,8 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
 
   function descargarResultadoRango() {
     if (!resultadoRango?.length) return;
+    if (anulacionesError) { onToast("No se pudo verificar qué actas están anuladas -- no se exportó el CSV. Recargá la página e intentá de nuevo.", "error"); return; }
+    if (!anulacionesListas) return;
     descargarCSV(resultadoRango, nombreArchivoLibro({ libro: "libro2", extension: "csv", periodo: `${rangoDesde}_a_${rangoHasta}`, sedeShort: catalogo.sedes[sedeEfectiva]?.short }));
     onToast(`Libro 2 exportado: ${resultadoRango.length} registro${resultadoRango.length !== 1 ? "s" : ""}`);
   }
@@ -1617,7 +1683,20 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
         <div className="flex flex-col gap-2 md:flex-row md:items-center">
           <div className="order-2 md:contents flex flex-wrap gap-2">
             {filtroFecha ? (
-              actas.length > 0 && <Btn size="sm" variant="outline" onClick={exportarCSV} className="md:order-1">↓ CSV</Btn>
+              actas.length > 0 && (
+                // disabled + label (Paso CSV con anuladas): mismo patrón ya
+                // usado por "Buscar"/"Buscando..." más abajo -- un CSV
+                // exportado antes del primer snapshot de anulaciones (o con
+                // el listener caído) mostraría TODAS las filas como
+                // "Vigente" sin aviso, ver exportarCSV().
+                <Btn
+                  size="sm" variant="outline" onClick={exportarCSV} className="md:order-1"
+                  disabled={!anulacionesListas || anulacionesError}
+                  title={anulacionesError ? "No se pudo verificar qué actas están anuladas -- recargá la página." : !anulacionesListas ? "Verificando qué actas están anuladas..." : undefined}
+                >
+                  {anulacionesError ? "↓ CSV (error)" : !anulacionesListas ? "↓ CSV (verificando...)" : "↓ CSV"}
+                </Btn>
+              )
             ) : (
               <>
                 <div className="flex gap-2 items-center md:order-1">
@@ -1651,7 +1730,13 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
         resultadoRango.length > 0 ? (
           <div className="flex flex-col sm:flex-row sm:items-center gap-2 bg-blue-50 border border-blue-100 text-blue-700 text-xs rounded-xl px-3 py-2">
             <span>Se encontraron {resultadoRango.length} registro{resultadoRango.length !== 1 ? "s" : ""} entre {fmtF(rangoDesde)} y {fmtF(rangoHasta)}.</span>
-            <Btn size="sm" variant="outline" onClick={descargarResultadoRango} className="sm:ml-auto">↓ Descargar CSV</Btn>
+            <Btn
+              size="sm" variant="outline" onClick={descargarResultadoRango} className="sm:ml-auto"
+              disabled={!anulacionesListas || anulacionesError}
+              title={anulacionesError ? "No se pudo verificar qué actas están anuladas -- recargá la página." : !anulacionesListas ? "Verificando qué actas están anuladas..." : undefined}
+            >
+              {anulacionesError ? "↓ Descargar CSV (error)" : !anulacionesListas ? "↓ Descargar CSV (verificando...)" : "↓ Descargar CSV"}
+            </Btn>
           </div>
         ) : (
           <div className="bg-gray-50 border border-gray-200 text-gray-500 text-xs rounded-xl px-3 py-2">

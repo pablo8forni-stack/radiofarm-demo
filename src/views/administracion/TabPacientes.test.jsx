@@ -2105,7 +2105,7 @@ describe("TabPacientes -- sitio de inyección", () => {
     expect(screen.getByRole("button", { name: "Guardar registro" }).disabled).toBe(true);
   });
 
-  test("CSV de Libro 2: 'Sitio de inyección' es la ÚLTIMA columna, con la etiqueta (no el código)", async () => {
+  test("CSV de Libro 2: 'Sitio de inyección' con la etiqueta (no el código), antes de las 5 columnas de anulación (Paso CSV, 19/11)", async () => {
     const { descargarArchivo } = await import("../../helpers/descargarArchivo.js");
     // filtroFecha arranca en hoy() -- el acta de hoy con sitioInyeccion
     // "OTRO" + texto libre confirma además que el CSV muestra la etiqueta
@@ -2126,8 +2126,11 @@ describe("TabPacientes -- sitio de inyección", () => {
     const columnasHeader = header.split("\t");
     const columnasFila = fila.split("\t");
 
-    expect(columnasHeader[columnasHeader.length - 1]).toBe("Sitio de inyección");
-    expect(columnasFila[columnasFila.length - 1]).toBe("Otro: Vena yugular externa");
+    // "Sitio de inyección" ya no es la ÚLTIMA columna -- quedó 5 posiciones
+    // antes del final, seguida de Estado/Tipo/Motivo/Reemplaza/Dosis (vigente).
+    const i = columnasHeader.length - 1 - 5;
+    expect(columnasHeader[i]).toBe("Sitio de inyección");
+    expect(columnasFila[i]).toBe("Otro: Vena yugular externa");
   });
 
   // Hueco de pruebas real (encontrado investigando el reporte de bug de
@@ -2534,5 +2537,208 @@ describe("TabPacientes -- Paso T: tipo de anulación (Error de carga / Estudio n
     await user.click(screen.getByRole("button", { name: "Confirmar anulación" }));
 
     expect(onToast).toHaveBeenCalledWith("Ficha liberada: estudio no realizado. El lote sigue disponible para reasignar.", "info", 8000);
+  });
+});
+
+// Paso CSV con anuladas (19/11): el CSV de Libro 2 hoy incluye las filas
+// anuladas (correcto, no se cambia) pero no decía CUÁL -- 5 columnas
+// nuevas al final, después de "Sitio de inyección", sin reordenar nada
+// existente (ver test fijo más arriba, "antes de las 5 columnas...").
+describe("TabPacientes -- Paso CSV con anuladas", () => {
+  const ACTA_VIGENTE = {
+    id: "acta-csv-vigente", tipo: "paciente", sedeId: "central", pacienteFicha: "950",
+    pacienteNombre: "Paciente Vigente", pacienteDni: "1", fecha: new Date(),
+    isotopoId: "tc99m", farmId: "mibi", lote: "LOTE-CSV-1", mciAdministrados: 10, sitioInyeccion: "DMD", usuarioNombre: "Tec",
+  };
+  const ACTA_ANULADA_CON_TIPO = {
+    id: "acta-csv-anulada", tipo: "paciente", sedeId: "central", pacienteFicha: "951",
+    pacienteNombre: "Paciente Anulado", pacienteDni: "2", fecha: new Date(),
+    isotopoId: "tc99m", farmId: "mibi", lote: "LOTE-CSV-2", mciAdministrados: 7, sitioInyeccion: "DMD", usuarioNombre: "Tec",
+  };
+  const ACTA_ANULADA_SIN_TIPO = {
+    id: "acta-csv-anulada-vieja", tipo: "paciente", sedeId: "central", pacienteFicha: "952",
+    pacienteNombre: "Paciente Anulado Viejo", pacienteDni: "3", fecha: new Date(),
+    isotopoId: "tc99m", farmId: "mibi", lote: "LOTE-CSV-3", mciAdministrados: 8, sitioInyeccion: "DMD", usuarioNombre: "Tec",
+  };
+  const ACTA_RECARGA = {
+    id: "acta-csv-recarga", tipo: "paciente", sedeId: "central", pacienteFicha: "953", fichaIntentoNro: "2",
+    pacienteNombre: "Paciente Recarga", pacienteDni: "4", fecha: new Date(),
+    isotopoId: "tc99m", farmId: "mibi", lote: "LOTE-CSV-4", mciAdministrados: 9, sitioInyeccion: "DMD", usuarioNombre: "Tec",
+    reemplazaA: "acta-csv-original",
+  };
+  const ACTA_INTENTO2_SIN_REEMPLAZAA = {
+    id: "acta-csv-intento2-otro-paciente", tipo: "paciente", sedeId: "central", pacienteFicha: "954", fichaIntentoNro: "2",
+    pacienteNombre: "Paciente Distinto", pacienteDni: "5", fecha: new Date(),
+    isotopoId: "tc99m", farmId: "mibi", lote: "LOTE-CSV-5", mciAdministrados: 6, sitioInyeccion: "DMD", usuarioNombre: "Tec",
+    // SIN reemplazaA -- simula "estudio no realizado" + reasignación a OTRO
+    // paciente: el intento 2 existe, pero NO reemplaza nada de este registro.
+  };
+
+  afterEach(() => { actasParaListado = []; anulacionesParaTest = []; });
+
+  function columnas(contenido, indiceFila = 0) {
+    const [header, ...filas] = contenido.split("\r\n");
+    return { columnasHeader: header.split("\t"), columnasFila: filas[indiceFila].split("\t") };
+  }
+
+  function porHeader(columnasHeader, columnasFila, nombre) {
+    return columnasFila[columnasHeader.indexOf(nombre)];
+  }
+
+  test("header termina en Estado/Tipo de anulación/Motivo de anulación/Reemplaza/Dosis (vigente)", async () => {
+    actasParaListado = [ACTA_VIGENTE];
+    const { descargarArchivo } = await import("../../helpers/descargarArchivo.js");
+    const user = userEvent.setup();
+    render(<TabPacientes catalogo={catalogo} usuario={usuario} esAdmin={false} onToast={vi.fn()} nav={null} />);
+    await user.click(await screen.findByRole("button", { name: "↓ CSV" }));
+    const { columnasHeader } = columnas(descargarArchivo.mock.calls[0][0]);
+    expect(columnasHeader.slice(-5)).toEqual(["Estado", "Tipo de anulación", "Motivo de anulación", "Reemplaza", "Dosis/Actividad (vigente)"]);
+  });
+
+  test("fila vigente: Estado=Vigente, los 3 de anulación vacíos, Dosis (vigente) = Dosis/Actividad", async () => {
+    actasParaListado = [ACTA_VIGENTE];
+    const { descargarArchivo } = await import("../../helpers/descargarArchivo.js");
+    const user = userEvent.setup();
+    render(<TabPacientes catalogo={catalogo} usuario={usuario} esAdmin={false} onToast={vi.fn()} nav={null} />);
+    await user.click(await screen.findByRole("button", { name: "↓ CSV" }));
+    const { columnasHeader, columnasFila } = columnas(descargarArchivo.mock.calls[0][0]);
+    expect(porHeader(columnasHeader, columnasFila, "Estado")).toBe("Vigente");
+    expect(porHeader(columnasHeader, columnasFila, "Tipo de anulación")).toBe("");
+    expect(porHeader(columnasHeader, columnasFila, "Motivo de anulación")).toBe("");
+    expect(porHeader(columnasHeader, columnasFila, "Reemplaza")).toBe("");
+    expect(porHeader(columnasHeader, columnasFila, "Dosis/Actividad (vigente)")).toBe(porHeader(columnasHeader, columnasFila, "Dosis/Actividad"));
+  });
+
+  test("fila anulada con tipo: Estado=Anulada, Tipo=etiqueta, Motivo=motivo, Dosis (vigente) vacío", async () => {
+    actasParaListado = [ACTA_ANULADA_CON_TIPO];
+    anulacionesParaTest = [{ id: "anula_acta-csv-anulada", anulaId: "acta-csv-anulada", motivo: "Error de carga real", tipoAnulacion: "error_carga" }];
+    const { descargarArchivo } = await import("../../helpers/descargarArchivo.js");
+    const user = userEvent.setup();
+    render(<TabPacientes catalogo={catalogo} usuario={usuario} esAdmin={false} onToast={vi.fn()} nav={null} />);
+    await user.click(await screen.findByRole("button", { name: "↓ CSV" }));
+    const { columnasHeader, columnasFila } = columnas(descargarArchivo.mock.calls[0][0]);
+    expect(porHeader(columnasHeader, columnasFila, "Estado")).toBe("Anulada");
+    expect(porHeader(columnasHeader, columnasFila, "Tipo de anulación")).toBe("Error de carga (mismo paciente)");
+    expect(porHeader(columnasHeader, columnasFila, "Motivo de anulación")).toBe("Error de carga real");
+    expect(porHeader(columnasHeader, columnasFila, "Dosis/Actividad (vigente)")).toBe("");
+  });
+
+  test("fila anulada SIN tipo (acta vieja, de antes del Paso T): Estado=Anulada, Tipo vacío, Motivo presente", async () => {
+    actasParaListado = [ACTA_ANULADA_SIN_TIPO];
+    anulacionesParaTest = [{ id: "anula_acta-csv-anulada-vieja", anulaId: "acta-csv-anulada-vieja", motivo: "Motivo de antes" }];
+    const { descargarArchivo } = await import("../../helpers/descargarArchivo.js");
+    const user = userEvent.setup();
+    render(<TabPacientes catalogo={catalogo} usuario={usuario} esAdmin={false} onToast={vi.fn()} nav={null} />);
+    await user.click(await screen.findByRole("button", { name: "↓ CSV" }));
+    const { columnasHeader, columnasFila } = columnas(descargarArchivo.mock.calls[0][0]);
+    expect(porHeader(columnasHeader, columnasFila, "Estado")).toBe("Anulada");
+    expect(porHeader(columnasHeader, columnasFila, "Tipo de anulación")).toBe("");
+    expect(porHeader(columnasHeader, columnasFila, "Motivo de anulación")).toBe("Motivo de antes");
+  });
+
+  test("recarga con reemplazaA, fichaIntentoNro=2: Reemplaza = 'Ficha X, intento 1'", async () => {
+    actasParaListado = [ACTA_RECARGA];
+    const { descargarArchivo } = await import("../../helpers/descargarArchivo.js");
+    const user = userEvent.setup();
+    render(<TabPacientes catalogo={catalogo} usuario={usuario} esAdmin={false} onToast={vi.fn()} nav={null} />);
+    await user.click(await screen.findByRole("button", { name: "↓ CSV" }));
+    const { columnasHeader, columnasFila } = columnas(descargarArchivo.mock.calls[0][0]);
+    expect(porHeader(columnasHeader, columnasFila, "Reemplaza")).toBe("Ficha 953, intento 1");
+  });
+
+  // Corrección de Pablo al plan: NO derivar "Reemplaza" sólo de
+  // fichaIntentoNro -- un intento 2 también existe cuando la ficha se
+  // liberó ("estudio no realizado") y se reasignó a OTRO paciente. Sin
+  // reemplazaA guardado, afirmar un reemplazo sería falso.
+  test("'Reemplaza' vacío cuando fichaIntentoNro es '2' pero NO hay reemplazaA (ficha reasignada a otro paciente)", async () => {
+    actasParaListado = [ACTA_INTENTO2_SIN_REEMPLAZAA];
+    const { descargarArchivo } = await import("../../helpers/descargarArchivo.js");
+    const user = userEvent.setup();
+    render(<TabPacientes catalogo={catalogo} usuario={usuario} esAdmin={false} onToast={vi.fn()} nav={null} />);
+    await user.click(await screen.findByRole("button", { name: "↓ CSV" }));
+    const { columnasHeader, columnasFila } = columnas(descargarArchivo.mock.calls[0][0]);
+    expect(porHeader(columnasHeader, columnasFila, "Reemplaza")).toBe("");
+  });
+
+  // Export por RANGO (decisión 4): la anulación se trae del Map `anulaciones`
+  // ya cargado por sede SIN filtro de fecha (listenAnulacionesActas) -- cero
+  // lecturas nuevas. Esto cubre justo el caso que preocupaba: una anulación
+  // ocurrida un día DESPUÉS del rango exportado sigue marcando "Anulada".
+  test("export por rango: acta anulada cuya anulación es POSTERIOR al rango sigue saliendo 'Anulada'", async () => {
+    const actasMod = await import("../../services/firestore/actas.js");
+    vi.spyOn(actasMod, "actasPorRango").mockImplementation(async (tipo) => (tipo === "paciente" ? [ACTA_ANULADA_CON_TIPO] : []));
+    // La anulación "ocurre" (según su propio campo fecha) días después del
+    // rango buscado -- intencional: listenAnulacionesActas no filtra por
+    // fecha, así que esto no debería importarle a la pantalla.
+    anulacionesParaTest = [{ id: "anula_acta-csv-anulada", anulaId: "acta-csv-anulada", motivo: "Anulada después", tipoAnulacion: "error_carga", fecha: new Date("2026-12-31") }];
+    const { descargarArchivo } = await import("../../helpers/descargarArchivo.js");
+    const user = userEvent.setup();
+    render(<TabPacientes catalogo={catalogo} usuario={usuario} esAdmin={false} onToast={vi.fn()} nav={null} />);
+
+    await user.click(screen.getByRole("button", { name: "Ver todos" }));
+    await user.type(labelInput("Desde"), "2026-11-01");
+    await user.type(labelInput("Hasta"), "2026-11-10");
+    await user.click(screen.getByRole("button", { name: "Buscar" }));
+    await screen.findByText(/Se encontraron 1 registro/);
+    await user.click(screen.getByRole("button", { name: "↓ Descargar CSV" }));
+
+    expect(descargarArchivo).toHaveBeenCalledTimes(1);
+    const { columnasHeader, columnasFila } = columnas(descargarArchivo.mock.calls[0][0]);
+    expect(porHeader(columnasHeader, columnasFila, "Estado")).toBe("Anulada");
+  });
+
+  // Guard (punto 3 del pedido de Pablo): reemplazaA presente pero
+  // fichaIntentoNro ausente o no numérico -- "Reemplaza" vacío, NUNCA
+  // "Ficha X, intento NaN". No debería poder pasar por la UI real (el
+  // chequeo de ficha en guardar() ya exige fichaEstado.tipo === "ok"), pero
+  // una escritura directa por SDK (o un dato corrupto viejo) sí podría
+  // dejar esta combinación en Firestore.
+  test("'Reemplaza' vacío (nunca 'intento NaN') si reemplazaA está pero fichaIntentoNro falta o no es numérico", async () => {
+    actasParaListado = [
+      { ...ACTA_RECARGA, id: "acta-csv-sin-intento", fichaIntentoNro: undefined },
+      { ...ACTA_RECARGA, id: "acta-csv-intento-no-numerico", fichaIntentoNro: "dos" },
+    ];
+    const { descargarArchivo } = await import("../../helpers/descargarArchivo.js");
+    const user = userEvent.setup();
+    render(<TabPacientes catalogo={catalogo} usuario={usuario} esAdmin={false} onToast={vi.fn()} nav={null} />);
+    await user.click(await screen.findByRole("button", { name: "↓ CSV" }));
+    const contenido = descargarArchivo.mock.calls[0][0];
+    const [header, ...filas] = contenido.split("\r\n");
+    const columnasHeader = header.split("\t");
+    for (const fila of filas) {
+      const valor = porHeader(columnasHeader, fila.split("\t"), "Reemplaza");
+      expect(valor).toBe("");
+      expect(valor).not.toContain("NaN");
+    }
+  });
+
+  // Punto 1: carrera de carga del Map de anulaciones -- antes del primer
+  // snapshot, anulacionesRaw arranca en [] (todo saldría "Vigente" sin
+  // aviso). Ahora el botón queda deshabilitado y con otro label hasta que
+  // llegue ese primer snapshot (o el error).
+  test("'↓ CSV' queda deshabilitado con label '(verificando...)' antes del primer snapshot de anulaciones", async () => {
+    const actasMod = await import("../../services/firestore/actas.js");
+    // mockImplementationOnce: nunca llama a cb -- simula que el snapshot
+    // todavía no llegó, sin tocar el mock por defecto que usan los otros
+    // ~100 tests de este archivo (ésos sí necesitan la entrega síncrona).
+    vi.spyOn(actasMod, "listenAnulacionesActas").mockImplementationOnce(() => () => {});
+    actasParaListado = [ACTA_VIGENTE];
+    render(<TabPacientes catalogo={catalogo} usuario={usuario} esAdmin={false} onToast={vi.fn()} nav={null} />);
+
+    const boton = await screen.findByRole("button", { name: "↓ CSV (verificando...)" });
+    expect(boton.disabled).toBe(true);
+  });
+
+  test("'↓ CSV' queda deshabilitado con label '(error)' si el listener de anulaciones falla", async () => {
+    const actasMod = await import("../../services/firestore/actas.js");
+    vi.spyOn(actasMod, "listenAnulacionesActas").mockImplementationOnce((_cb, _opts, onError) => {
+      onError(new Error("permission-denied"));
+      return () => {};
+    });
+    actasParaListado = [ACTA_VIGENTE];
+    render(<TabPacientes catalogo={catalogo} usuario={usuario} esAdmin={false} onToast={vi.fn()} nav={null} />);
+
+    const boton = await screen.findByRole("button", { name: "↓ CSV (error)" });
+    expect(boton.disabled).toBe(true);
   });
 });

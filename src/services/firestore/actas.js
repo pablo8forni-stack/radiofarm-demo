@@ -566,10 +566,17 @@ export function anularActaTransaction(acta, motivo, usuario, tipoAnulacion) {
 // límite ni orderBy: son poco frecuentes (correcciones, no carga normal), y
 // a diferencia del listener paginado de movimientos, una anulación vieja
 // nunca deja de reflejarse por haber quedado fuera de una página.
-export function listenAnulacionesActas(callback, { sedeId } = {}) {
+// onError (Paso CSV con anuladas, 19/11): opcional, default no-op -- ningún
+// llamador existente (8, ver grep) lo pasaba ni lo necesita; sólo
+// TabPacientes.jsx/TabRegistrosI131.jsx lo usan para no exportar un CSV
+// que diría "Vigente" en TODAS las filas si este listener nunca pudo
+// conectar (antes: sin este 3er argumento, onSnapshot no tenía ningún
+// manejo de error -- un fallo quedaba completamente silencioso, sin
+// avisar ni acá ni en los otros 7 llamadores).
+export function listenAnulacionesActas(callback, { sedeId } = {}, onError = () => {}) {
   return onSnapshot(query(actasCol, where("tipo", "==", "anulacion"), where("sedeId", "==", sedeId)), (snap) => {
     callback(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
-  });
+  }, onError);
 }
 
 // Mismo dato que listenAnulacionesActas pero puntual (getDocs, no listener)

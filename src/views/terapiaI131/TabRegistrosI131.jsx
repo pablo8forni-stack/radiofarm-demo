@@ -48,6 +48,10 @@ export function TabRegistrosI131({ catalogo, usuario, esAdmin, onToast }) {
   const [centellogramaTodas, setCentellogramaTodas] = useState([]);
   const [captCentellogramaTodas, setCaptCentellogramaTodas] = useState([]);
   const [anulacionesRaw, setAnulacionesRaw] = useState([]);
+  // anulacionesListas/anulacionesError -- ver comentario largo equivalente
+  // en TabPacientes.jsx (Paso CSV con anuladas, 19/11).
+  const [anulacionesListas, setAnulacionesListas] = useState(false);
+  const [anulacionesError, setAnulacionesError] = useState(false);
   const [mAnular, setMAnular] = useState(null);
   const [historialDni, setHistorialDni] = useState(null);
   const [filtroFecha, setFiltroFecha] = useState(hoy());
@@ -72,7 +76,15 @@ export function TabRegistrosI131({ catalogo, usuario, esAdmin, onToast }) {
   useEffect(() => { if (sedeEfectiva) return listenActas("i131_captacion", setCaptacionTodas, { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
   useEffect(() => { if (sedeEfectiva) return listenActas("i131_centellograma", setCentellogramaTodas, { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
   useEffect(() => { if (sedeEfectiva) return listenActas("i131_captacion_centellograma", setCaptCentellogramaTodas, { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
-  useEffect(() => { if (sedeEfectiva) return listenAnulacionesActas(setAnulacionesRaw, { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
+  useEffect(() => {
+    if (!sedeEfectiva) return;
+    setAnulacionesListas(false); setAnulacionesError(false);
+    return listenAnulacionesActas(
+      (datos) => { setAnulacionesRaw(datos); setAnulacionesListas(true); },
+      { sedeId: sedeEfectiva },
+      () => setAnulacionesError(true)
+    );
+  }, [sedeEfectiva]);
 
   const anulaciones = useMemo(() => new Map(anulacionesRaw.map((a) => [a.anulaId, a])), [anulacionesRaw]);
 
@@ -220,24 +232,55 @@ export function TabRegistrosI131({ catalogo, usuario, esAdmin, onToast }) {
     );
   }
 
+  // "Reemplaza" (Paso CSV con anuladas, guard pedido por Pablo): mismo
+  // helper que TabPacientes.jsx -- fichaIntentoNro tiene que ser un entero
+  // válido para restarle 1, si no "vacío" es más seguro que "intento NaN".
+  function textoReemplaza(a) {
+    if (!a.reemplazaA) return "";
+    const intento = Number(a.fichaIntentoNro);
+    if (!Number.isInteger(intento)) return "";
+    return `Ficha ${a.pacienteFicha}, intento ${intento - 1}`;
+  }
+
   function filaCSV(a) {
     const d = a.fecha?.toDate ? a.fecha.toDate() : new Date(a.fecha);
+    // anulaciones (Paso CSV con anuladas, 19/11): mismo Map que ya pinta
+    // "ANULADO" en pantalla (listenAnulacionesActas, sin filtro de fecha --
+    // ver useEffect más arriba) -- cubre también el export por rango
+    // (descargarResultadoRango, reusa este mismo filaCSV) sin ninguna
+    // lectura nueva, aunque la anulación haya ocurrido otro día que el acta.
+    const anulacion = anulaciones.get(a.id);
     return [d.toLocaleDateString("es-AR"), fmtHora(a.fecha),
       a.sedeNombre, TIPO_LABEL_I131[a.tipo]?.label || a.tipo, a.pacienteFicha || "—", a.pacienteNombre, a.pacienteDni, a.medicoResponsable || "—",
       a.actividadAdministrada ?? a.actividadCalibrada ?? "—", a.unidadActividad || (a.tipo === "i131_mibg" ? "mCi" : "—"), a.lote || a.numeroLote || "—", a.indicacion || "—", a.dosisActaId || "—",
-      a.usuarioNombre, a.observacion || "—"];
+      a.usuarioNombre, a.observacion || "—",
+      anulacion ? "Anulada" : "Vigente",
+      anulacion ? (etiquetaTipoAnulacion(anulacion.tipoAnulacion) || "") : "",
+      anulacion ? (anulacion.motivo || "") : "",
+      // "Reemplaza": sólo i131_mibg puede llegar a tener reemplazaA en esta
+      // pantalla (se anula y recarga desde TabPacientes.jsx, pero la acta
+      // corregida vuelve a listarse acá porque i131_mibg es uno de los 8
+      // TIPOS_I131) -- los 7 subtipos orales nunca lo tienen, ver Paso T.
+      textoReemplaza(a),
+      anulacion ? "" : (a.actividadAdministrada ?? a.actividadCalibrada ?? "—"),
+    ];
   }
 
   function descargarCSV(lista, nombreArchivo) {
     const filas = [
-      ["Fecha", "Hora", "Sede", "Tipo", "N° Ficha", "Paciente", "DNI", "Médico responsable", "Actividad administrada", "Unidad", "Lote", "Indicación", "Dosis vinculada (id)", "Técnico", "Observación"],
+      ["Fecha", "Hora", "Sede", "Tipo", "N° Ficha", "Paciente", "DNI", "Médico responsable", "Actividad administrada", "Unidad", "Lote", "Indicación", "Dosis vinculada (id)", "Técnico", "Observación",
+       "Estado", "Tipo de anulación", "Motivo de anulación", "Reemplaza", "Actividad administrada (vigente)"],
       ...lista.map(filaCSV),
     ];
     const csv = filas.map((r) => r.map((x) => String(x).replace(/[\t\r\n]/g, " ")).join("\t")).join("\r\n");
     descargarArchivo(csv, nombreArchivo, "text/csv;charset=utf-8");
   }
 
+  // Mismo freno que el disabled del botón (más abajo) -- ver comentario
+  // largo equivalente en TabPacientes.jsx#exportarCSV.
   function exportarCSV() {
+    if (anulacionesError) { onToast("No se pudo verificar qué actas están anuladas -- no se exportó el CSV. Recargá la página e intentá de nuevo.", "error"); return; }
+    if (!anulacionesListas) return;
     descargarCSV(actas, `terapia_i131_${filtroFecha || hoy()}.csv`);
     onToast("Gestión I-131 exportada");
   }
@@ -268,6 +311,8 @@ export function TabRegistrosI131({ catalogo, usuario, esAdmin, onToast }) {
 
   function descargarResultadoRango() {
     if (!resultadoRango?.length) return;
+    if (anulacionesError) { onToast("No se pudo verificar qué actas están anuladas -- no se exportó el CSV. Recargá la página e intentá de nuevo.", "error"); return; }
+    if (!anulacionesListas) return;
     descargarCSV(resultadoRango, `terapia_i131_${rangoDesde}_a_${rangoHasta}.csv`);
     onToast(`Gestión I-131 exportada: ${resultadoRango.length} registro${resultadoRango.length !== 1 ? "s" : ""}`);
   }
@@ -309,7 +354,13 @@ export function TabRegistrosI131({ catalogo, usuario, esAdmin, onToast }) {
         <div className="flex flex-col gap-2 md:flex-row md:items-center">
           {filtroFecha ? (
             actas.length > 0 && (
-              <Btn size="sm" variant="outline" onClick={exportarCSV}>↓ CSV</Btn>
+              <Btn
+                size="sm" variant="outline" onClick={exportarCSV}
+                disabled={!anulacionesListas || anulacionesError}
+                title={anulacionesError ? "No se pudo verificar qué actas están anuladas -- recargá la página." : !anulacionesListas ? "Verificando qué actas están anuladas..." : undefined}
+              >
+                {anulacionesError ? "↓ CSV (error)" : !anulacionesListas ? "↓ CSV (verificando...)" : "↓ CSV"}
+              </Btn>
             )
           ) : (
             <>
@@ -334,7 +385,13 @@ export function TabRegistrosI131({ catalogo, usuario, esAdmin, onToast }) {
         resultadoRango.length > 0 ? (
           <div className="flex flex-col sm:flex-row sm:items-center gap-2 bg-blue-50 border border-blue-100 text-blue-700 text-xs rounded-xl px-3 py-2">
             <span>Se encontraron {resultadoRango.length} registro{resultadoRango.length !== 1 ? "s" : ""} entre {fmtF(rangoDesde)} y {fmtF(rangoHasta)}.</span>
-            <Btn size="sm" variant="outline" onClick={descargarResultadoRango} className="sm:ml-auto">↓ Descargar CSV</Btn>
+            <Btn
+              size="sm" variant="outline" onClick={descargarResultadoRango} className="sm:ml-auto"
+              disabled={!anulacionesListas || anulacionesError}
+              title={anulacionesError ? "No se pudo verificar qué actas están anuladas -- recargá la página." : !anulacionesListas ? "Verificando qué actas están anuladas..." : undefined}
+            >
+              {anulacionesError ? "↓ Descargar CSV (error)" : !anulacionesListas ? "↓ Descargar CSV (verificando...)" : "↓ Descargar CSV"}
+            </Btn>
           </div>
         ) : (
           <div className="bg-gray-50 border border-gray-200 text-gray-500 text-xs rounded-xl px-3 py-2">
