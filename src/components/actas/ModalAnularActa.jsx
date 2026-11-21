@@ -24,6 +24,13 @@ export function ModalAnularActa({ acta, resumen, notaExtra, onConfirm, onClose }
   const requiereTipo = !!acta.pacienteFicha;
 
   async function confirmar() {
+    // Defensivo (Paso 1c, 21/11): asegura que el teclado virtual del celular
+    // se cierre antes de que el toast de confirmación (ej. "Ficha N° X
+    // liberada...") aparezca, para que no quede detrás. En un navegador real
+    // tocar el botón ya suele quitar el foco del input; esto lo garantiza
+    // igual. Un solo lugar acá alcanza para los 7 llamadores de este modal
+    // compartido (Tc-99m, I-131, elución, marcación, lotes).
+    document.activeElement?.blur();
     setEnviando(true);
     try {
       await onConfirm(acta, motivo.trim(), tipoAnulacion);

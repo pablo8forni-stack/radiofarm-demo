@@ -1,5 +1,5 @@
 import { describe, test, expect, vi, afterEach } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ModalAnularActa } from "./ModalAnularActa.jsx";
 
@@ -47,6 +47,25 @@ describe("ModalAnularActa -- tipo de anulación", () => {
 
     await user.click(screen.getByRole("button", { name: "Confirmar anulación" }));
     expect(onConfirm).toHaveBeenCalledWith(ACTA_SIN_FICHA, "Test", null);
+  });
+
+  test("al confirmar, quita el foco del input de Motivo (Paso 1c -- cierra el teclado virtual en celular)", async () => {
+    // user.click (userEvent) ya simula la secuencia completa mousedown ->
+    // focus del elemento tocado, así que el foco saldría del input igual sin
+    // nuestro arreglo -- probado: con la línea de blur() sacada, un test con
+    // user.click seguía pasando. fireEvent.click, en cambio, sólo dispara el
+    // evento 'click' sin tocar el foco -- deja el input con el foco hasta
+    // que ALGO lo saque, que es justo lo que hay que probar que hace confirmar().
+    const onConfirm = vi.fn();
+    render(<ModalAnularActa acta={ACTA_SIN_FICHA} resumen="Movimiento Test" onConfirm={onConfirm} onClose={() => {}} />);
+
+    const motivoInput = labelInput("Motivo de la anulación (obligatorio)");
+    fireEvent.change(motivoInput, { target: { value: "Test" } });
+    motivoInput.focus();
+    expect(document.activeElement).toBe(motivoInput);
+
+    fireEvent.click(screen.getByRole("button", { name: "Confirmar anulación" }));
+    expect(document.activeElement).not.toBe(motivoInput);
   });
 
   test("elige 'Estudio no realizado' y confirma: onConfirm recibe ese tipo", async () => {
