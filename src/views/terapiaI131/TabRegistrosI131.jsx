@@ -117,12 +117,17 @@ export function TabRegistrosI131({ catalogo, usuario, esAdmin, onToast }) {
   async function confirmarAnulacion(acta, motivo, tipoAnulacion) {
     try {
       await anularActaTransaction(acta, motivo, usuario, tipoAnulacion);
+      // Texto y duración (Paso 1, 21/11): 25000ms en vez de 8000, mismo
+      // mecanismo ya existente. Riesgo conocido: Toast.jsx arma su timer de
+      // descarte una sola vez por montaje -- si otro toast pisa a éste sin
+      // desmontarse, hereda el timer del primero, no el de 25000ms.
+      const tieneLote = acta.mibgLoteId;
       const mensaje = tipoAnulacion === "estudio_no_realizado"
-        ? `Ficha liberada: estudio no realizado.${acta.mibgLoteId ? " El lote sigue disponible para reasignar." : ""}`
+        ? `Ficha N° ${acta.pacienteFicha} liberada. Asegurate de que la administrativa reasigne el número en VM RIS; si no está, reasignalo vos.${tieneLote ? " El lote sigue disponible para reasignar." : ""}`
         : acta.mibgLoteId
           ? "MIBG anulado. El lote sigue siendo válido y quedó disponible para reasignar (a este paciente u otro) con el dato de dosis corregido -- volvé a cargarlo en Libro 2."
           : `${TIPO_LABEL_I131[acta.tipo]?.label || acta.tipo} anulado. Para corregirlo, volvé a cargarlo en Libro 2 (Pacientes) eligiendo I-131.`;
-      onToast(mensaje, "info", tipoAnulacion === "estudio_no_realizado" ? 8000 : acta.mibgLoteId ? 10000 : 8000);
+      onToast(mensaje, "info", tipoAnulacion === "estudio_no_realizado" ? 25000 : acta.mibgLoteId ? 10000 : 8000);
       setMAnular(null);
     } catch (e) {
       onToast(e.message, "error");

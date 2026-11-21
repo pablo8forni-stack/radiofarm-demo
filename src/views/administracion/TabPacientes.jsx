@@ -686,7 +686,13 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
         // usoActivoDeLote/estadoPorLoteDosisUnica en mibgLotes.js, excluyen
         // la administración anulada).
         const tieneLote = acta.mibgLoteId || acta.loteDosisUnicaId;
-        onToast(`Ficha liberada: estudio no realizado.${tieneLote ? " El lote sigue disponible para reasignar." : ""}`, "info", 8000);
+        // Texto y duración (Paso 1, 21/11): hay que leer y ACTUAR (reasignar
+        // en VM RIS), no sólo enterarse -- 25000ms en vez de 8000, mismo
+        // mecanismo de duración ya existente. Riesgo conocido: Toast.jsx
+        // arma su timer de descarte una sola vez por montaje (useEffect con
+        // deps vacías) -- si otro toast pisa a éste sin desmontarse, hereda
+        // el timer del primero, no el de 25000ms.
+        onToast(`Ficha N° ${acta.pacienteFicha} liberada. Asegurate de que la administrativa reasigne el número en VM RIS; si no está, reasignalo vos.${tieneLote ? " El lote sigue disponible para reasignar." : ""}`, "info", 25000);
         return;
       }
       // Sede de trabajo (2026-11): hallazgo real de Pablo -- precargar

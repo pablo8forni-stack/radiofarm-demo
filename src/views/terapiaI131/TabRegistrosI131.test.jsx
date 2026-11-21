@@ -80,7 +80,10 @@ describe("TabRegistrosI131 -- Paso T: tipo de anulación", () => {
   test("'Estudio no realizado' muestra el toast 'Ficha liberada: estudio no realizado.'", async () => {
     const user = userEvent.setup();
     const onToast = await anular(user, "Estudio no realizado (ficha liberada)");
-    expect(onToast).toHaveBeenCalledWith("Ficha liberada: estudio no realizado.", "info", 8000);
+    expect(onToast).toHaveBeenCalledWith(
+      "Ficha N° 900 liberada. Asegurate de que la administrativa reasigne el número en VM RIS; si no está, reasignalo vos.",
+      "info", 25000
+    );
   });
 
   test("'Error de carga' muestra el toast de siempre (volver a cargar en Libro 2)", async () => {
@@ -90,6 +93,14 @@ describe("TabRegistrosI131 -- Paso T: tipo de anulación", () => {
       expect.stringContaining("volvé a cargarlo en Libro 2 (Pacientes) eligiendo I-131"),
       "info", 8000
     );
+  });
+
+  // El texto de "Ficha liberada" es exclusivo de "estudio no realizado" --
+  // "error de carga" nunca libera nada (recarga el MISMO paciente).
+  test("'Error de carga' NO muestra el texto de 'Ficha liberada'", async () => {
+    const user = userEvent.setup();
+    const onToast = await anular(user, "Error de carga (mismo paciente)");
+    expect(onToast.mock.calls.some(([msg]) => msg.includes("liberada"))).toBe(false);
   });
 
   test("la fila muestra 'ANULADO (tipo): motivo'", async () => {
@@ -134,7 +145,10 @@ describe("TabRegistrosI131 -- Paso T: tipo de anulación", () => {
     await user.click(screen.getByRole("button", { name: "Estudio no realizado (ficha liberada)" }));
     await user.click(screen.getByRole("button", { name: "Confirmar anulación" }));
 
-    expect(onToast).toHaveBeenCalledWith("Ficha liberada: estudio no realizado. El lote sigue disponible para reasignar.", "info", 8000);
+    expect(onToast).toHaveBeenCalledWith(
+      "Ficha N° 901 liberada. Asegurate de que la administrativa reasigne el número en VM RIS; si no está, reasignalo vos. El lote sigue disponible para reasignar.",
+      "info", 25000
+    );
   });
 });
 

@@ -2497,7 +2497,10 @@ describe("TabPacientes -- Paso T: tipo de anulación (Error de carga / Estudio n
 
     expect(anularActaTransaction).toHaveBeenCalledWith(actaConFicha, "Motivo Paso T", adminPasoT, "estudio_no_realizado");
     expect(screen.queryByText("Nuevo registro de paciente")).toBeNull();
-    expect(onToast).toHaveBeenCalledWith("Ficha liberada: estudio no realizado.", "info", 8000);
+    expect(onToast).toHaveBeenCalledWith(
+      "Ficha N° 300 liberada. Asegurate de que la administrativa reasigne el número en VM RIS; si no está, reasignalo vos.",
+      "info", 25000
+    );
   });
 
   test("muestra el tipo de anulación en la fila (pantalla)", async () => {
@@ -2536,7 +2539,26 @@ describe("TabPacientes -- Paso T: tipo de anulación (Error de carga / Estudio n
     await user.click(screen.getByRole("button", { name: "Estudio no realizado (ficha liberada)" }));
     await user.click(screen.getByRole("button", { name: "Confirmar anulación" }));
 
-    expect(onToast).toHaveBeenCalledWith("Ficha liberada: estudio no realizado. El lote sigue disponible para reasignar.", "info", 8000);
+    expect(onToast).toHaveBeenCalledWith(
+      "Ficha N° 901 liberada. Asegurate de que la administrativa reasigne el número en VM RIS; si no está, reasignalo vos. El lote sigue disponible para reasignar.",
+      "info", 25000
+    );
+  });
+
+  // "Error de carga" NUNCA debe mostrar el texto de "Ficha liberada" --
+  // ese tipo recarga el MISMO paciente, no libera nada.
+  test("'Error de carga' NO muestra el texto de 'Ficha liberada' (eso es sólo de 'Estudio no realizado')", async () => {
+    const onToast = vi.fn();
+    const user = userEvent.setup();
+    render(<TabPacientes catalogo={catalogo} usuario={adminPasoT} esAdmin onToast={onToast} nav={null} />);
+
+    const botonesAnular = await screen.findAllByRole("button", { name: "Anular" });
+    await user.click(botonesAnular[0]);
+    await user.type(labelInput("Motivo de la anulación (obligatorio)"), "Motivo error de carga");
+    await user.click(screen.getByRole("button", { name: "Error de carga (mismo paciente)" }));
+    await user.click(screen.getByRole("button", { name: "Confirmar anulación" }));
+
+    expect(onToast.mock.calls.some(([msg]) => msg.includes("liberada"))).toBe(false);
   });
 });
 
