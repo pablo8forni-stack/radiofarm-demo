@@ -69,6 +69,18 @@ function AppAutenticada({ usuario, refrescarUsuario }) {
   // primera pantalla es la de fichas (ver navItems más abajo).
   const [vista, setVista] = useState(() => (esAdministrativa ? "fichas" : "inventario"));
   const [toast, setToast] = useState(null);
+  // key incremental (Paso 1b, 21/11): Toast.jsx arma su temporizador de
+  // descarte una sola vez por montaje (useEffect con deps []) -- este slot
+  // único de toast no desmonta <Toast> entre un mensaje y el siguiente, así
+  // que sin una key que cambie SIEMPRE (incluso con el mismo texto dos
+  // veces seguidas), un toast nuevo heredaría el timer del anterior en vez
+  // de arrancar el suyo. ++ref en vez de contar con el mensaje u otro dato
+  // del toast -- tiene que cambiar en CADA llamada, no sólo cuando el
+  // contenido difiere.
+  const toastSeqRef = useRef(0);
+  function mostrarToast(m, t, d) {
+    setToast({ m, t, d, key: ++toastSeqRef.current });
+  }
   const [mostrarAcercaDe, setMostrarAcercaDe] = useState(false);
   const [mostrarSeguridad, setMostrarSeguridad] = useState(false);
   const [mostrarLogsDebug, setMostrarLogsDebug] = useState(false);
@@ -140,14 +152,13 @@ function AppAutenticada({ usuario, refrescarUsuario }) {
     if (avisosOn) {
       desactivarAvisos();
       setAvisosOn(false);
-      setToast({ m: "Avisos con sonido desactivados", t: "info" });
+      mostrarToast("Avisos con sonido desactivados", "info");
       return;
     }
     const ok = await activarAvisos();
     setAvisosOn(ok);
-    setToast(ok
-      ? { m: "Avisos con sonido activados — sonará ante nuevas solicitudes o stock bajo mientras la app esté abierta." }
-      : { m: "No se pudo activar: revisá los permisos de notificaciones del navegador para este sitio.", t: "error" });
+    if (ok) mostrarToast("Avisos con sonido activados — sonará ante nuevas solicitudes o stock bajo mientras la app esté abierta.");
+    else mostrarToast("No se pudo activar: revisá los permisos de notificaciones del navegador para este sitio.", "error");
   }
 
   // Sólo admin puede leer la colección completa de solicitudes (reglas de
@@ -181,10 +192,7 @@ function AppAutenticada({ usuario, refrescarUsuario }) {
   useEffect(() => {
     function avisarReconexion() {
       if (hayOperacionCriticaEnCurso()) {
-        setToast({
-          m: "Se restableció la conexión — revisá el Historial para confirmar que tu última operación se haya registrado.",
-          t: "info", d: 8000,
-        });
+        mostrarToast("Se restableció la conexión — revisá el Historial para confirmar que tu última operación se haya registrado.", "info", 8000);
       }
     }
     window.addEventListener("online", avisarReconexion);
@@ -365,19 +373,19 @@ function AppAutenticada({ usuario, refrescarUsuario }) {
             `&& !esAdministrativa` es defensa en profundidad (su navItems ya
             no ofrece ningún botón hacia esas vistas, esto es el respaldo si
             `vista` quedara en un valor viejo por cualquier otro motivo). */}
-        {vista === "fichas" && esAdministrativa && <VistaAdministrativaFichas usuario={usuario} onToast={(m, t, d) => setToast({ m, t, d })} />}
-        {vista === "agenda-i131" && esAdministrativa && usuario.accesoAgendaI131 && <TabAgendaI131 catalogo={catalogo} usuario={usuario} esAdmin={false} onToast={(m, t, d) => setToast({ m, t, d })} />}
-        {vista === "inventario" && !esAdministrativa && <VistaInventario catalogo={catalogo} usuario={usuario} esAdmin={esAdmin} onToast={(m, t, d) => setToast({ m, t, d })} navInventario={navInventario} />}
-        {vista === "pedidos" && esAdmin && !esAdministrativa && <VistaPedidos catalogo={catalogo} usuario={usuario} esAdmin={esAdmin} onToast={(m, t, d) => setToast({ m, t, d })} />}
-        {vista === "historial" && !esAdministrativa && <VistaHistorial catalogo={catalogo} usuario={usuario} esAdmin={esAdmin} onToast={(m, t, d) => setToast({ m, t, d })} />}
-        {vista === "administracion" && !esAdministrativa && <VistaAdministracion catalogo={catalogo} usuario={usuario} esAdmin={esAdmin} onToast={(m, t, d) => setToast({ m, t, d })} navAdministracion={navAdministracion} onIrAAdministracion={irAAdministracion} />}
-        {vista === "terapia-i131" && !esAdministrativa && <VistaTerapiaI131 catalogo={catalogo} usuario={usuario} esAdmin={esAdmin} onToast={(m, t, d) => setToast({ m, t, d })} onIrAAdministracion={irAAdministracion} />}
-        {vista === "configuracion" && esAdmin && !esAdministrativa && <VistaConfiguracion catalogo={catalogo} usuario={usuario} refrescarUsuario={refrescarUsuario} onToast={(m, t, d) => setToast({ m, t, d })} onIrAInventario={irAInventario} navConfiguracion={navConfiguracion} />}
+        {vista === "fichas" && esAdministrativa && <VistaAdministrativaFichas usuario={usuario} onToast={mostrarToast} />}
+        {vista === "agenda-i131" && esAdministrativa && usuario.accesoAgendaI131 && <TabAgendaI131 catalogo={catalogo} usuario={usuario} esAdmin={false} onToast={mostrarToast} />}
+        {vista === "inventario" && !esAdministrativa && <VistaInventario catalogo={catalogo} usuario={usuario} esAdmin={esAdmin} onToast={mostrarToast} navInventario={navInventario} />}
+        {vista === "pedidos" && esAdmin && !esAdministrativa && <VistaPedidos catalogo={catalogo} usuario={usuario} esAdmin={esAdmin} onToast={mostrarToast} />}
+        {vista === "historial" && !esAdministrativa && <VistaHistorial catalogo={catalogo} usuario={usuario} esAdmin={esAdmin} onToast={mostrarToast} />}
+        {vista === "administracion" && !esAdministrativa && <VistaAdministracion catalogo={catalogo} usuario={usuario} esAdmin={esAdmin} onToast={mostrarToast} navAdministracion={navAdministracion} onIrAAdministracion={irAAdministracion} />}
+        {vista === "terapia-i131" && !esAdministrativa && <VistaTerapiaI131 catalogo={catalogo} usuario={usuario} esAdmin={esAdmin} onToast={mostrarToast} onIrAAdministracion={irAAdministracion} />}
+        {vista === "configuracion" && esAdmin && !esAdministrativa && <VistaConfiguracion catalogo={catalogo} usuario={usuario} refrescarUsuario={refrescarUsuario} onToast={mostrarToast} onIrAInventario={irAInventario} navConfiguracion={navConfiguracion} />}
       </main>
 
-      {toast && <Toast msg={toast.m} type={toast.t || "success"} duracion={toast.d} onDone={() => setToast(null)} />}
+      {toast && <Toast key={toast.key} msg={toast.m} type={toast.t || "success"} duracion={toast.d} onDone={() => setToast(null)} />}
       <AcercaDe open={mostrarAcercaDe} onClose={() => setMostrarAcercaDe(false)} />
-      <ModalSeguridad open={mostrarSeguridad} usuario={usuario} onClose={() => setMostrarSeguridad(false)} onToast={(m, t, d) => setToast({ m, t, d })} />
+      <ModalSeguridad open={mostrarSeguridad} usuario={usuario} onClose={() => setMostrarSeguridad(false)} onToast={mostrarToast} />
       <PantallaLogsDiagnostico open={mostrarLogsDebug} onClose={() => setMostrarLogsDebug(false)} />
       {/* Por encima de todo lo demás (z-[100], ver PantallaBloqueo) -- gate
           obligatorio, no un modal más: primera vez en este dispositivo pide
