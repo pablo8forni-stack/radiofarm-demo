@@ -13,6 +13,7 @@ import { fmtF, fmtTs, fmtHora, fmtFechaISO, hoy, normalizarNombrePaciente, agrup
 import { descargarArchivo } from "../../helpers/descargarArchivo.js";
 import { nombreArchivoLibro } from "../../helpers/nombreArchivoLibro.js";
 import { parseQR } from "../../helpers/qr.js";
+import { matchEstudioCatalogo } from "../../helpers/catalogoEstudio.js";
 import { prepararSonidoEscaneo } from "../../helpers/feedbackEscaneo.js";
 import { registrarLog } from "../../helpers/debugLog.js";
 import { farmsDeSede } from "../../helpers/stock.js";
@@ -292,6 +293,11 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
   // revela este campo. Lo que se guarda en el acta es el texto tipeado acá,
   // nunca el literal "Otro".
   const [estudioOtro, setEstudioOtro] = useState("");
+  // Mapeo de estudio al catálogo (Paso 2, 21/11): texto crudo del QR que NO
+  // matcheó catalogo.estudios (ver handleQRResult/matchEstudioCatalogo) --
+  // null cuando no hay nada que avisar. Se limpia en cuanto el técnico elige
+  // cualquier opción del Select (incluido "Otro") o se reinicia el form.
+  const [avisoEstudioQR, setAvisoEstudioQR] = useState(null);
   // Sitio de inyección (9/11, decisión de Pablo): obligatorio para Tc-99m/
   // MIBG/Lutecio-177 de ahora en adelante, NUNCA para I-131 oral. "Otro" no
   // sale de la colección -- mismo patrón que estudioOtro arriba.
@@ -740,7 +746,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
       // sedeId (constante) en vez de acta.sedeId -- la corrección se guarda
       // en la sede de trabajo, no en la del acta original (ver nota arriba).
       resolverYSetFichaEstado(sedeId, acta.pacienteFicha || "");
-      setPeso(String(acta.peso ?? "")); setTalla(String(acta.talla ?? "")); setEstudio(acta.estudio || "");
+      setPeso(String(acta.peso ?? "")); setTalla(String(acta.talla ?? "")); setEstudio(acta.estudio || ""); setAvisoEstudioQR(null);
       setObs(acta.observacion || "");
       if (acta.tipo === "i131_mibg") {
         setMostrarIsotopo(true); setIsotopoId("i131"); setTipoI131("mibg");
@@ -783,10 +789,26 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
     // "No registrado" no tiene sentido acá, aunque este camino no pase por
     // limpiarForm().
     setPermiteSitioNR(false);
+    // Se resetea en cada escaneo -- si quedó de uno anterior sin match y
+    // éste matchea (o directamente no reconoce el QR), no tiene que seguir
+    // mostrándose.
+    setAvisoEstudioQR(null);
     const data = parseQR(raw);
     if (data) {
       setNombre(data.pacienteNombre); setDni(data.pacienteDni);
-      setPeso(data.peso); setTalla(data.talla); setEstudio(data.estudio || "");
+      setPeso(data.peso); setTalla(data.talla);
+      // Mapeo de estudio al catálogo (Paso 2, 21/11): el texto crudo del QR
+      // puede no coincidir letra por letra con catalogo.estudios (ej. el
+      // generador externo manda "Renograma con DTPA", el catálogo dice
+      // "Centellograma con DTPA") -- nunca se asigna el texto crudo. Si
+      // matchea (tras normalizar), se asigna el nombre EXACTO del catálogo;
+      // si no, el campo queda vacío y se avisa junto al Select (ver JSX de
+      // "Estudio" más abajo) en vez de dejar pasar un valor ajeno al
+      // catálogo que "!estudio" en guardar() no detectaría por estar lleno.
+      const nombresCatalogo = (catalogo.estudios || []).map((es) => es.nombre);
+      const estudioMapeado = matchEstudioCatalogo(data.estudio, nombresCatalogo);
+      setEstudio(estudioMapeado || "");
+      if (data.estudio && !estudioMapeado) setAvisoEstudioQR(data.estudio);
       // Pulseras nuevas traen el N° de Ficha como 6to campo del QR (ver
       // parseQR) -- si viene y es un formato válido, se precarga ESE
       // número en vez de la sugerencia genérica de "último + 1". Un QR
@@ -808,7 +830,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
   }
 
   function limpiarForm() {
-    setFichaNro(""); setFichaEstado(null); setNombre(""); setDni(""); setPeso(""); setTalla(""); setEstudio(""); setEstudioOtro(""); setMci(""); setFarmId(""); setLote(""); setObs("");
+    setFichaNro(""); setFichaEstado(null); setNombre(""); setDni(""); setPeso(""); setTalla(""); setEstudio(""); setEstudioOtro(""); setAvisoEstudioQR(null); setMci(""); setFarmId(""); setLote(""); setObs("");
     setSitioInyeccion(""); setSitioInyeccionOtro(""); setPermiteSitioNR(false);
     setReemplazaA(null);
     setMostrarIsotopo(false); setIsotopoId("tc99m"); setMedicoResponsable("");
@@ -1943,7 +1965,7 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
             {!esI131 && !esLutecio && (
               <>
                 <div className="sm:col-span-2">
-                  <Sel label="Estudio" value={estudio} onChange={(e) => { setEstudio(e.target.value); setEstudioOtro(""); }}>
+                  <Sel label="Estudio" value={estudio} onChange={(e) => { setEstudio(e.target.value); setEstudioOtro(""); setAvisoEstudioQR(null); }}>
                     <option value="">Seleccionar estudio...</option>
                     {(catalogo.estudios || []).map((es) => <option key={es.id} value={es.nombre}>{es.nombre}</option>)}
                     {/* "Otro" no sale de la colección -- opción fija, siempre
@@ -1951,6 +1973,16 @@ export function TabPacientes({ catalogo, usuario, esAdmin, onToast, nav }) {
                     <option value="Otro">Otro</option>
                   </Sel>
                 </div>
+                {/* Mapeo de estudio al catálogo (Paso 2, 21/11): el QR trajo
+                    un texto que no matcheó ningún nombre del catálogo (ver
+                    handleQRResult) -- "Otro" tampoco cuenta como match, así
+                    que un QR con "Otro" cae acá igual que cualquier texto
+                    sin match. Desaparece al elegir cualquier opción. */}
+                {avisoEstudioQR && (
+                  <div className="sm:col-span-2 -mt-2 text-sm text-red-600">
+                    El estudio del QR ("{avisoEstudioQR}") no está en el catálogo: elegí uno.
+                  </div>
+                )}
                 {estudio === "Otro" && (
                   <div className="sm:col-span-2">
                     <Input label="¿Cuál?" value={estudioOtro} onChange={(e) => setEstudioOtro(e.target.value)} placeholder="Ej: Gammagrafía de paratiroides" />

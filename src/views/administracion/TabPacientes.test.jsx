@@ -25,10 +25,18 @@ import { TabPacientes } from "./TabPacientes.jsx";
 
 // Mock mínimo -- el QRScanner real necesita cámara/BarcodeDetector, nada de
 // eso existe en jsdom. Un botón que invoca onResult con el raw que el test
-// necesite alcanza; ningún test existente abre mostrarQR, así que esto no
-// les cambia nada.
+// necesite alcanza. Default "x" (QR inválido, 1 solo campo): los tests
+// viejos de este archivo no abren mostrarQR salvo el de más abajo, que
+// depende justamente de que sea inválido -- no se le cambia el default.
+// setMockQRRaw (Paso 2, 21/11) permite a los tests nuevos mandar un QR de 6
+// campos con un estudio puntual; vi.hoisted porque vi.mock está hoisteado al
+// principio del archivo, así que la variable tiene que existir antes.
+const { getMockQRRaw, setMockQRRaw } = vi.hoisted(() => {
+  let raw = "x";
+  return { getMockQRRaw: () => raw, setMockQRRaw: (r) => { raw = r; } };
+});
 vi.mock("../../components/scanner/QRScanner.jsx", () => ({
-  QRScanner: ({ onResult }) => <button onClick={() => onResult("x")}>MOCK escanear (QR inválido)</button>,
+  QRScanner: ({ onResult }) => <button onClick={() => onResult(getMockQRRaw())}>MOCK escanear (QR inválido)</button>,
 }));
 
 // descargarArchivo real usa Blob/URL.createObjectURL/<a>.click() -- mockeado
@@ -37,6 +45,7 @@ vi.mock("../../components/scanner/QRScanner.jsx", () => ({
 vi.mock("../../helpers/descargarArchivo.js", () => ({ descargarArchivo: vi.fn() }));
 
 afterEach(cleanup);
+afterEach(() => setMockQRRaw("x"));
 
 function crearDiferida() {
   let resolver;
@@ -161,7 +170,10 @@ const catalogo = {
   sedes: { central: { nombre: "FUESMEN Central", short: "Central", activo: true, principal: true, eliminada: false, farmIds: ["mibi"], puntosReorden: {} } },
   stock: { central: { mibi: [] } },
   proveedores: [],
-  estudios: [{ id: "ecografia", nombre: "Ecografía" }],
+  // Centellograma con DTPA (y no "Renograma con DTPA", caso real que manda
+  // el generador externo de QR): ver tests de mapeo de estudio al catálogo
+  // (Paso 2, 21/11) en handleQRResult.
+  estudios: [{ id: "ecografia", nombre: "Ecografía" }, { id: "centellograma-dtpa", nombre: "Centellograma con DTPA" }],
   // lu177/i131 -- sin esto, isotoposCasoDistinto queda vacío y el link
   // "¿Es un caso distinto a Tc-99m?" no aparece (mismo bug real diagnosticado
   // en staging por un catálogo de radioisotopos vacío, no una regresión de
@@ -2559,6 +2571,111 @@ describe("TabPacientes -- Paso T: tipo de anulación (Error de carga / Estudio n
     await user.click(screen.getByRole("button", { name: "Confirmar anulación" }));
 
     expect(onToast.mock.calls.some(([msg]) => msg.includes("liberada"))).toBe(false);
+  });
+});
+
+// Paso 2 (21/11): mapeo de estudio al catálogo en handleQRResult -- el texto
+// crudo del QR (generador externo, fuera de este repo) puede no coincidir
+// letra por letra con catalogo.estudios. Ver matchEstudioCatalogo
+// (helpers/catalogoEstudio.js) para los tests unitarios del helper puro;
+// acá sólo el uso en el componente (handleQRResult + aviso junto al Select).
+describe("TabPacientes -- Paso 2: mapeo de estudio al catálogo (handleQRResult)", () => {
+  async function llegarAFormViaQR(user, raw, onToast = vi.fn()) {
+    render(<TabPacientes catalogo={catalogo} usuario={usuario} esAdmin={false} onToast={onToast} nav={null} />);
+    setMockQRRaw(raw);
+    await user.click(screen.getByText("Escanear pulsera"));
+    await user.click(screen.getByText("MOCK escanear (QR inválido)"));
+    return onToast;
+  }
+
+  test("QR con estudio que matchea tras normalizar (sin tilde, minúsculas) -- asigna el nombre EXACTO del catálogo, sin aviso", async () => {
+    const user = userEvent.setup();
+    const onToast = await llegarAFormViaQR(user, "Paciente QR|30999001|70|170|ecografia|900101");
+    expect(labelInput("Estudio").value).toBe("Ecografía");
+    expect(screen.queryByText(/no está en el catálogo/)).toBeNull();
+    expect(onToast).toHaveBeenCalledWith("Pulsera leída correctamente", "success");
+  });
+
+  test("QR con estudio que no matchea ningún nombre del catálogo (caso real: el generador manda 'Renograma con DTPA', el catálogo dice 'Centellograma con DTPA') -- estudio queda vacío y aparece el aviso", async () => {
+    const user = userEvent.setup();
+    await llegarAFormViaQR(user, "Paciente QR|30999002|70|170|Renograma con DTPA|900102");
+    expect(labelInput("Estudio").value).toBe("");
+    expect(screen.getByText('El estudio del QR ("Renograma con DTPA") no está en el catálogo: elegí uno.')).toBeTruthy();
+  });
+
+  // "Otro" no sale de catalogo.estudios -- es una opción fija de la UI, así
+  // que nunca puede "matchear" ahí. Un QR con ese texto literal se trata
+  // igual que cualquier texto sin match (aviso + vacío), nunca se asume que
+  // el técnico quiso decir la opción "Otro" del Select.
+  test("QR con estudio literal 'Otro' -- tampoco matchea, mismo aviso que cualquier texto sin match", async () => {
+    const user = userEvent.setup();
+    await llegarAFormViaQR(user, "Paciente QR|30999003|70|170|Otro|900103");
+    expect(labelInput("Estudio").value).toBe("");
+    expect(screen.getByText('El estudio del QR ("Otro") no está en el catálogo: elegí uno.')).toBeTruthy();
+  });
+
+  test("QR sin estudio (formato viejo de 5 campos) -- no hay texto que avisar, el campo sólo queda vacío", async () => {
+    const user = userEvent.setup();
+    await llegarAFormViaQR(user, "Paciente QR|30999004|70|170");
+    expect(labelInput("Estudio").value).toBe("");
+    expect(screen.queryByText(/no está en el catálogo/)).toBeNull();
+  });
+
+  test("elegir una opción del Select a mano limpia el aviso", async () => {
+    const user = userEvent.setup();
+    await llegarAFormViaQR(user, "Paciente QR|30999005|70|170|Renograma con DTPA|900105");
+    expect(screen.getByText(/no está en el catálogo/)).toBeTruthy();
+
+    await user.selectOptions(labelInput("Estudio"), "Ecografía");
+
+    expect(screen.queryByText(/no está en el catálogo/)).toBeNull();
+  });
+
+  // Defensa real de guardar() (no sólo el aviso visual): un estudio sin
+  // match NUNCA llega a tener un valor ajeno al catálogo -- queda vacío, y
+  // "!estudio" en guardar() (ya existente, sin cambios) alcanza para
+  // bloquear el guardado. Resto del formulario completo (sinRadiofarmaco
+  // evita depender de stock/marcación, fuera del alcance de este Paso) para
+  // aislar que el bloqueo es POR el estudio, no por otra cosa.
+  test("estudio sin match deja Guardar deshabilitado aunque el resto del formulario esté completo", async () => {
+    const { addActaPaciente } = await import("../../services/firestore/actas.js");
+    const user = userEvent.setup();
+    await llegarAFormViaQR(user, "Paciente QR|30999006|70|170|Renograma con DTPA|900106");
+    await act(async () => {
+      resolverFichaIntentoDeferido.resolver({ intento: "1" });
+      await resolverFichaIntentoDeferido.promesa;
+    });
+    await user.click(screen.getByLabelText("No requiere marcación de radiofármaco (Tc-99m puro)"));
+    await user.selectOptions(labelInput("Sitio de inyección"), "DMD");
+    await user.type(labelInput("Dosis administrada (mCi)"), "10");
+
+    const boton = screen.getByRole("button", { name: "Guardar registro" });
+    expect(boton.disabled).toBe(true);
+    fireEvent.click(boton);
+    expect(addActaPaciente).not.toHaveBeenCalled();
+  });
+
+  // Control del test anterior: MISMO flujo, pero con un QR que SÍ matchea
+  // -- si este también quedara deshabilitado, el disabled de arriba podría
+  // deberse a cualquier otro campo del formulario, no al estudio. Prueba
+  // que el bloqueo está aislado al estudio sin match.
+  test("control: mismo flujo que el test anterior pero con un estudio que SÍ matchea -- Guardar queda habilitado y guarda", async () => {
+    const { addActaPaciente } = await import("../../services/firestore/actas.js");
+    const user = userEvent.setup();
+    await llegarAFormViaQR(user, "Paciente QR|30999007|70|170|ecografia|900107");
+    await act(async () => {
+      resolverFichaIntentoDeferido.resolver({ intento: "1" });
+      await resolverFichaIntentoDeferido.promesa;
+    });
+    await user.click(screen.getByLabelText("No requiere marcación de radiofármaco (Tc-99m puro)"));
+    await user.selectOptions(labelInput("Sitio de inyección"), "DMD");
+    await user.type(labelInput("Dosis administrada (mCi)"), "10");
+
+    const boton = screen.getByRole("button", { name: "Guardar registro" });
+    expect(boton.disabled).toBe(false);
+    await user.click(boton);
+    await vi.waitFor(() => expect(addActaPaciente).toHaveBeenCalledTimes(1));
+    expect(addActaPaciente.mock.calls[0][0].estudio).toBe("Ecografía");
   });
 });
 
