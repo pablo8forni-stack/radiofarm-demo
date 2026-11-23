@@ -1348,6 +1348,202 @@ service cloud.firestore {
       allow update, delete: if false;
     }
 
+    // === Fase 2.0 (23/11) -- Emisión de fichas ===
+    //
+    // Dos colecciones nuevas, nunca leídas desde actaValida()/fichaUsadaValida()
+    // -- restricción dura del diseño: esas dos funciones ya están en 8/10
+    // lecturas en su peor caso (ver comentario de egresoValidoParaMarcar más
+    // arriba) y la carga manual de una ficha tiene que seguir funcionando
+    // igual sin que exista ninguna emisión (hay sedes sin administrativa).
+    // Toda la relación entre mundos va en UN SOLO sentido: estas colecciones
+    // leen hacia `fichasUsadas`/`actas`, nunca al revés.
+
+    // Prueba, por inducción, que k es el intento MÁS ALTO EXISTENTE de
+    // fichasUsadas para (sedeId, numero) -- o que nunca se usó (k=='0') --
+    // SIN escanear 5..1 (ver intentoMasAltoActivo más arriba, hasta 6-7
+    // exists() en su peor caso): el cliente lo declara (su propia query,
+    // fuera de reglas, sin costo) y la regla lo verifica por el mismo truco
+    // que fichaIntentoHabilitado, en sentido inverso. Falsificar un k menor
+    // al real falla el chequeo de "no hay uno más alto"; uno mayor falla el
+    // exists() de ese nivel.
+    function fichaEstadoObservadoValido(sedeId, numero, k) {
+      let kMasUno = k == '1' ? '2' : k == '2' ? '3' : k == '3' ? '4' : '5';
+      return k == '0'
+        ? !exists(/databases/$(database)/documents/fichasUsadas/$(sedeId + '_' + numero + '_1'))
+        : exists(/databases/$(database)/documents/fichasUsadas/$(sedeId + '_' + numero + '_' + k)) &&
+          (k == '5' || !exists(/databases/$(database)/documents/fichasUsadas/$(sedeId + '_' + numero + '_' + kMasUno)));
+    }
+    // true si el intento k (ya probado como el más alto existente) está
+    // VIGENTE (no anulado) -- k=='0' nunca está vigente, no hay nada que leer.
+    function fichaIntentoVigente(sedeId, numero, k) {
+      return k != '0' && !exists(/databases/$(database)/documents/actas/$('anula_ficha_' + sedeId + '_' + numero + '_' + k));
+    }
+    // Bloqueo duro (emisión): no se puede emitir un N° con acta vigente.
+    function fichaSinActaVigente(sedeId, numero, k) {
+      return fichaEstadoObservadoValido(sedeId, numero, k) && !fichaIntentoVigente(sedeId, numero, k);
+    }
+    // Liberación STANDALONE (administrativa/admin, sin acta hermana en el
+    // batch, ajuste 23/11): permitida si no hay acta vigente, O si la hay
+    // pero con un DNI DISTINTO al de la emisión (reasignación/conflicto) --
+    // bloqueada SOLO si coincide el DNI (eso se resuelve como "cargada", no
+    // "liberada"). El get() reusa el MISMO path que el exists() de
+    // fichaEstadoObservadoValido -- costo 0 extra por el caché de llamadas
+    // idénticas ya confirmado empíricamente en este archivo (ver
+    // egresoValidoParaMarcar).
+    function fichaLiberableStandalone(sedeId, numero, k, dniEmision) {
+      return fichaEstadoObservadoValido(sedeId, numero, k) &&
+        (!fichaIntentoVigente(sedeId, numero, k) ||
+         get(/databases/$(database)/documents/fichasUsadas/$(sedeId + '_' + numero + '_' + k)).data.pacienteDni != dniEmision);
+    }
+    // Cadena de emisionVersion: mismo esquema inductivo que
+    // fichaIntentoHabilitado, pero "resuelta" alcanza con CUALQUIER estado
+    // (cargada o liberada) -- no sólo liberada (caso real: v1 cargada, acta
+    // anulada por "estudio no realizado", N° libre, administrativa reemite
+    // v2). Mitigación de desfasaje de TTL (23/11, Pablo): si el padre de v-1
+    // nunca existió, NO se lo trata como resuelto -- eso permitiría emitir
+    // v=3 o v=5 sobre un N° sin ninguna historia real. El desfasaje (hijo
+    // Resueltas ya borrado por TTL, padre emisionesFicha todavía vivo) sólo
+    // se acepta si el padre, estando vivo, ya pasó su propio expiraEn --
+    // cuando los dos (padre e hijo) ya se borraron, la emisión reinicia en
+    // versión 1 para ese N°, sin memoria de la historia vieja.
+    function emisionVersionHabilitada(sedeId, numero, v) {
+      let vPrev = v == '2' ? '1' : v == '3' ? '2' : v == '4' ? '3' : '4';
+      let padreVPrevId = sedeId + '_' + numero + '_' + vPrev;
+      return v == '1' ||
+        exists(/databases/$(database)/documents/emisionesFichaResueltas/$(padreVPrevId)) ||
+        (exists(/databases/$(database)/documents/emisionesFicha/$(padreVPrevId)) &&
+         get(/databases/$(database)/documents/emisionesFicha/$(padreVPrevId)).data.expiraEn < request.time);
+    }
+    // Ventana de expiraEn: ±1 día alrededor de 60 -- sin precedente de
+    // aritmética de timestamp/duration en este archivo antes de esto
+    // (2026-11-23). Confirmado contra el emulador local: duration.value()
+    // con unidad 'd', la suma request.time + duration y la comparación <=
+    // entre dos Timestamp compilan y comparan correctamente.
+    function expiraEnValido(d) {
+      return d.expiraEn is timestamp &&
+        request.time + duration.value(59, 'd') <= d.expiraEn &&
+        d.expiraEn <= request.time + duration.value(61, 'd');
+    }
+    function emisionesFichaValida(id) {
+      let d = request.resource.data;
+      return fichaValida(d.numero) &&
+        d.emisionVersion in ['1', '2', '3', '4', '5'] &&
+        d.sedeId is string && d.sedeId.size() > 0 &&
+        miRol().sede == d.sedeId &&
+        (isAdmin() || miRol().rol == 'administrativa') &&
+        d.pacienteFichaNum is number && d.pacienteFichaNum > 0 &&
+        // Ata el campo numérico (indexado) al N° real -- evita que alguien
+        // declare un pacienteFichaNum distinto del que de verdad identifica
+        // la ficha (mismo motivo que fichaId == sedeId_pacienteFicha_n en
+        // fichaUsadaValida). int() sobre un string ya validado por
+        // fichaValida() (sólo dígitos) -- confirmado contra el emulador.
+        d.pacienteFichaNum == int(d.numero) &&
+        d.dni is string && d.dni.size() > 0 &&
+        d.nombre is string && d.nombre.size() > 0 &&
+        d.estudio is string && d.estudio.size() > 0 &&
+        d.usuarioEmail == request.auth.token.email &&
+        d.fichaIntentoObservado in ['0', '1', '2', '3', '4', '5'] &&
+        fichaSinActaVigente(d.sedeId, d.numero, d.fichaIntentoObservado) &&
+        emisionVersionHabilitada(d.sedeId, d.numero, d.emisionVersion) &&
+        expiraEnValido(d) &&
+        id == d.sedeId + '_' + d.numero + '_' + d.emisionVersion;
+    }
+    match /emisionesFicha/{id} {
+      // Mismo esquema de lectura que fichasUsadas (línea ~1339): propia
+      // sede siempre, admin además su sedeAuditando. resource==null: las
+      // funciones de arriba hacen exists()/get() contra esta MISMA colección
+      // (la cadena de emisionVersion) ANTES de que el doc exista.
+      allow read: if tieneAcceso() && (
+        resource == null ||
+        (isAdmin() && 'sede' in miRol() && resource.data.sedeId == miRol().sede) ||
+        (isAdmin() && 'sedeAuditando' in miRol() && resource.data.sedeId == miRol().sedeAuditando) ||
+        miRol().sede == resource.data.sedeId
+      );
+      allow create: if tieneAcceso() && emisionesFichaValida(id);
+      allow update, delete: if false;
+    }
+
+    // 4 rutas posibles (OR), nunca combinadas en la misma escritura:
+    //  1. Administrativa/admin, liberación STANDALONE (sin acta hermana).
+    //  2. Técnico, "cargada" simple -- NO atómica, fichasUsadas ya existía.
+    //  3. Técnico, "cargada con corrección" -- atómica con el acta nueva
+    //     (DNI emitido mal, mismo paciente).
+    //  4. Técnico, liberación por reasignación -- atómica con el acta nueva
+    //     (otro paciente), motivo fijo.
+    // getAfter()/existsAfter() (en vez de get()/exists() a secas) para 3/4:
+    // prueban el estado DESPUÉS de todo el commit del batch/transacción --
+    // necesario para validar un documento hermano que se escribe en el
+    // MISMO batch (get()/exists() sólo ven el estado al INICIO). El combo
+    // !exists() (antes) + existsAfter() (después) prueba que el acta se creó
+    // EN este batch, no que ya existía de antes (existsAfter() solo no
+    // alcanza para eso). No medido en staging -- sin precedente en este
+    // archivo antes de esto (2026-11-23), queda condicionado a la corrida
+    // real en el emulador.
+    function emisionesFichaResueltasValida(id) {
+      let d = request.resource.data;
+      let padreId = d.sedeId + '_' + d.numero + '_' + d.emisionVersion;
+      let padre = get(/databases/$(database)/documents/emisionesFicha/$(padreId));
+      let fichaUsadaId = padre.data.sedeId + '_' + padre.data.numero + '_' +
+        (('fichaIntentoNroUsado' in d) ? d.fichaIntentoNroUsado : '1');
+      return id == padreId &&
+        d.sedeId == padre.data.sedeId &&
+        d.numero == padre.data.numero &&
+        d.usuarioEmail == request.auth.token.email &&
+        d.vistoAdmin == false &&
+        d.expiraEn == padre.data.expiraEn &&
+        miRol().sede == padre.data.sedeId &&
+        (
+          (d.estado == 'liberada' && (isAdmin() || miRol().rol == 'administrativa') &&
+           d.motivo is string && d.motivo.size() > 0 &&
+           d.fichaIntentoNroObservado in ['0', '1', '2', '3', '4', '5'] &&
+           fichaLiberableStandalone(padre.data.sedeId, padre.data.numero, d.fichaIntentoNroObservado, padre.data.dni))
+          ||
+          (d.estado == 'cargada' && miRol().rol == 'tecnico' &&
+           d.fichaIntentoNroUsado in ['1', '2', '3', '4', '5'] &&
+           // Además del DNI: el intento apuntado tiene que estar VIGENTE
+           // (no anulado) -- sin esto, un técnico podría fabricar "cargada"
+           // apuntando a un intento viejo ya anulado, cuyo pacienteDni
+           // igual podría coincidir por casualidad. +1 lectura real (path
+           // distinto a fichasUsadas, no cachea con el get() de abajo).
+           fichaIntentoVigente(padre.data.sedeId, padre.data.numero, d.fichaIntentoNroUsado) &&
+           get(/databases/$(database)/documents/fichasUsadas/$(fichaUsadaId)).data.pacienteDni == padre.data.dni)
+          ||
+          (d.estado == 'cargada_con_correccion' && miRol().rol == 'tecnico' &&
+           d.fichaIntentoNroUsado in ['1', '2', '3', '4', '5'] &&
+           d.dniEmitido == padre.data.dni &&
+           d.dniReal is string && d.dniReal.size() > 0 &&
+           !exists(/databases/$(database)/documents/fichasUsadas/$(fichaUsadaId)) &&
+           existsAfter(/databases/$(database)/documents/fichasUsadas/$(fichaUsadaId)) &&
+           getAfter(/databases/$(database)/documents/fichasUsadas/$(fichaUsadaId)).data.pacienteDni == d.dniReal)
+          ||
+          (d.estado == 'liberada' && miRol().rol == 'tecnico' &&
+           d.motivo == 'Ficha reasignada a otro paciente (confirmado por el técnico al cargar)' &&
+           d.fichaIntentoNroUsado in ['1', '2', '3', '4', '5'] &&
+           !exists(/databases/$(database)/documents/fichasUsadas/$(fichaUsadaId)) &&
+           existsAfter(/databases/$(database)/documents/fichasUsadas/$(fichaUsadaId)) &&
+           getAfter(/databases/$(database)/documents/fichasUsadas/$(fichaUsadaId)).data.pacienteDni != padre.data.dni)
+        );
+    }
+    match /emisionesFichaResueltas/{id} {
+      allow read: if tieneAcceso() && (
+        resource == null ||
+        (isAdmin() && 'sede' in miRol() && resource.data.sedeId == miRol().sede) ||
+        (isAdmin() && 'sedeAuditando' in miRol() && resource.data.sedeId == miRol().sedeAuditando) ||
+        miRol().sede == resource.data.sedeId
+      );
+      allow create: if tieneAcceso() && emisionesFichaResueltasValida(id);
+      // Única excepción a create-only en esta familia de colecciones: la
+      // marca "enterada" de la administrativa (vistoAdmin), acotada a un
+      // solo campo, un solo sentido (false->true), nunca la crea el create
+      // en true (chequeado arriba). resource ya está disponible gratis en
+      // un update -- 0 lecturas extra contra el tope de 10/20.
+      allow update: if tieneAcceso() && (isAdmin() || miRol().rol == 'administrativa') &&
+        miRol().sede == resource.data.sedeId &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['vistoAdmin']) &&
+        resource.data.vistoAdmin == false && request.resource.data.vistoAdmin == true;
+      allow delete: if false;
+    }
+
     function tiposAuditoria() {
       return ['restauracion_backup'];
     }
