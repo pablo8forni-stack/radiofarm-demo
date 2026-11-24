@@ -1,9 +1,36 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { CartelFichasFaltantes } from "../components/actas/CartelFichasFaltantes.jsx";
+import { ModalEmitirFicha } from "../components/actas/ModalEmitirFicha.jsx";
 import { Badge } from "../components/ui/Badge.jsx";
+import { Btn } from "../components/ui/Btn.jsx";
+import { Input } from "../components/ui/Input.jsx";
 import { listenAnulacionesActas } from "../services/firestore/actas.js";
 import { listenFichasUsadasRecientes, listenFichasDescartadas } from "../services/firestore/fichasDescartadas.js";
 import { idsFichaAnulados, calcularHuecos, huecosYaAnulados } from "../helpers/huecosFicha.js";
+import {
+  listenEmisionesFicha, listenEmisionesResueltas, listenFichaUsadaEstado,
+  calcularFichaIntentoObservado, liberarEmisionStandalone,
+} from "../services/firestore/emisionesFicha.js";
+
+const MOTIVO_LIBERAR_TOPE = 300;
+
+// Fase 2.1a -- estado de una fila: cruza la emisión, su resolución (si la
+// hay) y el estado real de fichasUsadas (vigente/anulado + DNI) para esa
+// misma ficha. "cargada" acá es SIEMPRE el cruce de respaldo (acta vigente
+// con el mismo DNI) -- "cargada_con_correccion" es Fase 2.2, no se escribe
+// desde esta pantalla, pero si existiera (dato de otra fuente) se muestra
+// igual como "Cargada" en vez de romper.
+function estadoDeFila(emision, resuelta, fichaEstado) {
+  if (resuelta) {
+    if (resuelta.estado === "liberada") return { tipo: "liberada", color: "gray", texto: "Liberada", motivo: resuelta.motivo };
+    if (resuelta.estado === "cargada" || resuelta.estado === "cargada_con_correccion") return { tipo: "cargada", color: "green", texto: "Cargada" };
+    return { tipo: resuelta.estado, color: "gray", texto: resuelta.estado };
+  }
+  if (!fichaEstado) return { tipo: "verificando", color: "gray", texto: "Verificando..." };
+  if (!fichaEstado.vigente) return { tipo: "pendiente", color: "red", texto: "Pendiente" };
+  if (fichaEstado.dni === emision.dni) return { tipo: "cargada", color: "green", texto: "Cargada" };
+  return { tipo: "conflicto", color: "orange", texto: "N° usado por otro paciente" };
+}
 
 // Pantalla del rol "administrativa" (Fase 1A/1B) -- control de N° de Ficha
 // de su propia sede: encabezado (última vigente + anulada más reciente, si
@@ -41,6 +68,122 @@ export function VistaAdministrativaFichas({ usuario, onToast }) {
   useEffect(() => listenAnulacionesActas(setAnulacionesRaw, { sedeId: usuario.sede }), [usuario.sede]);
   useEffect(() => listenFichasUsadasRecientes(usuario.sede, setFichasUsadas), [usuario.sede]);
   useEffect(() => listenFichasDescartadas(usuario.sede, setFichasDescartadas), [usuario.sede]);
+
+  // === Fase 2.1a -- Emisión de fichas ===
+  // Bandera de funcionalidad (23/11, Pablo): apagada por defecto en
+  // producción (nadie la define ahí), prendida a mano en .env.emulator y
+  // .env.staging. Motivo: un deploy de hosting a producción ANTES de
+  // desplegar las reglas de emisionesFicha/emisionesFichaResueltas rompería
+  // esta pantalla -- con la bandera apagada, ni se renderiza la sección ni
+  // se abre un solo listener nuevo (ver los returns tempranos de abajo,
+  // NUNCA se salta la llamada al hook en sí, sólo su cuerpo -- las reglas
+  // de hooks exigen que el llamado en sí sea incondicional).
+  const emisionHabilitada = import.meta.env.VITE_EMISION_FICHAS_HABILITADA === "1";
+
+  const [emisiones, setEmisiones] = useState([]);
+  const [resueltas, setResueltas] = useState([]);
+  const [estadosFicha, setEstadosFicha] = useState({}); // numero -> {k, vigente, dni}
+  const [mostrarEmitir, setMostrarEmitir] = useState(false);
+  const [liberandoId, setLiberandoId] = useState(null);
+  const [motivoLiberar, setMotivoLiberar] = useState("");
+  const [enviandoLiberar, setEnviandoLiberar] = useState(false);
+  const [erroresFila, setErroresFila] = useState({}); // id -> mensaje
+
+  useEffect(() => {
+    if (!emisionHabilitada) return undefined;
+    return listenEmisionesFicha(usuario.sede, setEmisiones);
+  }, [usuario.sede, emisionHabilitada]);
+  useEffect(() => {
+    if (!emisionHabilitada) return undefined;
+    return listenEmisionesResueltas(usuario.sede, setResueltas);
+  }, [usuario.sede, emisionHabilitada]);
+
+  const resueltaPorId = useMemo(() => new Map(resueltas.map((r) => [r.id, r])), [resueltas]);
+  const emisionesPendientes = useMemo(
+    () => emisiones.filter((e) => !resueltaPorId.has(e.id)),
+    [emisiones, resueltaPorId]
+  );
+  const numerosPendientes = useMemo(
+    () => [...new Set(emisionesPendientes.map((e) => e.numero))],
+    [emisionesPendientes]
+  );
+
+  // Listener por FILA pendiente (no por colección entera) -- se crea cuando
+  // un número entra en "pendiente" y se destruye cuando sale (se resuelve).
+  // Ver listenFichaUsadaEstado: hasta 5 docs por número, nunca fichasUsadas
+  // entera.
+  const listenersRef = useRef(new Map());
+  useEffect(() => {
+    if (!emisionHabilitada) return;
+    const activos = listenersRef.current;
+    for (const numero of numerosPendientes) {
+      if (!activos.has(numero)) {
+        const unsub = listenFichaUsadaEstado(usuario.sede, numero, (estado) => {
+          setEstadosFicha((prev) => ({ ...prev, [numero]: estado }));
+        });
+        activos.set(numero, unsub);
+      }
+    }
+    for (const [numero, unsub] of activos) {
+      if (!numerosPendientes.includes(numero)) {
+        unsub();
+        activos.delete(numero);
+      }
+    }
+  }, [numerosPendientes, usuario.sede, emisionHabilitada]);
+  useEffect(() => () => { for (const unsub of listenersRef.current.values()) unsub(); }, []);
+
+  // Respaldo (no instantáneo): una anulación SIN ningún alta nueva de por
+  // medio no dispara el listener de arriba (fichasUsadas es inmutable) --
+  // se refresca en foco de pestaña y con el botón "Actualizar".
+  async function refrescarEstados() {
+    const entradas = await Promise.all(
+      numerosPendientes.map(async (numero) => [numero, await calcularFichaIntentoObservado(usuario.sede, numero)])
+    );
+    setEstadosFicha((prev) => ({ ...prev, ...Object.fromEntries(entradas) }));
+  }
+  useEffect(() => {
+    if (!emisionHabilitada) return undefined;
+    function onFoco() {
+      if (document.visibilityState === "visible") refrescarEstados();
+    }
+    document.addEventListener("visibilitychange", onFoco);
+    return () => document.removeEventListener("visibilitychange", onFoco);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [numerosPendientes.join(","), emisionHabilitada]);
+
+  const filasEmision = useMemo(
+    () => emisiones
+      .slice()
+      .sort((a, b) => b.pacienteFichaNum - a.pacienteFichaNum)
+      .map((e) => ({ emision: e, resuelta: resueltaPorId.get(e.id) || null, estado: estadoDeFila(e, resueltaPorId.get(e.id), estadosFicha[e.numero]) })),
+    [emisiones, resueltaPorId, estadosFicha]
+  );
+
+  const avisoSedeAuditando = usuario.rol === "admin" && usuario.sedeAuditando !== usuario.sede;
+
+  async function confirmarLiberar(fila) {
+    setEnviandoLiberar(true);
+    setErroresFila((prev) => ({ ...prev, [fila.emision.id]: "" }));
+    try {
+      await liberarEmisionStandalone({
+        sedeId: usuario.sede, numero: fila.emision.numero, emisionVersion: fila.emision.emisionVersion,
+        motivo: motivoLiberar, usuarioEmail: usuario.email,
+      });
+      setLiberandoId(null);
+      setMotivoLiberar("");
+      onToast?.("Emisión liberada.", "success");
+    } catch (e) {
+      const esCarrera = e.code === "permission-denied";
+      setErroresFila((prev) => ({
+        ...prev,
+        [fila.emision.id]: esCarrera ? "El estado de esta ficha cambió, actualizá e intentá de nuevo." : e.message,
+      }));
+      if (esCarrera) refrescarEstados();
+    } finally {
+      setEnviandoLiberar(false);
+    }
+  }
 
   const anulacionPorId = useMemo(() => new Map(anulacionesRaw.map((a) => [a.anulaId, a])), [anulacionesRaw]);
 
@@ -120,6 +263,80 @@ export function VistaAdministrativaFichas({ usuario, onToast }) {
         <h2 className="text-base font-bold text-gray-800">Control de fichas</h2>
         <p className="text-xs text-gray-400 mt-0.5">N° de Ficha de VM RIS, correlativo por sede</p>
       </div>
+
+      {/* Fase 2.1a -- Emisión de fichas -- bandera de funcionalidad: nada de
+          esto se renderiza (ni corre ningún listener, ver los useEffect de
+          arriba) si VITE_EMISION_FICHAS_HABILITADA no es exactamente "1". */}
+      {emisionHabilitada && <>
+      {avisoSedeAuditando && (
+        <div className="bg-orange-50 border border-orange-100 rounded-xl px-4 py-3 text-xs text-orange-800">
+          No se pudo verificar el historial de esta ficha. Si entraste como admin, configurá "Sede en auditoría" = tu sede en Configuración antes de usar esta pantalla.
+        </div>
+      )}
+      <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+        <div className="flex items-center justify-between px-4 py-3 border-b border-gray-50">
+          <h3 className="text-sm font-bold text-gray-800">Emisión de fichas</h3>
+          <div className="flex gap-2">
+            <Btn variant="outline" size="sm" onClick={refrescarEstados}>Actualizar</Btn>
+            <Btn variant="primary" size="sm" onClick={() => setMostrarEmitir(true)}>Emitir ficha</Btn>
+          </div>
+        </div>
+        <div className="divide-y divide-gray-50">
+          {filasEmision.length === 0 && (
+            <p className="px-4 py-3 text-xs text-gray-400 text-center">Sin emisiones todavía.</p>
+          )}
+          {filasEmision.map((fila) => {
+            const puedeLiberar = fila.estado.tipo === "pendiente" || fila.estado.tipo === "conflicto";
+            return (
+              <div key={fila.emision.id} className="px-4 py-3 flex flex-col gap-1">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-semibold text-gray-800">{fila.emision.pacienteFichaNum} <span className="text-xs text-gray-400">v{fila.emision.emisionVersion}</span></span>
+                  <Badge color={fila.estado.color}>{fila.estado.texto}</Badge>
+                </div>
+                <div className="text-xs text-gray-600">
+                  {fila.emision.nombre} <span className="text-gray-400">· DNI {fila.emision.dni} · {fila.emision.estudio}</span>
+                </div>
+                {fila.estado.tipo === "liberada" && fila.estado.motivo && (
+                  <p className="text-xs text-gray-400 truncate" title={fila.estado.motivo}>{fila.estado.motivo}</p>
+                )}
+                {erroresFila[fila.emision.id] && (
+                  <p className="text-xs text-red-600">{erroresFila[fila.emision.id]}</p>
+                )}
+                {puedeLiberar && liberandoId !== fila.emision.id && (
+                  <div className="flex justify-end">
+                    <Btn variant="outline" size="sm" onClick={() => { setLiberandoId(fila.emision.id); setMotivoLiberar(""); }}>Liberar</Btn>
+                  </div>
+                )}
+                {liberandoId === fila.emision.id && (
+                  <div className="flex flex-col gap-2 mt-1">
+                    <Input
+                      label="Motivo (obligatorio)" value={motivoLiberar}
+                      onChange={(e) => setMotivoLiberar(e.target.value.slice(0, MOTIVO_LIBERAR_TOPE))}
+                      placeholder="Ej: ficha emitida sin usar, vencida..."
+                    />
+                    <span className="text-xs text-gray-400 text-right">{motivoLiberar.length}/{MOTIVO_LIBERAR_TOPE}</span>
+                    <div className="flex gap-2 justify-end">
+                      <Btn variant="outline" size="sm" onClick={() => { setLiberandoId(null); setMotivoLiberar(""); }} disabled={enviandoLiberar}>Cancelar</Btn>
+                      <Btn variant="danger" size="sm" onClick={() => confirmarLiberar(fila)} disabled={!motivoLiberar.trim() || enviandoLiberar}>
+                        {enviandoLiberar ? "Liberando..." : "Confirmar"}
+                      </Btn>
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+      {mostrarEmitir && (
+        <ModalEmitirFicha
+          sedeId={usuario.sede}
+          usuarioEmail={usuario.email}
+          onClose={() => setMostrarEmitir(false)}
+          onEmitida={() => onToast?.("Ficha emitida.", "success")}
+        />
+      )}
+      </>}
       <div className="bg-white rounded-2xl shadow-sm border border-gray-100 px-4 py-3 flex flex-col gap-1">
         <p className="text-xs text-gray-400">Última ficha cargada</p>
         <p className="text-2xl font-bold text-gray-800">{vigente ?? "—"}</p>

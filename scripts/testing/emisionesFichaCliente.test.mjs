@@ -5,14 +5,14 @@
 // pantalla de la administrativa va a llamar.
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { doc, setDoc, getDoc, deleteDoc, collection, query, where, getDocs, Timestamp } from "firebase/firestore";
-import { PERSONAS, SEDE_A, SEDE_B, db, loguearComo, prepararFixturesGlobales, fichaDePrueba, cerrarConexiones } from "./fixtures.mjs";
+import { setDoc, getDoc, collection, query, where, getDocs, Timestamp } from "firebase/firestore";
+import { PERSONAS, SEDE_A, db, loguearComo, prepararFixturesGlobales, fichaDePrueba, cerrarConexiones } from "./fixtures.mjs";
 import { fichaUsadaRef, anulaFichaRef } from "../../src/services/firestore/actas.js";
 import { setSedeAuditando } from "../../src/services/auth.js";
 import {
   emisionFichaRef, emisionResueltaRef,
   calcularFichaIntentoObservado, calcularProximaEmisionVersion,
-  crearEmisionFicha, liberarEmisionStandalone,
+  crearEmisionFicha, liberarEmisionStandalone, listenFichaUsadaEstado,
 } from "../../src/services/firestore/emisionesFicha.js";
 
 before(async () => { await prepararFixturesGlobales(); });
@@ -103,6 +103,21 @@ test("crearEmisionFicha: sin acta vigente -- crea con fichaIntentoObservado corr
 });
 
 // === calcularProximaEmisionVersion ===
+
+test("crearEmisionFicha: peso/talla opcionales -- se guardan si vienen, se omiten si no (la regla no los restringe, sin .hasOnly())", async () => {
+  const numero1 = fichaDePrueba();
+  await loguearComo(PERSONAS.administrativa);
+  await crearEmisionFicha({ sedeId: SEDE_A, numero: numero1, dni: "1", nombre: "N", estudio: "E", usuarioEmail: PERSONAS.administrativa.email, peso: "70", talla: "170" });
+  const conPesoTalla = await getDoc(emisionFichaRef(SEDE_A, numero1, "1"));
+  assert.equal(conPesoTalla.data().peso, 70);
+  assert.equal(conPesoTalla.data().talla, 170);
+
+  const numero2 = fichaDePrueba();
+  await crearEmisionFicha({ sedeId: SEDE_A, numero: numero2, dni: "1", nombre: "N", estudio: "E", usuarioEmail: PERSONAS.administrativa.email });
+  const sinPesoTalla = await getDoc(emisionFichaRef(SEDE_A, numero2, "1"));
+  assert.equal("peso" in sinPesoTalla.data(), false);
+  assert.equal("talla" in sinPesoTalla.data(), false);
+});
 
 test("calcularProximaEmisionVersion: nada existe -> v1", async () => {
   const numero = fichaDePrueba();
@@ -261,6 +276,67 @@ test("query where(sedeId, pacienteFichaNum) sobre fichasUsadas: alguien de sede 
   await loguearComo(PERSONAS.tecnicoB); // sede B, consultando la query con sedeId de sede A
   const q = query(collection(db, "fichasUsadas"), where("sedeId", "==", SEDE_A), where("pacienteFichaNum", "==", Number(numero)));
   await assert.rejects(() => getDocs(q), (e) => e.code === "permission-denied");
+});
+
+// === listenFichaUsadaEstado ===
+// Recolecta hasta N valores del callback; `listo` resuelve apenas se junta
+// esa cantidad (nunca antes) -- para esperar un snapshot puntual sin
+// adivinar un timeout fijo.
+function recolectorDe(n, armar) {
+  const valores = [];
+  let resolver;
+  const listo = new Promise((res) => { resolver = res; });
+  const unsub = armar((v) => {
+    valores.push(v);
+    if (valores.length === n) resolver();
+  });
+  return { valores, listo, unsub };
+}
+
+test("listenFichaUsadaEstado: sin actas -> k='0', no vigente", async () => {
+  const numero = fichaDePrueba();
+  await loguearComo(PERSONAS.administrativa);
+  const { valores, listo, unsub } = recolectorDe(1, (cb) => listenFichaUsadaEstado(SEDE_A, numero, cb));
+  await listo;
+  assert.deepEqual(valores[0], { k: "0", vigente: false });
+  unsub();
+});
+
+test("listenFichaUsadaEstado: alta de intento 1 -> vigente con DNI", async () => {
+  const numero = fichaDePrueba();
+  await loguearComo(PERSONAS.administrativa);
+  const { valores, listo, unsub } = recolectorDe(2, (cb) => listenFichaUsadaEstado(SEDE_A, numero, cb));
+  await new Promise((r) => setTimeout(r, 400)); // deja llegar el primer snapshot (vacío) antes del alta
+  await crearFichaUsadaDirecta(numero, "1", { pacienteDni: "40111222" });
+  await listo;
+  assert.deepEqual(valores[valores.length - 1], { k: "1", vigente: true, dni: "40111222" });
+  unsub();
+});
+
+test("listenFichaUsadaEstado: anulación POSTERIOR sin alta nueva -- NO dispara un nuevo valor (documentado, no instantáneo)", async () => {
+  const numero = fichaDePrueba();
+  await crearFichaUsadaDirecta(numero, "1", { pacienteDni: "1" });
+  await loguearComo(PERSONAS.administrativa);
+  const { valores, listo, unsub } = recolectorDe(1, (cb) => listenFichaUsadaEstado(SEDE_A, numero, cb));
+  await listo;
+  assert.equal(valores[0].vigente, true);
+  await anularFichaIntentoDirecto(numero, "1");
+  // fichasUsadas es inmutable y la anulación vive en /actas -- este query
+  // (sobre fichasUsadas) no tiene ningún motivo para disparar de nuevo.
+  await new Promise((r) => setTimeout(r, 1500));
+  assert.equal(valores.length, 1, "no debería haber un segundo snapshot sólo por la anulación -- se actualiza con foco de pestaña/Actualizar, no acá");
+  unsub();
+});
+
+test("listenFichaUsadaEstado: unsubscribe() realmente deja de escuchar", async () => {
+  const numero = fichaDePrueba();
+  await loguearComo(PERSONAS.administrativa);
+  const { valores, listo, unsub } = recolectorDe(1, (cb) => listenFichaUsadaEstado(SEDE_A, numero, cb));
+  await listo;
+  unsub();
+  await crearFichaUsadaDirecta(numero, "1", { pacienteDni: "1" });
+  await new Promise((r) => setTimeout(r, 1500));
+  assert.equal(valores.length, 1, "después de unsub() no debería llegar ningún valor más");
 });
 
 // === Admin: con/sin sedeAuditando ===

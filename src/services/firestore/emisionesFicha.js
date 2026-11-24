@@ -1,6 +1,8 @@
-import { collection, doc, getDoc, setDoc, Timestamp } from "firebase/firestore";
+import { collection, doc, getDoc, setDoc, onSnapshot, query, where, Timestamp } from "firebase/firestore";
 import { db } from "../../firebase.js";
 import { fichaUsadaRef, anulaFichaRef } from "./actas.js";
+
+const fichasUsadasCol = collection(db, "fichasUsadas");
 
 // Fase 2.1a (23/11) -- capa de servicio de emisión de fichas. Sólo las 2
 // piezas aprobadas para esta etapa: crear una emisión y liberarla desde la
@@ -20,6 +22,43 @@ export const emisionResueltaRef = (sedeId, numero, emisionVersion) =>
 
 function expiraEnDefault() {
   return Timestamp.fromMillis(Date.now() + TTL_EMISION_DIAS * 86400000);
+}
+
+// Listeners acotados por sede -- nunca sin where(sedeId==), mismo criterio
+// que el resto de la app (ver nota larga en firestore.rules sobre actas).
+export function listenEmisionesFicha(sedeId, callback) {
+  const q = query(emisionesFichaCol, where("sedeId", "==", sedeId));
+  return onSnapshot(q, (snap) => callback(snap.docs.map((d) => ({ id: d.id, ...d.data() }))));
+}
+export function listenEmisionesResueltas(sedeId, callback) {
+  const q = query(emisionesFichaResueltasCol, where("sedeId", "==", sedeId));
+  return onSnapshot(q, (snap) => callback(snap.docs.map((d) => ({ id: d.id, ...d.data() }))));
+}
+
+// Listener por FILA pendiente (no por colección entera) -- query acotada a
+// (sedeId, pacienteFichaNum), máximo 5 documentos (tope de intentos). En
+// cada snapshot nuevo (alta de un intento), re-lee con 1 getDoc puntual la
+// anulación del intento más alto -- así el estado vigente/anulado queda
+// correcto en el momento de cada alta. Una anulación POSTERIOR sin ningún
+// alta nueva de por medio no dispara este listener (fichasUsadas es
+// inmutable, allow update/delete:false) -- por diseño, se actualiza con el
+// foco de pestaña o el botón "Actualizar" de la pantalla, no al instante.
+export function listenFichaUsadaEstado(sedeId, numero, callback) {
+  const q = query(fichasUsadasCol, where("sedeId", "==", sedeId), where("pacienteFichaNum", "==", Number(numero)));
+  return onSnapshot(q, async (snap) => {
+    if (snap.empty) {
+      callback({ k: "0", vigente: false });
+      return;
+    }
+    let maxN = 0;
+    let maxDoc = null;
+    for (const d of snap.docs) {
+      const n = Number(d.data().fichaIntentoNro);
+      if (n > maxN) { maxN = n; maxDoc = d; }
+    }
+    const anulaSnap = await getDoc(anulaFichaRef(sedeId, numero, String(maxN)));
+    callback({ k: String(maxN), vigente: !anulaSnap.exists(), dni: maxDoc.data().pacienteDni });
+  });
 }
 
 // Intento más alto EXISTENTE de fichasUsadas para (sedeId, numero), y si
@@ -97,7 +136,7 @@ export async function calcularProximaEmisionVersion(sedeId, numero) {
 // de intentar el write si el bloqueo duro o la cadena de versión lo impiden
 // -- la garantía real sigue siendo la regla, esto es sólo para no mostrar
 // un permission-denied crudo donde ya se puede explicar la causa.
-export async function crearEmisionFicha({ sedeId, numero, dni, nombre, estudio, usuarioEmail }) {
+export async function crearEmisionFicha({ sedeId, numero, dni, nombre, estudio, usuarioEmail, peso, talla }) {
   if (!/^[0-9]+$/.test(numero)) throw new Error("El N° de ficha tiene que ser numérico.");
 
   const intento = await calcularFichaIntentoObservado(sedeId, numero);
@@ -113,11 +152,19 @@ export async function crearEmisionFicha({ sedeId, numero, dni, nombre, estudio, 
     throw new Error("Esta ficha ya tuvo demasiadas reemisiones (5) -- contactá soporte.");
   }
 
+  // peso/talla: campos opcionales, sin equivalente obligatorio en la regla
+  // (emisionesFichaValida no tiene ningún .hasOnly() -- no restringe qué
+  // otros campos puede tener el documento, confirmado leyendo
+  // firestore.rules:1427-1450). Mismo criterio que pacienteDni opcional en
+  // datosFichaUsada (actas.js): omitir la clave entera si no vino, nunca
+  // escribir undefined (Firestore lo rechaza).
   await setDoc(emisionFichaRef(sedeId, numero, version.version), {
     sedeId, numero, pacienteFichaNum: Number(numero), emisionVersion: version.version,
     dni, nombre, estudio, usuarioEmail,
     fichaIntentoObservado: intento.k,
     expiraEn: expiraEnDefault(),
+    ...(peso != null && peso !== "" ? { peso: Number(peso) } : {}),
+    ...(talla != null && talla !== "" ? { talla: Number(talla) } : {}),
   });
 }
 
