@@ -91,6 +91,40 @@ test("crearEmisionFicha: bloqueo duro -- rechaza con acta vigente, mensaje claro
   );
 });
 
+test("crearEmisionFicha: el DNI se guarda normalizado (sin puntos/espacios, mayúscula)", async () => {
+  const numero = fichaDePrueba();
+  await loguearComo(PERSONAS.administrativa);
+  await crearEmisionFicha({ sedeId: SEDE_A, numero, dni: " ab 123.456 ", nombre: "N", estudio: "E", usuarioEmail: PERSONAS.administrativa.email });
+  const snap = await getDoc(emisionFichaRef(SEDE_A, numero, "1"));
+  assert.equal(snap.data().dni, "AB123456");
+});
+
+test("liberarEmisionStandalone: mismo documento con formato DISTINTO en la emisión vs. fichasUsadas -- sigue bloqueando (normaliza los dos lados)", async () => {
+  const numero = fichaDePrueba();
+  await loguearComo(PERSONAS.administrativa);
+  // Emisión con DNI normalizado (así queda guardado desde crearEmisionFicha).
+  await crearEmisionFicha({ sedeId: SEDE_A, numero, dni: "41409048", nombre: "N", estudio: "E", usuarioEmail: PERSONAS.administrativa.email });
+  // fichasUsadas (carga manual, NUNCA se toca/normaliza) con el MISMO
+  // documento pero en otro formato -- puntos y espacios.
+  await crearFichaUsadaDirecta(numero, "1", { pacienteDni: "41.409.048" });
+  await loguearComo(PERSONAS.administrativa);
+  await assert.rejects(
+    () => liberarEmisionStandalone({ sedeId: SEDE_A, numero, emisionVersion: "1", motivo: "x", usuarioEmail: PERSONAS.administrativa.email }),
+    /mismo paciente/
+  );
+});
+
+test("liberarEmisionStandalone: documento REALMENTE distinto (no sólo formato) -- libera igual", async () => {
+  const numero = fichaDePrueba();
+  await loguearComo(PERSONAS.administrativa);
+  await crearEmisionFicha({ sedeId: SEDE_A, numero, dni: "41409048", nombre: "N", estudio: "E", usuarioEmail: PERSONAS.administrativa.email });
+  await crearFichaUsadaDirecta(numero, "1", { pacienteDni: "99.999.999" });
+  await loguearComo(PERSONAS.administrativa);
+  await liberarEmisionStandalone({ sedeId: SEDE_A, numero, emisionVersion: "1", motivo: "Reasignado", usuarioEmail: PERSONAS.administrativa.email });
+  const snap = await getDoc(emisionResueltaRef(SEDE_A, numero, "1"));
+  assert.equal(snap.data().estado, "liberada");
+});
+
 test("crearEmisionFicha: sin acta vigente -- crea con fichaIntentoObservado correcto", async () => {
   const numero = fichaDePrueba();
   await crearFichaUsadaDirecta(numero, "1");
@@ -310,6 +344,17 @@ test("listenFichaUsadaEstado: alta de intento 1 -> vigente con DNI", async () =>
   await crearFichaUsadaDirecta(numero, "1", { pacienteDni: "40111222" });
   await listo;
   assert.deepEqual(valores[valores.length - 1], { k: "1", vigente: true, dni: "40111222" });
+  unsub();
+});
+
+test("listenFichaUsadaEstado: devuelve el DNI ya normalizado (sin puntos, mayúscula)", async () => {
+  const numero = fichaDePrueba();
+  await loguearComo(PERSONAS.administrativa);
+  const { valores, listo, unsub } = recolectorDe(2, (cb) => listenFichaUsadaEstado(SEDE_A, numero, cb));
+  await new Promise((r) => setTimeout(r, 400));
+  await crearFichaUsadaDirecta(numero, "1", { pacienteDni: " ab 123.456 " });
+  await listo;
+  assert.equal(valores[valores.length - 1].dni, "AB123456");
   unsub();
 });
 

@@ -1,6 +1,7 @@
 import { collection, doc, getDoc, setDoc, onSnapshot, query, where, Timestamp } from "firebase/firestore";
 import { db } from "../../firebase.js";
 import { fichaUsadaRef, anulaFichaRef } from "./actas.js";
+import { normalizarDocumento } from "../../helpers/documento.js";
 
 const fichasUsadasCol = collection(db, "fichasUsadas");
 
@@ -57,7 +58,11 @@ export function listenFichaUsadaEstado(sedeId, numero, callback) {
       if (n > maxN) { maxN = n; maxDoc = d; }
     }
     const anulaSnap = await getDoc(anulaFichaRef(sedeId, numero, String(maxN)));
-    callback({ k: String(maxN), vigente: !anulaSnap.exists(), dni: maxDoc.data().pacienteDni });
+    // normalizarDocumento acá -- pacienteDni viene de TabPacientes.jsx (sin
+    // tocar), puede tener puntos/espacios/guiones/minúsculas en cualquier
+    // formato. Se normaliza en la FUENTE para que todo consumidor de este
+    // listener reciba un dni ya comparable, sin tener que repetirlo.
+    callback({ k: String(maxN), vigente: !anulaSnap.exists(), dni: normalizarDocumento(maxDoc.data().pacienteDni) });
   });
 }
 
@@ -78,7 +83,8 @@ export async function calcularFichaIntentoObservado(sedeId, numero) {
     const usoSnap = await getDoc(fichaUsadaRef(sedeId, numero, String(n)));
     if (!usoSnap.exists()) return { k: kAnuladoMasAlto, vigente: false };
     const anulaSnap = await getDoc(anulaFichaRef(sedeId, numero, String(n)));
-    if (!anulaSnap.exists()) return { k: String(n), vigente: true, dni: usoSnap.data().pacienteDni };
+    // Mismo motivo que en listenFichaUsadaEstado: normalizar en la fuente.
+    if (!anulaSnap.exists()) return { k: String(n), vigente: true, dni: normalizarDocumento(usoSnap.data().pacienteDni) };
     kAnuladoMasAlto = String(n);
   }
   // Los 5 existen y los 5 están anulados -- el intento 5 queda "anulado",
@@ -160,7 +166,7 @@ export async function crearEmisionFicha({ sedeId, numero, dni, nombre, estudio, 
   // escribir undefined (Firestore lo rechaza).
   await setDoc(emisionFichaRef(sedeId, numero, version.version), {
     sedeId, numero, pacienteFichaNum: Number(numero), emisionVersion: version.version,
-    dni, nombre, estudio, usuarioEmail,
+    dni: normalizarDocumento(dni), nombre, estudio, usuarioEmail,
     fichaIntentoObservado: intento.k,
     expiraEn: expiraEnDefault(),
     ...(peso != null && peso !== "" ? { peso: Number(peso) } : {}),
@@ -191,7 +197,11 @@ export async function liberarEmisionStandalone({ sedeId, numero, emisionVersion,
   if (resueltaExistente.exists()) throw new Error("Esta emisión ya fue resuelta.");
 
   const intento = await calcularFichaIntentoObservado(sedeId, numero);
-  if (intento.vigente && intento.dni === padre.dni) {
+  // Comparación normalizada en los DOS lados -- intento.dni ya viene
+  // normalizado desde la fuente (calcularFichaIntentoObservado), pero
+  // padre.dni puede ser de un documento viejo guardado antes de este
+  // ajuste (24/11) -- nunca asumir que ya está limpio.
+  if (intento.vigente && normalizarDocumento(intento.dni) === normalizarDocumento(padre.dni)) {
     throw new Error("Este N° de ficha ya está cargado para este mismo paciente -- no se libera, hay que resolverlo como \"cargada\".");
   }
 

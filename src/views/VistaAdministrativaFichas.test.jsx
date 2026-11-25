@@ -71,6 +71,14 @@ describe("VistaAdministrativaFichas -- emisión de fichas (Fase 2.1a)", () => {
     expect(screen.queryByRole("button", { name: "Liberar" })).toBeNull();
   });
 
+  test("fila con acta vigente y MISMO documento pero con formato DISTINTO (puntos/mayúscula): sigue siendo 'Cargada'", async () => {
+    EMISIONES = [emisionBase({ dni: "AB123456" })];
+    ESTADOS_FICHA["111"] = { k: "1", vigente: true, dni: "ab.123.456" }; // mismo documento, otro formato
+    render(<VistaAdministrativaFichas usuario={USUARIO_ADMINISTRATIVA} onToast={vi.fn()} />);
+    expect(await screen.findByText("Cargada")).toBeTruthy();
+    expect(screen.queryByText("N° usado por otro paciente")).toBeNull();
+  });
+
   test("fila con acta vigente y OTRO DNI: Badge 'N° usado por otro paciente', CON botón Liberar", async () => {
     EMISIONES = [emisionBase()];
     ESTADOS_FICHA["111"] = { k: "1", vigente: true, dni: "99999999" };

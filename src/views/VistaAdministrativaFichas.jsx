@@ -11,6 +11,7 @@ import {
   listenEmisionesFicha, listenEmisionesResueltas, listenFichaUsadaEstado,
   calcularFichaIntentoObservado, liberarEmisionStandalone,
 } from "../services/firestore/emisionesFicha.js";
+import { normalizarDocumento } from "../helpers/documento.js";
 
 const MOTIVO_LIBERAR_TOPE = 300;
 
@@ -28,7 +29,10 @@ function estadoDeFila(emision, resuelta, fichaEstado) {
   }
   if (!fichaEstado) return { tipo: "verificando", color: "gray", texto: "Verificando..." };
   if (!fichaEstado.vigente) return { tipo: "pendiente", color: "red", texto: "Pendiente" };
-  if (fichaEstado.dni === emision.dni) return { tipo: "cargada", color: "green", texto: "Cargada" };
+  // Comparación normalizada en los dos lados -- fichaEstado.dni ya viene
+  // normalizado desde listenFichaUsadaEstado, pero emision.dni puede ser
+  // de una emisión creada antes de este ajuste (24/11).
+  if (normalizarDocumento(fichaEstado.dni) === normalizarDocumento(emision.dni)) return { tipo: "cargada", color: "green", texto: "Cargada" };
   return { tipo: "conflicto", color: "orange", texto: "N° usado por otro paciente" };
 }
 
