@@ -1,5 +1,22 @@
 import { describe, test, expect, vi } from "vitest";
-import { hoy, normalizarNombrePaciente } from "./formato.js";
+import { hoy, normalizarNombrePaciente, fmtF } from "./formato.js";
+
+// fmtF -- recorte de string "AAAA-MM-DD", nunca pasa por `new Date` (eso
+// evitaría el mismo tipo de corrimiento por UTC-3 que ya motivó hoy()
+// arriba -- `new Date("2026-11-01")` se interpreta como medianoche UTC,
+// que en Mendoza (UTC-3) ya es 31/10 a las 21:00 del día anterior).
+describe("fmtF() -- 'AAAA-MM-DD' a 'dd/mm/aaaa', sin new Date", () => {
+  test("01/11 no se corre a 31/10", () => {
+    expect(fmtF("2026-11-01")).toBe("01/11/2026");
+  });
+  test("fecha cualquiera", () => {
+    expect(fmtF("2026-08-05")).toBe("05/08/2026");
+  });
+  test("vacío/undefined -- '—'", () => {
+    expect(fmtF("")).toBe("—");
+    expect(fmtF(undefined)).toBe("—");
+  });
+});
 
 // hoy() es el "hoyISO" real que usa el resto de la app (actasPorRango,
 // lotesDelMes, y ahora estadoPorLoteDosisUnica/mibgLotes.js para el

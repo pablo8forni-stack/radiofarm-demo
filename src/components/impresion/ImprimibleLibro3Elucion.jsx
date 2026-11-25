@@ -2,6 +2,7 @@ import { EncabezadoImpresion } from "./EncabezadoImpresion.jsx";
 import { BloqueFirma } from "./BloqueFirma.jsx";
 import { claseFilaAnulada, claseCampoAnulado, LeyendaAnulado } from "./marcadoAnulada.jsx";
 import { fmtFechaHora } from "./actasFormatoImpresion.js";
+import { textoSubfilaGenerador } from "../../helpers/elucionGenerador.js";
 
 export function ImprimibleLibro3Elucion({ actas, anulaciones, sedeNombre, mesTexto, nombreResponsable }) {
   return (
@@ -20,13 +21,20 @@ export function ImprimibleLibro3Elucion({ actas, anulaciones, sedeNombre, mesTex
             <th className="py-1">Observación</th>
           </tr>
         </thead>
-        <tbody>
-          {actas.map((a) => {
-            const anulacion = anulaciones.get(a.id);
-            const { fecha, hora } = fmtFechaHora(a.fecha);
-            const campo = claseCampoAnulado(!!anulacion);
-            return (
-              <tr key={a.id} className={`border-b border-gray-300 ${claseFilaAnulada(!!anulacion)}`}>
+        {actas.map((a) => {
+          const anulacion = anulaciones.get(a.id);
+          const { fecha, hora } = fmtFechaHora(a.fecha);
+          const campo = claseCampoAnulado(!!anulacion);
+          const subfila = textoSubfilaGenerador(a);
+          return (
+            // Fila + subfila en su PROPIO <tbody> (24/11) -- break-inside-
+            // avoid acá mantiene juntas las dos entre páginas; un <tr> suelto
+            // con break-inside:avoid (index.css) sólo evita que ESA fila se
+            // parta sola, no que la siguiente (la subfila) quede en la
+            // página de al lado. Varios <tbody> en una sola <table> son HTML
+            // válido, se ven igual que uno solo.
+            <tbody key={a.id} className="break-inside-avoid">
+              <tr className={`border-b ${subfila ? "" : "border-gray-300"} ${claseFilaAnulada(!!anulacion)}`}>
                 <td className={`py-1 pr-2 ${campo}`}>{fecha}</td>
                 <td className={`py-1 pr-2 ${campo}`}>{hora}</td>
                 <td className={`py-1 pr-2 ${campo}`}>{a.loteGenerador}</td>
@@ -36,9 +44,14 @@ export function ImprimibleLibro3Elucion({ actas, anulaciones, sedeNombre, mesTex
                 <td className={`py-1 pr-2 ${campo}`}>{a.usuarioNombre}</td>
                 <td className="py-1">{anulacion ? <LeyendaAnulado motivo={anulacion.motivo} /> : (a.observacion || "—")}</td>
               </tr>
-            );
-          })}
-        </tbody>
+              {subfila && (
+                <tr className={`border-b border-gray-300 ${claseFilaAnulada(!!anulacion)}`}>
+                  <td colSpan={8} className={`py-0.5 pr-2 text-[10px] text-gray-600 ${campo}`}>{subfila}</td>
+                </tr>
+              )}
+            </tbody>
+          );
+        })}
       </table>
       {actas.length === 0 && <p className="text-center py-6 text-gray-500">Sin registros este mes.</p>}
       <BloqueFirma nombreResponsable={nombreResponsable} />

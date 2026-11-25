@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { Badge } from "../../components/ui/Badge.jsx";
 import { Btn } from "../../components/ui/Btn.jsx";
 import { Input } from "../../components/ui/Input.jsx";
@@ -8,9 +8,14 @@ import { descargarArchivo } from "../../helpers/descargarArchivo.js";
 import { nombreArchivoLibro } from "../../helpers/nombreArchivoLibro.js";
 import { normalizarLoteSeisDigitos } from "../../helpers/lote.js";
 import { listenActas, addActaElucion, actasPorRango, anularActaTransaction, listenAnulacionesActas, loteGeneradorYaRegistrado } from "../../services/firestore/actas.js";
+import { calcularPedirDatos, textoSubfilaGenerador } from "../../helpers/elucionGenerador.js";
 
 const TIMEOUT_BUSQUEDA_MS = 20000;
 const MSJ_TIMEOUT_BUSQUEDA = "La consulta tardó demasiado, puede haber un problema de conexión -- intentá cerrar las otras pestañas de RadioFarm que tengas abiertas y reintentá.";
+// Fallback por timeout de los listeners del formulario (24/11) -- ver el
+// useEffect que usa esto, más abajo.
+const TIMEOUT_LISTENERS_MS = 15000;
+const MSJ_TIMEOUT_LISTENERS = "No se pudo verificar el historial de este lote: se piden los 4 datos por las dudas.";
 
 // Sin esto, una consulta que nunca resuelve (ver nota en exportarRango) deja
 // el botón trabado en "Buscando..." para siempre, sin ningún error visible.
@@ -23,6 +28,19 @@ function conTimeout(promesa, ms, mensaje) {
 export function TabElucion({ catalogo, usuario, esAdmin, onToast }) {
   const [actasTodas, setActasTodas] = useState([]);
   const [anulacionesRaw, setAnulacionesRaw] = useState([]);
+  // Fase elución (24/11): mientras estos dos listeners no trajeron su
+  // primer snapshot, pedirDatos no se puede calcular de verdad (actasTodas/
+  // anulacionesRaw todavía están en su valor inicial vacío, que diría
+  // "no hay ninguna vigente con datos" aunque sí la haya) -- se bloquea
+  // Guardar y se muestra "Cargando..." en vez de decidir con datos a medias.
+  const [actasCargadas, setActasCargadas] = useState(false);
+  const [anulacionesCargadas, setAnulacionesCargadas] = useState(false);
+  // Fallback por timeout (24/11): si a los TIMEOUT_LISTENERS_MS de abierto
+  // el formulario los 2 listeners de arriba TODAVÍA no entregaron (corte de
+  // red, permisos, etc. -- onSnapshot no tiene hoy ningún timeout ni
+  // callback de error propio), se deja de esperar y se pide los 4 datos
+  // igual, por las dudas. Ver el useEffect que lo arma/retira más abajo.
+  const [timeoutVencido, setTimeoutVencido] = useState(false);
   const [mAnular, setMAnular] = useState(null);
   const [mostrarForm, setMostrarForm] = useState(false);
   const [filtroFecha, setFiltroFecha] = useState(hoy());
@@ -45,11 +63,16 @@ export function TabElucion({ catalogo, usuario, esAdmin, onToast }) {
   const sedeId = usuario.sede;
   const [loteGenerador, setLoteGenerador] = useState("");
   const [loteVerificado, setLoteVerificado] = useState("");
-  const [esPrimeraVez, setEsPrimeraVez] = useState(false);
+  // Renombrado (24/11): esto SOLO dice si generadoresVistos ya existe para
+  // este lote/sede -- antes se llamaba esPrimeraVez y se usaba directo para
+  // decidir si pedir los 4 datos, lo que mezclaba dos preguntas distintas
+  // (¿existe el marcador? vs. ¿hay que pedir los datos?). Ver pedirDatos
+  // más abajo para la segunda.
+  const [marcadorExiste, setMarcadorExiste] = useState(false);
   const [verificandoLote, setVerificandoLote] = useState(false);
   const [actividadCalibrada, setActividadCalibrada] = useState("");
-  // Sólo se piden en la primera elución de este lote/serie (mismo gate que
-  // actividadCalibrada, ver useEffect de esPrimeraVez más abajo). Strings
+  // Sólo se piden cuando pedirDatos es true (ver helpers/elucionGenerador.js
+  // y el useMemo más abajo). Strings
   // "YYYY-MM-DD" tal cual (sin Date()) -- no entran en ningún cálculo de
   // decaimiento acá, mismo criterio que mibg_lote.fechaVencimiento.
   // numeroGenerador: dato IMPRESO en la etiqueta física del generador,
@@ -62,8 +85,31 @@ export function TabElucion({ catalogo, usuario, esAdmin, onToast }) {
   const [obs, setObs] = useState("");
   const [guardando, setGuardando] = useState(false);
 
-  useEffect(() => { if (sedeEfectiva) return listenActas("elucion", setActasTodas, { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
-  useEffect(() => { if (sedeEfectiva) return listenAnulacionesActas(setAnulacionesRaw, { sedeId: sedeEfectiva }); }, [sedeEfectiva]);
+  useEffect(() => {
+    if (!sedeEfectiva) return undefined;
+    setActasCargadas(false);
+    return listenActas("elucion", (actas) => { setActasTodas(actas); setActasCargadas(true); }, { sedeId: sedeEfectiva });
+  }, [sedeEfectiva]);
+  useEffect(() => {
+    if (!sedeEfectiva) return undefined;
+    setAnulacionesCargadas(false);
+    return listenAnulacionesActas((anulaciones) => { setAnulacionesRaw(anulaciones); setAnulacionesCargadas(true); }, { sedeId: sedeEfectiva });
+  }, [sedeEfectiva]);
+
+  // Arma/retira el timeout de arriba. Depende de actasCargadas/
+  // anulacionesCargadas (la carga REAL), nunca del combinado
+  // listosParaDecidir (= cargaReal || timeoutVencido, ver más abajo): si
+  // dependiera del combinado, poner timeoutVencido en true reengancharía
+  // este mismo efecto, y la rama "ya cargó, bajar la bandera" lo bajaría de
+  // vuelta a false en el mismo tick -- un parpadeo que nunca llega a
+  // mostrarse. Si los listeners responden DESPUÉS del timeout, este efecto
+  // vuelve a correr (actasCargadas/anulacionesCargadas cambiaron), retira el
+  // aviso, y pedirDatos/listosParaDecidir recalculan con los datos reales.
+  useEffect(() => {
+    if (!mostrarForm || (actasCargadas && anulacionesCargadas)) { setTimeoutVencido(false); return undefined; }
+    const id = setTimeout(() => setTimeoutVencido(true), TIMEOUT_LISTENERS_MS);
+    return () => clearTimeout(id);
+  }, [mostrarForm, actasCargadas, anulacionesCargadas]);
 
   // Se dispara al perder foco del campo lote (no en cada tecla) y también si
   // cambia la sede con un lote ya tipeado. Dos pasos:
@@ -80,28 +126,43 @@ export function TabElucion({ catalogo, usuario, esAdmin, onToast }) {
   //     se puede recuperar después.
   useEffect(() => {
     const lote = loteVerificado.trim();
-    if (!lote) { setEsPrimeraVez(false); return; }
+    if (!lote) { setMarcadorExiste(false); return; }
     // Misma normalización compartida (helpers/lote.js) que arma el id
     // determinístico del marcador en actas.js -- si compara el texto tal
     // cual lo tipeó cada quien, "1-11111" y "111111" nunca matchean entre sí.
     const loteNormalizado = normalizarLoteSeisDigitos(lote);
     if (actasTodas.some((a) => a.loteGenerador && normalizarLoteSeisDigitos(a.loteGenerador) === loteNormalizado)) {
-      setEsPrimeraVez(false);
+      setMarcadorExiste(true);
       return;
     }
     let cancelado = false;
     setVerificandoLote(true);
     loteGeneradorYaRegistrado(sedeId, lote)
-      .then((yaRegistrado) => { if (!cancelado) setEsPrimeraVez(!yaRegistrado); })
-      .catch(() => { if (!cancelado) setEsPrimeraVez(true); })
+      .then((yaRegistrado) => { if (!cancelado) setMarcadorExiste(yaRegistrado); })
+      .catch(() => { if (!cancelado) setMarcadorExiste(false); })
       .finally(() => { if (!cancelado) setVerificandoLote(false); });
     return () => { cancelado = true; };
   }, [sedeId, loteVerificado, actasTodas]);
 
   const anulaciones = useMemo(() => new Map(anulacionesRaw.map((a) => [a.anulaId, a])), [anulacionesRaw]);
 
+  // pedirDatos (24/11): reemplaza al viejo esPrimeraVez para decidir si
+  // mostrar/exigir los 4 campos -- ver calcularPedirDatos
+  // (helpers/elucionGenerador.js). cargaReal: mientras los 2 listeners de
+  // arriba no trajeron su primer snapshot, no se puede calcular de verdad
+  // (actasTodas/anulacionesRaw todavía vacíos de arranque darían un falso
+  // "no hay vigente con datos"). listosParaDecidir suma el fallback por
+  // timeout (ver useEffect de arriba): a los 15s sin cargaReal, se deja de
+  // esperar y se decide igual, con los 4 datos obligatorios.
+  const cargaReal = actasCargadas && anulacionesCargadas;
+  const listosParaDecidir = cargaReal || timeoutVencido;
+  const pedirDatos = useMemo(() => {
+    if (!cargaReal) return timeoutVencido; // sin cargaReal: timeoutVencido decide (false = todavía esperando, no se usa; true = pedir por las dudas)
+    return calcularPedirDatos({ marcadorExiste, actas: actasTodas, anulaciones, sedeId, loteGenerador: loteVerificado });
+  }, [cargaReal, timeoutVencido, marcadorExiste, actasTodas, anulaciones, sedeId, loteVerificado]);
+
   function limpiarForm() {
-    setLoteGenerador(""); setLoteVerificado(""); setEsPrimeraVez(false);
+    setLoteGenerador(""); setLoteVerificado(""); setMarcadorExiste(false);
     setActividadCalibrada(""); setFechaCalibracionGen(""); setFechaVencimientoGen(""); setNumeroGenerador("");
     setActividadEluida(""); setVolumen(""); setObs("");
   }
@@ -152,7 +213,8 @@ export function TabElucion({ catalogo, usuario, esAdmin, onToast }) {
   // (no se limpia ni se cierra) para reintentar -- mismo criterio que ya
   // usamos en egreso/transferencia/anulación.
   async function guardar() {
-    if (!loteGenerador.trim() || !actividadEluida || !volumen || (esPrimeraVez && (!actividadCalibrada || !fechaCalibracionGen || !fechaVencimientoGen || !numeroGenerador.trim()))) return;
+    if (!listosParaDecidir) return; // no decidir con los listeners a medio cargar
+    if (!loteGenerador.trim() || !actividadEluida || !volumen || (pedirDatos && (!actividadCalibrada || !fechaCalibracionGen || !fechaVencimientoGen || !numeroGenerador.trim()))) return;
     if (!catalogo.sedes[sedeId]?.eluye) return;
     const datos = {
       sedeId, sedeNombre: catalogo.sedes[sedeId]?.nombre,
@@ -165,13 +227,21 @@ export function TabElucion({ catalogo, usuario, esAdmin, onToast }) {
       volumen: parseFloat(volumen) || 0,
       usuarioNombre: usuario.nombre, usuarioEmail: usuario.email, observacion: obs.trim(),
     };
-    if (esPrimeraVez) {
+    // pedirDatos (si hay que pedir los 4 campos) y !marcadorExiste (si hay
+    // que CREAR el marcador) son preguntas DISTINTAS -- con marcador ya
+    // existente y pedirDatos true (recarga/nueva elución sin vigente con
+    // datos), el acta lleva los 4 campos igual pero el marcador NO se toca
+    // (addActaElucion sólo escribe el marcador si el 2do argumento es
+    // true -- ver firestore.rules:731-751, acepta los 4 campos aunque el
+    // marcador ya exista, y actas.js#addActaElucion, el create de
+    // generadoresVistos sobre un id existente rechazaría TODO el batch).
+    if (pedirDatos) {
       datos.actividadCalibrada = parseFloat(actividadCalibrada) || 0;
       datos.fechaCalibracion = fechaCalibracionGen; datos.fechaVencimiento = fechaVencimientoGen; datos.numeroGenerador = numeroGenerador.trim();
     }
     setGuardando(true);
     try {
-      await addActaElucion(datos, esPrimeraVez);
+      await addActaElucion(datos, !marcadorExiste);
       onToast("Elución registrada");
       limpiarForm();
       setMostrarForm(false);
@@ -194,27 +264,39 @@ export function TabElucion({ catalogo, usuario, esAdmin, onToast }) {
 
   function filaElucion(a) {
     const anulacion = anulaciones.get(a.id);
+    const subfila = textoSubfilaGenerador(a);
     return (
-      <tr key={a.id} className={`border-b border-gray-50 last:border-0 hover:bg-gray-50/30 ${anulacion ? "opacity-50" : ""}`}>
-        <td className="px-3 py-2.5 text-xs text-gray-500 whitespace-nowrap">{fmtTs(a.fecha).split(" ")[1] || ""}</td>
-        <td className="px-3 py-2.5 text-xs text-gray-600">{catalogo.sedes[a.sedeId]?.short || "—"}</td>
-        <td className="px-3 py-2.5 text-xs font-mono text-gray-700">{a.loteGenerador}</td>
-        <td className="px-3 py-2.5 text-xs text-gray-600">{a.actividadCalibrada != null ? `${a.actividadCalibrada} mCi` : "—"}</td>
-        <td className="px-3 py-2.5"><span className="font-bold text-blue-700 text-sm">{a.actividadEluida}</span><span className="text-xs text-gray-400 ml-1">mCi</span></td>
-        <td className="px-3 py-2.5 text-xs text-gray-600">{a.volumen} ml</td>
-        <td className="px-3 py-2.5 text-xs text-gray-500">{a.usuarioNombre}</td>
-        <td className="px-3 py-2.5 text-xs text-gray-400 italic">
-          {a.observacion || "—"}
-          {anulacion && <div className="text-orange-500 font-semibold not-italic mt-0.5">ANULADA: {anulacion.motivo}</div>}
-        </td>
-        <td className="px-3 py-2.5 text-right">
-          {esAdmin && !anulacion && (
-            <button onClick={() => setMAnular(a)} className="text-xs text-orange-500 hover:text-orange-700 font-semibold px-2 py-1 rounded-lg hover:bg-orange-50 transition min-h-11 md:min-h-0">
-              Anular
-            </button>
-          )}
-        </td>
-      </tr>
+      <Fragment key={a.id}>
+        <tr className={`border-b ${subfila ? "" : "border-gray-50"} last:border-0 hover:bg-gray-50/30 ${anulacion ? "opacity-50" : ""}`}>
+          <td className="px-3 py-2.5 text-xs text-gray-500 whitespace-nowrap">{fmtTs(a.fecha).split(" ")[1] || ""}</td>
+          <td className="px-3 py-2.5 text-xs text-gray-600">{catalogo.sedes[a.sedeId]?.short || "—"}</td>
+          <td className="px-3 py-2.5 text-xs font-mono text-gray-700">{a.loteGenerador}</td>
+          <td className="px-3 py-2.5 text-xs text-gray-600">{a.actividadCalibrada != null ? `${a.actividadCalibrada} mCi` : "—"}</td>
+          <td className="px-3 py-2.5"><span className="font-bold text-blue-700 text-sm">{a.actividadEluida}</span><span className="text-xs text-gray-400 ml-1">mCi</span></td>
+          <td className="px-3 py-2.5 text-xs text-gray-600">{a.volumen} ml</td>
+          <td className="px-3 py-2.5 text-xs text-gray-500">{a.usuarioNombre}</td>
+          <td className="px-3 py-2.5 text-xs text-gray-400 italic">
+            {a.observacion || "—"}
+            {anulacion && <div className="text-orange-500 font-semibold not-italic mt-0.5">ANULADA: {anulacion.motivo}</div>}
+          </td>
+          <td className="px-3 py-2.5 text-right">
+            {esAdmin && !anulacion && (
+              <button onClick={() => setMAnular(a)} className="text-xs text-orange-500 hover:text-orange-700 font-semibold px-2 py-1 rounded-lg hover:bg-orange-50 transition min-h-11 md:min-h-0">
+                Anular
+              </button>
+            )}
+          </td>
+        </tr>
+        {/* Subfila (24/11): hereda la opacidad de la fila -- no hace falta
+            repetirla, es un <tr> hijo del mismo <tbody>, el opacity-50 de
+            arriba no se aplica acá (CSS no hereda opacity entre hermanos) --
+            SÍ hace falta repetirlo. */}
+        {subfila && (
+          <tr className={`border-b border-gray-50 last:border-0 ${anulacion ? "opacity-50" : ""}`}>
+            <td colSpan={9} className="px-3 pb-2 -mt-1 text-[11px] text-gray-400">{subfila}</td>
+          </tr>
+        )}
+      </Fragment>
     );
   }
 
@@ -230,6 +312,7 @@ export function TabElucion({ catalogo, usuario, esAdmin, onToast }) {
           {catalogo.sedes[a.sedeId]?.short || "—"} · Eluido: <span className="font-bold text-blue-700">{a.actividadEluida} mCi</span> · Vol: {a.volumen} ml
         </div>
         {a.actividadCalibrada != null && <div className="text-xs text-gray-500">Calibrada: {a.actividadCalibrada} mCi</div>}
+        {textoSubfilaGenerador(a) && <div className="text-[11px] text-gray-400">{textoSubfilaGenerador(a)}</div>}
         <div className="text-xs text-gray-500">Técnico: {a.usuarioNombre}</div>
         {a.observacion && <div className="text-xs text-gray-400 italic">{a.observacion}</div>}
         {anulacion && <div className="text-xs text-orange-500 font-semibold">ANULADA: {anulacion.motivo}</div>}
@@ -247,12 +330,15 @@ export function TabElucion({ catalogo, usuario, esAdmin, onToast }) {
   function filaCSV(a) {
     const d = a.fecha?.toDate ? a.fecha.toDate() : new Date(a.fecha);
     return [d.toLocaleDateString("es-AR"), fmtHora(a.fecha),
-      a.sedeNombre, a.loteGenerador, a.actividadCalibrada ?? "—", a.actividadEluida, a.volumen, a.usuarioNombre, a.observacion || "—"];
+      a.sedeNombre, a.loteGenerador, a.actividadCalibrada ?? "—", a.actividadEluida, a.volumen, a.usuarioNombre, a.observacion || "—",
+      // 3 columnas nuevas al final (24/11) -- vacías (no "—") si no hay,
+      // fechas SIN pasar por new Date (fmtF corta el string, ver arriba).
+      a.fechaCalibracion ? fmtF(a.fechaCalibracion) : "", a.fechaVencimiento ? fmtF(a.fechaVencimiento) : "", a.numeroGenerador || ""];
   }
 
   function descargarCSV(lista, nombreArchivo) {
     const filas = [
-      ["Fecha", "Hora", "Sede", "Lote/Serie generador", "Actividad calibrada (mCi)", "Actividad eluida (mCi)", "Volumen (ml)", "Técnico", "Observación"],
+      ["Fecha", "Hora", "Sede", "Lote/Serie generador", "Actividad calibrada (mCi)", "Actividad eluida (mCi)", "Volumen (ml)", "Técnico", "Observación", "Fecha calibración", "Fecha vencimiento", "N° generador"],
       ...lista.map(filaCSV),
     ];
     const csv = filas.map((r) => r.map((x) => String(x).replace(/[\t\r\n]/g, " ")).join("\t")).join("\r\n");
@@ -401,11 +487,13 @@ export function TabElucion({ catalogo, usuario, esAdmin, onToast }) {
               />
               <p className="text-xs text-gray-400">No hace falta poner el guion, se completa solo al salir del campo.</p>
             </div>
-            {verificandoLote && <div className="sm:col-span-2 text-xs text-gray-400">Verificando lote...</div>}
-            {!verificandoLote && esPrimeraVez && (
+            {!cargaReal && !timeoutVencido && <div className="sm:col-span-2 text-xs text-gray-400">Cargando datos del lote...</div>}
+            {!cargaReal && timeoutVencido && <div className="sm:col-span-2 text-xs text-amber-600">{MSJ_TIMEOUT_LISTENERS}</div>}
+            {listosParaDecidir && verificandoLote && <div className="sm:col-span-2 text-xs text-gray-400">Verificando lote...</div>}
+            {listosParaDecidir && !verificandoLote && pedirDatos && (
               <>
                 <div className="sm:col-span-2 bg-blue-50 border border-blue-100 rounded-xl px-3 py-2 text-xs text-blue-700">
-                  Primera elución registrada de este lote/serie en esta sede — hacen falta estos 4 datos (no se vuelven a pedir en las próximas eluciones del mismo generador).
+                  Este lote/serie no tiene una elución vigente con estos datos en esta sede — hacen falta los 4 (no se vuelven a pedir mientras siga vigente una elución que ya los tenga).
                 </div>
                 <Input label="Actividad de Mo-99 calibrada (mCi)" type="number" min={0} step={0.1} value={actividadCalibrada} onChange={(e) => setActividadCalibrada(e.target.value)} placeholder="1850" />
                 <Input label="Fecha de calibración" type="date" value={fechaCalibracionGen} onChange={(e) => setFechaCalibracionGen(e.target.value)} />
@@ -423,7 +511,7 @@ export function TabElucion({ catalogo, usuario, esAdmin, onToast }) {
           </div>
           <div className="flex gap-2 justify-end mt-4">
             <Btn variant="outline" onClick={() => { setMostrarForm(false); limpiarForm(); }} disabled={guardando}>Cancelar</Btn>
-            <Btn onClick={guardar} disabled={!sedeEluye || !loteGenerador.trim() || !actividadEluida || !volumen || (esPrimeraVez && (!actividadCalibrada || !fechaCalibracionGen || !fechaVencimientoGen || !numeroGenerador.trim())) || verificandoLote || guardando}>
+            <Btn onClick={guardar} disabled={!listosParaDecidir || !sedeEluye || !loteGenerador.trim() || !actividadEluida || !volumen || (pedirDatos && (!actividadCalibrada || !fechaCalibracionGen || !fechaVencimientoGen || !numeroGenerador.trim())) || verificandoLote || guardando}>
               {guardando ? "Guardando..." : "Guardar elución"}
             </Btn>
           </div>

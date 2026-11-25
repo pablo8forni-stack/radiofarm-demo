@@ -10,7 +10,7 @@ import {
   PERSONAS, SEDE_A, SEDE_B, FARM_ID, db, loguearComo, prepararFixturesGlobales, loteDePrueba, fichaDePrueba, cerrarConexiones,
   crearLoteDirecto, borrarLote,
 } from "./fixtures.mjs";
-import { addActaI131Vial, addActaI131Extraccion, anularActaTransaction, resolverFichaIntento, addActaPaciente, addActaI131Captacion, datosFichaUsada } from "../../src/services/firestore/actas.js";
+import { addActaI131Vial, addActaI131Extraccion, anularActaTransaction, resolverFichaIntento, addActaPaciente, addActaI131Captacion, datosFichaUsada, addActaElucion } from "../../src/services/firestore/actas.js";
 import { administrarLutecioTransaction, administrarMibgTransaction } from "../../src/services/firestore/mibgLotes.js";
 import { setSedeAuditando, setRol } from "../../src/services/auth.js";
 import { LIMITE_FICHAS_USADAS } from "../../src/services/firestore/fichasDescartadas.js";
@@ -1053,6 +1053,55 @@ test("control positivo: elución de un lote nuevo CON los 4 datos (actividad, fe
   assert.equal(snap.data().fechaCalibracion, "2026-10-01");
   assert.equal(snap.data().fechaVencimiento, "2026-10-08");
   assert.equal(snap.data().numeroGenerador, "240017992");
+});
+
+// Fase elución 24/11 -- hallazgo de la investigación: la regla acepta un
+// acta con los 4 campos AUNQUE el marcador ya exista (el || de
+// actaValida() ya está satisfecho por loteGeneradorVisto, nunca prohíbe el
+// lado derecho). No había ningún test de esto -- sólo existían los de "lote
+// ya visto SIN los campos".
+test("control positivo: elución de un lote YA visto QUE IGUAL trae los 4 datos -- se acepta igual", async () => {
+  await loguearComo(PERSONAS.admin);
+  const lote = `GEN-${loteDePrueba()}`;
+  await setDoc(doc(db, "generadoresVistos", `${SEDE_A}_${lote.toUpperCase()}`), {
+    sedeId: SEDE_A, loteGenerador: lote, usuarioEmail: PERSONAS.admin.email, ...DATOS_GENERADOR_PRIMERA_VEZ,
+  });
+
+  await loguearComo(PERSONAS.tecnicoA);
+  const ref = await addDoc(collection(db, "actas"), elucionBase({ loteGenerador: lote, ...DATOS_GENERADOR_PRIMERA_VEZ }));
+  const snap = await getDoc(ref);
+  assert.equal(snap.data().actividadCalibrada, 1850);
+  assert.equal(snap.data().fechaCalibracion, "2026-10-01");
+  assert.equal(snap.data().numeroGenerador, "240017992");
+});
+
+// Servicio (no sólo la regla cruda): addActaElucion con esPrimeraVez=false
+// y los 4 campos en `data` -- el batch sólo debe tocar el acta, el
+// marcador tiene que quedar BIT A BIT igual (create-only, un 2do create
+// sobre el mismo id rechazaría TODO el batch si esto estuviera mal).
+test("servicio addActaElucion(datos+4campos, false) con marcador YA existente -- guarda el acta, NO modifica el marcador", async () => {
+  await loguearComo(PERSONAS.admin);
+  const lote = `GEN-${loteDePrueba()}`;
+  const markerRef = doc(db, "generadoresVistos", `${SEDE_A}_${lote.toUpperCase()}`);
+  await setDoc(markerRef, {
+    sedeId: SEDE_A, loteGenerador: lote, usuarioEmail: PERSONAS.admin.email, ...DATOS_GENERADOR_PRIMERA_VEZ,
+  });
+  const markerAntes = (await getDoc(markerRef)).data();
+
+  await loguearComo(PERSONAS.tecnicoA);
+  await addActaElucion({
+    sedeId: SEDE_A, sedeNombre: "FUESMEN Central", loteGenerador: lote,
+    actividadEluida: 740, volumen: 10, usuarioNombre: PERSONAS.tecnicoA.nombre, usuarioEmail: PERSONAS.tecnicoA.email, observacion: "recarga de prueba 24/11",
+    actividadCalibrada: 1850, fechaCalibracion: "2026-11-01", fechaVencimiento: "2026-11-08", numeroGenerador: "240017992",
+  }, false);
+
+  const markerDespues = (await getDoc(markerRef)).data();
+  assert.deepEqual(markerDespues, markerAntes, "el marcador no debería haber cambiado");
+
+  const snap = await getDocs(query(collection(db, "actas"), where("tipo", "==", "elucion"), where("sedeId", "==", SEDE_A), where("observacion", "==", "recarga de prueba 24/11")));
+  assert.equal(snap.docs.length, 1);
+  assert.equal(snap.docs[0].data().actividadCalibrada, 1850);
+  assert.equal(snap.docs[0].data().numeroGenerador, "240017992");
 });
 
 // Auditoría de seguridad, hallazgo #6a: el toggle "Elución habilitada" de
