@@ -48,6 +48,18 @@ export function calcularPedirDatos({ marcadorExiste, actas, anulaciones, sedeId,
   return !loteTieneVigenteConDatos(actas, anulaciones, sedeId, loteGenerador);
 }
 
+// Validación de fechas del generador (25/11, Pablo) -- la de vencimiento no
+// puede ser anterior a la de calibración (la misma fecha vale). La de
+// calibración no se limita (puede ser posterior al día de carga). Comparación
+// de los strings "AAAA-MM-DD" tal cual (orden lexicográfico == orden
+// cronológico en ese formato) -- nunca `new Date`, mismo motivo que fmtF.
+// Si alguna de las dos todavía está vacía, no corresponde opinar acá -- esa
+// falta la cubre la validación de campos obligatorios, no ésta.
+export function vencimientoGeneradorValido(fechaCalibracion, fechaVencimiento) {
+  if (!fechaCalibracion || !fechaVencimiento) return true;
+  return fechaVencimiento >= fechaCalibracion;
+}
+
 // Texto de la subfila -- Parte 2, punto 8/9. null si el acta no tiene
 // NINGUNO de los 3 campos nuevos (lotes viejos con sólo actividadCalibrada
 // no llevan subfila -- ese dato ya está en la columna "Act. calibrada").

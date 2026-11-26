@@ -1,5 +1,5 @@
 import { describe, test, expect } from "vitest";
-import { calcularPedirDatos, loteTieneVigenteConDatos, textoSubfilaGenerador } from "./elucionGenerador.js";
+import { calcularPedirDatos, loteTieneVigenteConDatos, textoSubfilaGenerador, vencimientoGeneradorValido } from "./elucionGenerador.js";
 
 const SEDE_A = "central";
 
@@ -57,6 +57,33 @@ describe("loteTieneVigenteConDatos()", () => {
   test("elución del lote sin actividadCalibrada (nunca tuvo datos) -- false", () => {
     const actas = [acta({ actividadCalibrada: null })];
     expect(loteTieneVigenteConDatos(actas, anulaciones(), SEDE_A, "1-11111")).toBe(false);
+  });
+});
+
+describe("vencimientoGeneradorValido() -- Fase elución (25/11)", () => {
+  test("vencimiento anterior a calibración -- inválido", () => {
+    expect(vencimientoGeneradorValido("2026-11-08", "2026-11-01")).toBe(false);
+  });
+
+  test("vencimiento igual a calibración -- válido", () => {
+    expect(vencimientoGeneradorValido("2026-11-01", "2026-11-01")).toBe(true);
+  });
+
+  test("vencimiento posterior a calibración -- válido", () => {
+    expect(vencimientoGeneradorValido("2026-11-01", "2026-11-08")).toBe(true);
+  });
+
+  test("calibración vacía -- no valida esta regla (true)", () => {
+    expect(vencimientoGeneradorValido("", "2026-11-08")).toBe(true);
+  });
+
+  test("vencimiento vacío -- no valida esta regla (true)", () => {
+    expect(vencimientoGeneradorValido("2026-11-01", "")).toBe(true);
+  });
+
+  test("sin corrimiento: cruce de fin de mes comparado como string, no como Date", () => {
+    expect(vencimientoGeneradorValido("2026-10-31", "2026-11-01")).toBe(true); // posterior, válido
+    expect(vencimientoGeneradorValido("2026-11-01", "2026-10-31")).toBe(false); // anterior, inválido
   });
 });
 

@@ -8,7 +8,7 @@ import { descargarArchivo } from "../../helpers/descargarArchivo.js";
 import { nombreArchivoLibro } from "../../helpers/nombreArchivoLibro.js";
 import { normalizarLoteSeisDigitos } from "../../helpers/lote.js";
 import { listenActas, addActaElucion, actasPorRango, anularActaTransaction, listenAnulacionesActas, loteGeneradorYaRegistrado } from "../../services/firestore/actas.js";
-import { calcularPedirDatos, textoSubfilaGenerador } from "../../helpers/elucionGenerador.js";
+import { calcularPedirDatos, textoSubfilaGenerador, vencimientoGeneradorValido } from "../../helpers/elucionGenerador.js";
 
 const TIMEOUT_BUSQUEDA_MS = 20000;
 const MSJ_TIMEOUT_BUSQUEDA = "La consulta tardó demasiado, puede haber un problema de conexión -- intentá cerrar las otras pestañas de RadioFarm que tengas abiertas y reintentá.";
@@ -161,6 +161,14 @@ export function TabElucion({ catalogo, usuario, esAdmin, onToast }) {
     return calcularPedirDatos({ marcadorExiste, actas: actasTodas, anulaciones, sedeId, loteGenerador: loteVerificado });
   }, [cargaReal, timeoutVencido, marcadorExiste, actasTodas, anulaciones, sedeId, loteVerificado]);
 
+  // Validación de fechas (25/11, Pablo) -- sólo corre cuando se piden los 4
+  // datos (pedirDatos); si no, ni se muestran los campos de fecha del
+  // generador, así que no hay nada para validar. Mientras alguna de las 2
+  // fechas está vacía, vencimientoGeneradorValido devuelve true (no opina) --
+  // la falta de dato la exige la validación de campos obligatorios de abajo,
+  // no ésta.
+  const fechasGeneradorValidas = !pedirDatos || vencimientoGeneradorValido(fechaCalibracionGen, fechaVencimientoGen);
+
   function limpiarForm() {
     setLoteGenerador(""); setLoteVerificado(""); setMarcadorExiste(false);
     setActividadCalibrada(""); setFechaCalibracionGen(""); setFechaVencimientoGen(""); setNumeroGenerador("");
@@ -214,7 +222,7 @@ export function TabElucion({ catalogo, usuario, esAdmin, onToast }) {
   // usamos en egreso/transferencia/anulación.
   async function guardar() {
     if (!listosParaDecidir) return; // no decidir con los listeners a medio cargar
-    if (!loteGenerador.trim() || !actividadEluida || !volumen || (pedirDatos && (!actividadCalibrada || !fechaCalibracionGen || !fechaVencimientoGen || !numeroGenerador.trim()))) return;
+    if (!loteGenerador.trim() || !actividadEluida || !volumen || (pedirDatos && (!actividadCalibrada || !fechaCalibracionGen || !fechaVencimientoGen || !numeroGenerador.trim())) || !fechasGeneradorValidas) return;
     if (!catalogo.sedes[sedeId]?.eluye) return;
     const datos = {
       sedeId, sedeNombre: catalogo.sedes[sedeId]?.nombre,
@@ -498,6 +506,9 @@ export function TabElucion({ catalogo, usuario, esAdmin, onToast }) {
                 <Input label="Actividad de Mo-99 calibrada (mCi)" type="number" min={0} step={0.1} value={actividadCalibrada} onChange={(e) => setActividadCalibrada(e.target.value)} placeholder="1850" />
                 <Input label="Fecha de calibración" type="date" value={fechaCalibracionGen} onChange={(e) => setFechaCalibracionGen(e.target.value)} />
                 <Input label="Fecha de vencimiento" type="date" value={fechaVencimientoGen} onChange={(e) => setFechaVencimientoGen(e.target.value)} />
+                {fechaCalibracionGen && fechaVencimientoGen && !fechasGeneradorValidas && (
+                  <div className="sm:col-span-2 text-xs text-red-600">La fecha de vencimiento no puede ser anterior a la de calibración.</div>
+                )}
                 {/* Dato DISTINTO de "Lote/serie del generador" de arriba --
                     la etiqueta física trae los dos números por separado
                     (confirmado con Pablo). Nunca se usa como clave de
@@ -511,7 +522,7 @@ export function TabElucion({ catalogo, usuario, esAdmin, onToast }) {
           </div>
           <div className="flex gap-2 justify-end mt-4">
             <Btn variant="outline" onClick={() => { setMostrarForm(false); limpiarForm(); }} disabled={guardando}>Cancelar</Btn>
-            <Btn onClick={guardar} disabled={!listosParaDecidir || !sedeEluye || !loteGenerador.trim() || !actividadEluida || !volumen || (pedirDatos && (!actividadCalibrada || !fechaCalibracionGen || !fechaVencimientoGen || !numeroGenerador.trim())) || verificandoLote || guardando}>
+            <Btn onClick={guardar} disabled={!listosParaDecidir || !sedeEluye || !loteGenerador.trim() || !actividadEluida || !volumen || (pedirDatos && (!actividadCalibrada || !fechaCalibracionGen || !fechaVencimientoGen || !numeroGenerador.trim())) || !fechasGeneradorValidas || verificandoLote || guardando}>
               {guardando ? "Guardando..." : "Guardar elución"}
             </Btn>
           </div>

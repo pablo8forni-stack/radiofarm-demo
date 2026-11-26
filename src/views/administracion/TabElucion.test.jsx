@@ -101,6 +101,43 @@ describe("TabElucion -- pedirDatos (24/11)", () => {
   });
 });
 
+describe("TabElucion -- validación de fechas del generador (25/11)", () => {
+  async function tiparDatosGenerador({ fechaCalibracion, fechaVencimiento }) {
+    fireEvent.change(labelInput(LABEL_MO99), { target: { value: "1850" } });
+    fireEvent.change(labelInput("Fecha de calibración"), { target: { value: fechaCalibracion } });
+    fireEvent.change(labelInput("Fecha de vencimiento"), { target: { value: fechaVencimiento } });
+    fireEvent.change(labelInput("Número de generador"), { target: { value: "240017992" } });
+    fireEvent.change(labelInput("Actividad de Tc-99m eluida (mCi)"), { target: { value: "740" } });
+    fireEvent.change(labelInput("Volumen (ml)"), { target: { value: "10" } });
+  }
+
+  test("vencimiento anterior a calibración -- mensaje bajo el campo y Guardar deshabilitado", async () => {
+    const user = userEvent.setup();
+    MARCADOR_EXISTE = false;
+    render(<TabElucion catalogo={CATALOGO} usuario={USUARIO} esAdmin={false} onToast={vi.fn()} />);
+    await abrirFormYTiparLote(user);
+    await screen.findByText(LABEL_MO99, { selector: "label" });
+
+    await tiparDatosGenerador({ fechaCalibracion: "2026-11-08", fechaVencimiento: "2026-11-01" });
+
+    expect(screen.getByText("La fecha de vencimiento no puede ser anterior a la de calibración.")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Guardar elución" }).disabled).toBe(true);
+  });
+
+  test("vencimiento igual o posterior a calibración -- sin mensaje, Guardar habilitado", async () => {
+    const user = userEvent.setup();
+    MARCADOR_EXISTE = false;
+    render(<TabElucion catalogo={CATALOGO} usuario={USUARIO} esAdmin={false} onToast={vi.fn()} />);
+    await abrirFormYTiparLote(user);
+    await screen.findByText(LABEL_MO99, { selector: "label" });
+
+    await tiparDatosGenerador({ fechaCalibracion: "2026-11-01", fechaVencimiento: "2026-11-08" });
+
+    expect(screen.queryByText("La fecha de vencimiento no puede ser anterior a la de calibración.")).toBeNull();
+    expect(screen.getByRole("button", { name: "Guardar elución" }).disabled).toBe(false);
+  });
+});
+
 describe("TabElucion -- subfila del generador (24/11)", () => {
   // jsdom no evalúa media queries -- la tabla desktop (hidden md:block) y
   // la tarjeta mobile (md:hidden) están las DOS en el DOM a la vez acá, así
