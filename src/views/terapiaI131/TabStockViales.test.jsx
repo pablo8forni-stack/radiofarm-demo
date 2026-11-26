@@ -4,7 +4,7 @@
 // decaimientoI131.test.js -- acá sólo se prueba que el componente la usa
 // bien (qué se ve, qué queda plegado, qué sigue accesible).
 import { describe, test, expect, vi, afterEach } from "vitest";
-import { render, screen, cleanup } from "@testing-library/react";
+import { render, screen, cleanup, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { TabStockViales } from "./TabStockViales.jsx";
 
@@ -99,6 +99,78 @@ describe("TabStockViales -- Combinar viales nunca ofrece un vial decaído", () =
 
     const opciones = screen.getAllByRole("option").map((o) => o.textContent);
     expect(opciones).not.toContain("I131-DECAIDO-B");
+  });
+});
+
+// Input.jsx no asocia <label> e <input> por htmlFor/id -- mismo hallazgo ya
+// documentado en otros *.test.jsx de este repo (ej. TabElucion.test.jsx).
+function labelInput(label) {
+  return screen.getByText(label, { selector: "label" }).nextElementSibling;
+}
+
+describe("TabStockViales -- dilución del vial nuevo (25/11)", () => {
+  async function abrirFormVial(user) {
+    await user.click(await screen.findByRole("button", { name: "+ Nuevo vial" }));
+  }
+
+  test("alícuota vacía o 0 -- Guardar deshabilitado (obligatoria, > 0)", async () => {
+    const user = userEvent.setup();
+    render(<TabStockViales catalogo={catalogo} usuario={usuario} esAdmin={false} onToast={vi.fn()} />);
+    await abrirFormVial(user);
+    await user.type(labelInput("Lote (como viene del proveedor)"), "22/24");
+    await user.type(labelInput("Fecha y hora de calibración"), "2026-11-25T10:00");
+    await user.type(labelInput("Actividad calibrada (mCi)"), "10");
+    await user.type(labelInput("Volumen de agua a diluir (mL)"), "100");
+
+    expect(screen.getByRole("button", { name: "Guardar vial" }).disabled).toBe(true); // falta alícuota
+
+    await user.type(labelInput("Volumen extraído del vial original (mL)"), "0");
+    expect(screen.getByRole("button", { name: "Guardar vial" }).disabled).toBe(true); // 0 no es válido PARA LA ALÍCUOTA (debe ser > 0)
+  });
+
+  test("diluyente vacío -- Guardar deshabilitado; diluyente en 0 -- válido, Guardar habilitado", async () => {
+    const user = userEvent.setup();
+    render(<TabStockViales catalogo={catalogo} usuario={usuario} esAdmin={false} onToast={vi.fn()} />);
+    await abrirFormVial(user);
+    await user.type(labelInput("Lote (como viene del proveedor)"), "22/24");
+    await user.type(labelInput("Fecha y hora de calibración"), "2026-11-25T10:00");
+    await user.type(labelInput("Actividad calibrada (mCi)"), "10");
+    await user.type(labelInput("Volumen extraído del vial original (mL)"), "0.61");
+
+    expect(screen.getByRole("button", { name: "Guardar vial" }).disabled).toBe(true); // diluyente vacío -- inválido, NO default
+
+    await user.type(labelInput("Volumen de agua a diluir (mL)"), "0");
+    expect(screen.getByRole("button", { name: "Guardar vial" }).disabled).toBe(false); // 0 ES válido para el diluyente
+  });
+
+  test("volumen total mostrado sin artefactos de punto flotante (0.61 + 100 -> 100.61, no 100.61000000000001)", async () => {
+    const user = userEvent.setup();
+    render(<TabStockViales catalogo={catalogo} usuario={usuario} esAdmin={false} onToast={vi.fn()} />);
+    await abrirFormVial(user);
+    await user.type(labelInput("Volumen extraído del vial original (mL)"), "0.61");
+    await user.type(labelInput("Volumen de agua a diluir (mL)"), "100");
+
+    expect(await screen.findByText("Volumen total:")).toBeTruthy();
+    expect(screen.getByText("100.61 mL")).toBeTruthy();
+  });
+
+  test("al guardar, el payload lleva volumenInicial = total, más volumenAlicuota y volumenDiluyente por separado", async () => {
+    const user = userEvent.setup();
+    const mod = await import("../../services/firestore/actas.js");
+    render(<TabStockViales catalogo={catalogo} usuario={usuario} esAdmin={false} onToast={vi.fn()} />);
+    await abrirFormVial(user);
+    await user.type(labelInput("Lote (como viene del proveedor)"), "22/24");
+    await user.type(labelInput("Fecha y hora de calibración"), "2026-11-25T10:00");
+    await user.type(labelInput("Actividad calibrada (mCi)"), "10");
+    await user.type(labelInput("Volumen extraído del vial original (mL)"), "0.61");
+    await user.type(labelInput("Volumen de agua a diluir (mL)"), "100");
+    await user.click(screen.getByRole("button", { name: "Guardar vial" }));
+
+    await waitFor(() => expect(mod.addActaI131Vial).toHaveBeenCalled());
+    const payload = mod.addActaI131Vial.mock.calls[0][0];
+    expect(payload.volumenInicial).toBe(100.61);
+    expect(payload.volumenAlicuota).toBe(0.61);
+    expect(payload.volumenDiluyente).toBe(100);
   });
 });
 

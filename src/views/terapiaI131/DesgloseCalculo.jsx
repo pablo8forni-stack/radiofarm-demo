@@ -14,19 +14,24 @@ function Fila({ label, valor }) {
 // nunca solo el resultado final sin poder ver de dónde sale. Un solo
 // componente para las 3 pantallas que lo necesitan (detalle de vial, vista
 // previa de extracción, historial de extracciones ya guardadas).
-export function DesgloseCalculo({ titulo = "Cálculo por decaimiento", actividadCalibrada, volumenInicial, fechaCalibracion, dias, filasExtra = [], resultado, unidadResultado }) {
+// volumenInicialDetalle/resultadoTexto (25/11, Pablo -- dilución y µCi en
+// extracciones): overrides opcionales para esas 2 filas, sin tocar el resto
+// del componente ni a quien lo llama sin pasarlos (vial.volumenInicial
+// SIGUE siendo el total de siempre, resultado/unidadResultado SIGUEN
+// pudiendo ser mCi -- ver DesgloseCalculo#vial-level en VialDetalle.jsx).
+export function DesgloseCalculo({ titulo = "Cálculo por decaimiento", actividadCalibrada, volumenInicial, volumenInicialDetalle, fechaCalibracion, dias, filasExtra = [], resultado, unidadResultado, resultadoTexto }) {
   return (
     <div className="bg-gray-50 border border-gray-200 rounded-xl p-3 text-xs text-gray-600 flex flex-col gap-1">
       <div className="font-semibold text-gray-700 mb-0.5">{titulo}</div>
       <Fila label="Actividad calibrada" valor={`${actividadCalibrada} mCi`} />
-      <Fila label="Volumen inicial" valor={`${volumenInicial} mL`} />
+      <Fila label="Volumen inicial" valor={`${volumenInicial} mL${volumenInicialDetalle ? ` (${volumenInicialDetalle})` : ""}`} />
       <Fila label="Fecha de calibración" valor={fmtTs(fechaCalibracion)} />
       <Fila label="Días transcurridos" valor={dias.toFixed(2)} />
       {filasExtra.map((f, i) => <Fila key={i} label={f.label} valor={f.valor} />)}
       <div className="text-gray-400 italic mt-1">Fórmula: A(t) = A₀ × e^(−λt), λ = ln(2) / 8,02 días (vida media del I-131)</div>
       <div className="mt-1 pt-1.5 border-t border-gray-200 flex items-baseline justify-between">
         <span className="font-semibold text-gray-700">Resultado</span>
-        <span className="font-bold text-blue-700 text-sm">{resultado.toFixed(2)} {unidadResultado}</span>
+        <span className="font-bold text-blue-700 text-sm">{resultadoTexto ?? `${resultado.toFixed(2)} ${unidadResultado}`}</span>
       </div>
     </div>
   );

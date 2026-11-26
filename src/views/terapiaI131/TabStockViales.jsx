@@ -15,8 +15,15 @@ import { useAhoraAlVolverVisible } from "../../hooks/useAhoraAlVolverVisible.js"
 import { AvisoGuiaNoOficial } from "./DesgloseCalculo.jsx";
 import { VialDetalle } from "./VialDetalle.jsx";
 import { CATEGORIA_VIAL_LABEL, categoriaVial } from "../../constants/tipoI131.js";
+import { mCiATextoMicroCi, volumenTotalDilucion } from "../../helpers/unidadesI131.js";
 
-const VACIO_VIAL = { lote: "", categoria: "terapeutico", fechaCalibracion: "", actividadCalibrada: "", volumenInicial: "", fechaVencimiento: "", obs: "" };
+// volumenAlicuota/volumenDiluyente (25/11, Pablo): reemplazan al viejo campo
+// único "Volumen inicial" en el FORMULARIO -- volumenInicial sigue
+// existiendo igual que siempre en el payload (ver guardarVial), calculado
+// como la suma de estos dos. Preparación real: se toma una alícuota del
+// vial original (p. ej. 0,61 mL con 10 mCi) y se diluye en agua (p. ej. 100
+// mL) -- toda la actividad pasa a la dilución, nada se pierde.
+const VACIO_VIAL = { lote: "", categoria: "terapeutico", fechaCalibracion: "", actividadCalibrada: "", volumenAlicuota: "", volumenDiluyente: "", fechaVencimiento: "", obs: "" };
 
 // Una fila por vial, compartida entre vigentes y el grupo plegado "Ver
 // anteriores" (9/11) -- sólo cambia el prop `decaido` (badge "Decaído" +
@@ -204,8 +211,18 @@ export function TabStockViales({ catalogo, usuario, esAdmin, onToast }) {
     setMostrarFormVial(true);
   }
 
+  // Validación de la dilución (25/11, Pablo): alícuota obligatoria y > 0;
+  // diluyente obligatorio, 0 ES válido -- por eso el chequeo de "falta"
+  // compara contra "" (string vacío), nunca contra el valor parseado (0 es
+  // falsy en JS, pero acá es un dato real, no una ausencia).
+  const volumenAlicuotaOk = parseFloat(formVial.volumenAlicuota) > 0;
+  const volumenDiluyenteOk = formVial.volumenDiluyente !== "" && parseFloat(formVial.volumenDiluyente) >= 0;
+  const volumenTotalVial = volumenAlicuotaOk && volumenDiluyenteOk
+    ? volumenTotalDilucion(parseFloat(formVial.volumenAlicuota), parseFloat(formVial.volumenDiluyente))
+    : null;
+
   async function guardarVial() {
-    if (!formVial.lote.trim() || !formVial.fechaCalibracion || !formVial.actividadCalibrada || !formVial.volumenInicial) return;
+    if (!formVial.lote.trim() || !formVial.fechaCalibracion || !formVial.actividadCalibrada || !volumenAlicuotaOk || !volumenDiluyenteOk) return;
     setGuardandoVial(true);
     try {
       await addActaI131Vial({
@@ -213,7 +230,16 @@ export function TabStockViales({ catalogo, usuario, esAdmin, onToast }) {
         lote: formVial.lote.trim(), categoria: formVial.categoria,
         fechaCalibracion: new Date(formVial.fechaCalibracion),
         actividadCalibrada: parseFloat(formVial.actividadCalibrada) || 0,
-        volumenInicial: parseFloat(formVial.volumenInicial) || 0,
+        // volumenInicial sigue siendo el TOTAL, como siempre (no se toca
+        // decaimientoI131.js ni se reinterpreta nada para los 13 viales ya
+        // cargados) -- volumenAlicuota/volumenDiluyente se agregan aparte,
+        // sólo para poder reconstruir el detalle de la dilución en pantalla
+        // (ver VialDetalle.jsx). La regla de i131_vial (firestore.rules)
+        // exige los campos de siempre nada más -- no usa hasOnly(), así que
+        // acepta estos 2 campos extra sin tocar nada ahí.
+        volumenInicial: volumenTotalVial,
+        volumenAlicuota: parseFloat(formVial.volumenAlicuota),
+        volumenDiluyente: parseFloat(formVial.volumenDiluyente),
         fechaVencimiento: formVial.fechaVencimiento || null,
         usuarioNombre: usuario.nombre, usuarioEmail: usuario.email, observacion: formVial.obs.trim(),
       });
@@ -264,7 +290,7 @@ export function TabStockViales({ catalogo, usuario, esAdmin, onToast }) {
         {mAnular && (
           <ModalAnularActa
             acta={mAnular}
-            resumen={mAnular.tipo === "i131_vial" ? `Vial ${mAnular.lote}` : `Extracción — ${mAnular.actividadCalculada?.toFixed(1)} mCi calc.`}
+            resumen={mAnular.tipo === "i131_vial" ? `Vial ${mAnular.lote}` : `Extracción — ${mAnular.actividadCalculada != null ? mCiATextoMicroCi(mAnular.actividadCalculada) : "—"} calc.`}
             onConfirm={confirmarAnulacion}
             onClose={() => setMAnular(null)}
           />
@@ -319,13 +345,22 @@ export function TabStockViales({ catalogo, usuario, esAdmin, onToast }) {
             </Sel>
             <Input label="Fecha y hora de calibración" type="datetime-local" value={formVial.fechaCalibracion} onChange={(e) => setFormVial((f) => ({ ...f, fechaCalibracion: e.target.value }))} />
             <Input label="Actividad calibrada (mCi)" type="number" min={0} step={0.1} value={formVial.actividadCalibrada} onChange={(e) => setFormVial((f) => ({ ...f, actividadCalibrada: e.target.value }))} placeholder="1000" />
-            <Input label="Volumen inicial (mL)" type="number" min={0} step={0.1} value={formVial.volumenInicial} onChange={(e) => setFormVial((f) => ({ ...f, volumenInicial: e.target.value }))} placeholder="10" />
+            {/* Dilución (25/11, Pablo): se toma una alícuota del vial
+                original y se diluye en agua -- toda la actividad pasa a la
+                dilución. volumenInicial (lo que usa el cálculo de
+                decaimiento) sigue siendo la SUMA de estos dos, nunca se
+                precarga ningún default. */}
+            <Input label="Volumen extraído del vial original (mL)" type="number" min={0} step={0.01} value={formVial.volumenAlicuota} onChange={(e) => setFormVial((f) => ({ ...f, volumenAlicuota: e.target.value }))} placeholder="0.61" />
+            <Input label="Volumen de agua a diluir (mL)" type="number" min={0} step={0.1} value={formVial.volumenDiluyente} onChange={(e) => setFormVial((f) => ({ ...f, volumenDiluyente: e.target.value }))} placeholder="100" />
+            {volumenTotalVial != null && (
+              <div className="sm:col-span-2 text-xs text-gray-500">Volumen total: <span className="font-semibold text-gray-700">{volumenTotalVial} mL</span></div>
+            )}
             <Input label="Fecha de vencimiento (opcional)" type="date" value={formVial.fechaVencimiento} onChange={(e) => setFormVial((f) => ({ ...f, fechaVencimiento: e.target.value }))} />
             <Input label="Observación (opcional)" value={formVial.obs} onChange={(e) => setFormVial((f) => ({ ...f, obs: e.target.value }))} placeholder="Ej: remito N°..." />
           </div>
           <div className="flex gap-2 justify-end mt-4">
             <Btn variant="outline" onClick={() => setMostrarFormVial(false)} disabled={guardandoVial}>Cancelar</Btn>
-            <Btn onClick={guardarVial} disabled={guardandoVial || !formVial.lote.trim() || !formVial.fechaCalibracion || !formVial.actividadCalibrada || !formVial.volumenInicial}>
+            <Btn onClick={guardarVial} disabled={guardandoVial || !formVial.lote.trim() || !formVial.fechaCalibracion || !formVial.actividadCalibrada || !volumenAlicuotaOk || !volumenDiluyenteOk}>
               {guardandoVial ? "Guardando..." : "Guardar vial"}
             </Btn>
           </div>
@@ -385,7 +420,7 @@ export function TabStockViales({ catalogo, usuario, esAdmin, onToast }) {
       {mAnular && (
         <ModalAnularActa
           acta={mAnular}
-          resumen={mAnular.tipo === "i131_vial" ? `Vial ${mAnular.lote}` : `Extracción — ${mAnular.actividadCalculada?.toFixed(1)} mCi calc.`}
+          resumen={mAnular.tipo === "i131_vial" ? `Vial ${mAnular.lote}` : `Extracción — ${mAnular.actividadCalculada != null ? mCiATextoMicroCi(mAnular.actividadCalculada) : "—"} calc.`}
           onConfirm={confirmarAnulacion}
           onClose={() => setMAnular(null)}
         />

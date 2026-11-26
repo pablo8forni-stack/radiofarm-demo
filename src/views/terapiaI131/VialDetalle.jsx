@@ -9,8 +9,19 @@ import { diasTranscurridos, actividadRestante, volumenExtraidoDe, calcularDesglo
 import { DesgloseCalculo, AvisoGuiaNoOficial } from "./DesgloseCalculo.jsx";
 import { CurvaDecaimiento } from "./CurvaDecaimiento.jsx";
 import { CATEGORIA_VIAL_LABEL, categoriaVial, TIPO_LABEL_I131 } from "../../constants/tipoI131.js";
+import { mCiATextoMicroCi, microCiAMCi, pareceErrorDeUnidad } from "../../helpers/unidadesI131.js";
 
 const LINEA_VACIA = () => ({ vialId: "", ml: "" });
+
+// Detalle de la dilución (25/11, Pablo) -- SOLO si el vial tiene los 2
+// campos nuevos (volumenAlicuota/volumenDiluyente); los viales viejos (los
+// 13 ya cargados, y cualquiera sembrado directo sin estos campos) no tienen
+// nada que mostrar acá, se ven igual que siempre. Nunca recalcula el total
+// -- vial.volumenInicial ya es la suma guardada (ver TabStockViales#guardarVial).
+function detalleDilucion(v) {
+  if (v.volumenAlicuota == null || v.volumenDiluyente == null) return null;
+  return `${v.volumenAlicuota} + ${v.volumenDiluyente} de dilución`;
+}
 
 // Detalle de un vial: desglose transparente del cálculo, curva de
 // decaimiento sin tope fijo, y el formulario de extracción -- que soporta
@@ -32,7 +43,13 @@ const LINEA_VACIA = () => ({ vialId: "", ml: "" });
 export function VialDetalle({ vial, estaDecaido, anulacionVial, todosLosViales, extracciones, extraccionesVinculadas, anulaciones, catalogo, usuario, esAdmin, onToast, onVolver, onAnular }) {
   const [mostrarForm, setMostrarForm] = useState(false);
   const [lineas, setLineas] = useState([{ vialId: vial.id, ml: "" }]);
+  // Selector de unidad (25/11, Pablo): el activímetro cambia de unidad según
+  // la dosis -- µCi por defecto (lo más común en estas extracciones chicas),
+  // mCi como alternativa. El campo guardado (actividadMedida) SIGUE siendo
+  // mCi siempre -- acá sólo se guarda lo que la técnica tipeó + en qué
+  // unidad, para poder convertir antes de guardar (ver actividadMedidaEnMCi).
   const [actividadMedida, setActividadMedida] = useState("");
+  const [unidadActividadMedida, setUnidadActividadMedida] = useState("uci");
   const [pacienteFicha, setPacienteFicha] = useState("");
   const [obs, setObs] = useState("");
   const [guardando, setGuardando] = useState(false);
@@ -83,8 +100,15 @@ export function VialDetalle({ vial, estaDecaido, anulacionVial, todosLosViales, 
 
   function limpiarForm() {
     setLineas([{ vialId: vial.id, ml: "" }]);
-    setActividadMedida(""); setPacienteFicha(""); setObs("");
+    setActividadMedida(""); setUnidadActividadMedida("uci"); setPacienteFicha(""); setObs("");
   }
+
+  // Valor realmente guardado (mCi, campo actividadMedida sin cambios de
+  // nombre ni de regla) -- convertido desde µCi si ésa es la unidad
+  // elegida. microCiAMCi ya redondea a 9 decimales para evitar artefactos
+  // de punto flotante en lo que efectivamente queda en Firestore.
+  const actividadMedidaNum = parseFloat(actividadMedida) || 0;
+  const actividadMedidaEnMCi = unidadActividadMedida === "uci" ? microCiAMCi(actividadMedidaNum) : actividadMedidaNum;
 
   function agregarLinea() {
     setLineas((ls) => [...ls, LINEA_VACIA()]);
@@ -132,7 +156,7 @@ export function VialDetalle({ vial, estaDecaido, anulacionVial, todosLosViales, 
         vialIds: validas.map((l) => l.vialId),
         desglosePorVial: validas.map((l) => l.desglose),
         actividadCalculada: actividadCalculadaTotal,
-        actividadMedida: parseFloat(actividadMedida) || 0,
+        actividadMedida: actividadMedidaEnMCi,
         ...(pacienteFicha.trim() ? { pacienteFicha: pacienteFicha.trim() } : {}),
         usuarioNombre: usuario.nombre, usuarioEmail: usuario.email, observacion: obs.trim(),
       });
@@ -181,7 +205,7 @@ export function VialDetalle({ vial, estaDecaido, anulacionVial, todosLosViales, 
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs mb-4">
           <div><div className="text-gray-400">Calibración</div><div className="font-semibold text-gray-700">{fmtTs(vial.fechaCalibracion)}</div></div>
           <div><div className="text-gray-400">Actividad calibrada</div><div className="font-semibold text-gray-700">{vial.actividadCalibrada} mCi</div></div>
-          <div><div className="text-gray-400">Volumen inicial</div><div className="font-semibold text-gray-700">{vial.volumenInicial} mL</div></div>
+          <div><div className="text-gray-400">Volumen inicial</div><div className="font-semibold text-gray-700">{vial.volumenInicial} mL{detalleDilucion(vial) && ` (${detalleDilucion(vial)})`}</div></div>
           <div><div className="text-gray-400">Volumen restante</div><div className="font-semibold text-gray-700">{volumenRestante.toFixed(1)} mL</div></div>
           {vial.fechaVencimiento && (
             <div><div className="text-gray-400">Vencimiento</div><div className="font-semibold text-gray-700">{fmtF(vial.fechaVencimiento)}</div></div>
@@ -192,6 +216,7 @@ export function VialDetalle({ vial, estaDecaido, anulacionVial, todosLosViales, 
           titulo="Actividad restante ahora mismo"
           actividadCalibrada={vial.actividadCalibrada}
           volumenInicial={vial.volumenInicial}
+          volumenInicialDetalle={detalleDilucion(vial)}
           fechaCalibracion={vial.fechaCalibracion}
           dias={dias}
           filasExtra={[{ label: "Volumen restante", valor: `${volumenRestante.toFixed(1)} mL` }]}
@@ -250,11 +275,11 @@ export function VialDetalle({ vial, estaDecaido, anulacionVial, todosLosViales, 
                       titulo={`Cálculo para ${previa.vial.lote}`}
                       actividadCalibrada={previa.vial.actividadCalibrada}
                       volumenInicial={previa.vial.volumenInicial}
+                      volumenInicialDetalle={detalleDilucion(previa.vial)}
                       fechaCalibracion={previa.vial.fechaCalibracion}
                       dias={previa.desglose.diasTranscurridos}
                       filasExtra={[{ label: "mL extraídos (esta línea)", valor: l.ml }]}
-                      resultado={previa.desglose.mCiCalculado}
-                      unidadResultado="mCi"
+                      resultadoTexto={mCiATextoMicroCi(previa.desglose.mCiCalculado)}
                     />
                   </>
                 )}
@@ -269,17 +294,34 @@ export function VialDetalle({ vial, estaDecaido, anulacionVial, todosLosViales, 
           {hayLineaValida && (
             <div className="bg-blue-50 border border-blue-100 rounded-xl px-4 py-3 flex items-center justify-between">
               <span className="text-xs font-semibold text-blue-700">Total calculado</span>
-              <span className="font-bold text-blue-700 text-lg">{actividadCalculadaTotal.toFixed(2)} mCi</span>
+              <span className="font-bold text-blue-700 text-lg">{mCiATextoMicroCi(actividadCalculadaTotal)}</span>
             </div>
           )}
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <Input label="Actividad medida (activímetro)" type="number" min={0} step={0.01} value={actividadMedida} onChange={(e) => setActividadMedida(e.target.value)} placeholder="Confirmá con el activímetro" />
+            <div className="flex flex-col gap-1">
+              <div className="grid grid-cols-[1fr_auto] gap-2 items-end">
+                <Input label="Actividad medida (activímetro)" type="number" min={0} step={0.01} value={actividadMedida} onChange={(e) => setActividadMedida(e.target.value)} placeholder="Confirmá con el activímetro" />
+                <Sel value={unidadActividadMedida} onChange={(e) => setUnidadActividadMedida(e.target.value)}>
+                  <option value="uci">µCi</option>
+                  <option value="mci">mCi</option>
+                </Sel>
+              </div>
+              {/* Confirmación de la conversión (25/11, Pablo) -- sólo tiene
+                  sentido cuando se tipeó en µCi (en mCi el campo guardado es
+                  el mismo número que se tipeó, no hay nada que confirmar). */}
+              {unidadActividadMedida === "uci" && actividadMedida && (
+                <span className="text-xs text-gray-400">= {actividadMedidaEnMCi} mCi</span>
+              )}
+            </div>
             <Input label="N° de Ficha (opcional)" value={pacienteFicha} onChange={(e) => setPacienteFicha(e.target.value)} placeholder="4521" />
           </div>
-          {hayLineaValida && actividadMedida && Math.abs(parseFloat(actividadMedida) - actividadCalculadaTotal) > actividadCalculadaTotal * 0.15 && (
+          {hayLineaValida && actividadMedida && Math.abs(actividadMedidaEnMCi - actividadCalculadaTotal) > actividadCalculadaTotal * 0.15 && (
             <div className="text-sm text-amber-700 font-semibold bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-              La actividad medida difiere del cálculo en más de un 15% ({actividadMedida} mCi medido vs. {actividadCalculadaTotal.toFixed(2)} mCi calculado). Se guarda igual, sin ocultar la diferencia.
+              La actividad medida difiere del cálculo en más de un 15% ({mCiATextoMicroCi(actividadMedidaEnMCi)} medido vs. {mCiATextoMicroCi(actividadCalculadaTotal)} calculado). Se guarda igual, sin ocultar la diferencia.
+              {pareceErrorDeUnidad(actividadMedidaEnMCi, actividadCalculadaTotal) && (
+                <div className="mt-1">Parece un error de unidad: revisá si el valor está en µCi o mCi.</div>
+              )}
             </div>
           )}
           <Input label="Observación (opcional)" value={obs} onChange={(e) => setObs(e.target.value)} placeholder="Ej: paciente, indicación..." />
@@ -329,13 +371,16 @@ export function VialDetalle({ vial, estaDecaido, anulacionVial, todosLosViales, 
                   <div className="text-xs text-gray-500">Combinada con {e.viales.length - 1} vial{e.viales.length - 1 !== 1 ? "es" : ""} más: {e.viales.filter((v) => v.vialId !== vial.id).map((v) => todosLosViales.find((tv) => tv.id === v.vialId)?.lote || v.vialId).join(", ")}</div>
                 )}
                 <div className="flex flex-wrap gap-4 text-xs">
-                  <div>Calculado: <span className="font-bold text-blue-700">{e.actividadCalculada.toFixed(2)} mCi</span></div>
-                  <div>Medido (activímetro): <span className={`font-bold ${diferenciaGrande ? "text-amber-600" : "text-gray-700"}`}>{e.actividadMedida.toFixed(2)} mCi</span></div>
-                  {desglose && <div>De este vial: <span className="font-semibold text-gray-700">{desglose.mlExtraidos} mL → {desglose.mCiCalculado.toFixed(2)} mCi</span></div>}
+                  <div>Calculado: <span className="font-bold text-blue-700">{mCiATextoMicroCi(e.actividadCalculada)}</span></div>
+                  <div>Medido (activímetro): <span className={`font-bold ${diferenciaGrande ? "text-amber-600" : "text-gray-700"}`}>{mCiATextoMicroCi(e.actividadMedida)}</span></div>
+                  {desglose && <div>De este vial: <span className="font-semibold text-gray-700">{desglose.mlExtraidos} mL → {mCiATextoMicroCi(desglose.mCiCalculado)}</span></div>}
                 </div>
                 {diferenciaGrande && (
                   <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-1.5 w-fit">
                     Diferencia &gt;15% entre lo calculado y lo medido.
+                    {pareceErrorDeUnidad(e.actividadMedida, e.actividadCalculada) && (
+                      <div>Parece un error de unidad: revisá si el valor está en µCi o mCi.</div>
+                    )}
                   </div>
                 )}
                 {desglose && (
@@ -346,8 +391,7 @@ export function VialDetalle({ vial, estaDecaido, anulacionVial, todosLosViales, 
                     fechaCalibracion={desglose.fechaCalibracion}
                     dias={desglose.diasTranscurridos}
                     filasExtra={[{ label: "mL extraídos", valor: desglose.mlExtraidos }, { label: "Concentración", valor: `${desglose.concentracionMCiPorMl.toFixed(3)} mCi/mL` }]}
-                    resultado={desglose.mCiCalculado}
-                    unidadResultado="mCi"
+                    resultadoTexto={mCiATextoMicroCi(desglose.mCiCalculado)}
                   />
                 )}
                 {e.observacion && <div className="text-xs text-gray-400 italic">{e.observacion}</div>}

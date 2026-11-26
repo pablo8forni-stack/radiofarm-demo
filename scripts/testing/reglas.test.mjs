@@ -1715,6 +1715,24 @@ test("addActaI131Extraccion (servicio real) no falla por pacienteFicha undefined
   await addActaI131Extraccion(extraccionBase(v.id, { sedeId: SEDE_A, usuarioEmail: PERSONAS.admin.email }));
 });
 
+// Dilución (25/11, Pablo) -- volumenAlicuota/volumenDiluyente son 2 campos
+// NUEVOS que el cliente agrega al payload de i131_vial (ver TabStockViales
+// #guardarVial). La regla de i131_vial (firestore.rules:822-828) exige
+// campos obligatorios, NUNCA usa hasOnly()/hasAll() -- así que acepta estos
+// 2 campos extra sin que haya hecho falta tocar la regla. Este test lo
+// confirma contra la regla real, no sólo por lectura de código.
+test("i131_vial con volumenAlicuota y volumenDiluyente (dilución) -- se acepta igual, sin tocar la regla", async () => {
+  await loguearComo(PERSONAS.admin);
+  const ref = await addDoc(collection(db, "actas"), vialBase({
+    sedeId: SEDE_A, usuarioEmail: PERSONAS.admin.email, lote: "TEST-DILUCION",
+    volumenInicial: 100.61, volumenAlicuota: 0.61, volumenDiluyente: 100,
+  }));
+  const snap = await getDoc(ref);
+  assert.equal(snap.data().volumenInicial, 100.61);
+  assert.equal(snap.data().volumenAlicuota, 0.61);
+  assert.equal(snap.data().volumenDiluyente, 100);
+});
+
 test("técnico sin accesoTerapiaI131 NO puede crear un vial de I-131", async () => {
   await loguearComo(PERSONAS.tecnicoA);
   await assertPermissionDenied(() =>
